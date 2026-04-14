@@ -1,0 +1,8 @@
+huggingface_hub
+ml_dtypes
+
+# FIXME: Switch to >=2.0.0b once toolchain is updated
+numpy<2.0.0b
+
+requests
+tqdm
