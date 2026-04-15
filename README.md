@@ -1,6 +1,6 @@
 # Torq Examples
 
-Simple examples demonstrating inference and profiling with [Torq](https://github.com/synaptics-synap/torq), using pre-compiled VMFB model binaries.
+Simple examples demonstrating inference and profiling with [Torq](https://synaptics-torq.github.io/torq-compiler/v/latest/), using pre-compiled VMFB model binaries.
 
 ## Available Demos
 
