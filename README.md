@@ -15,7 +15,7 @@ Requires Python 3. Use a virtual environment and install requirements:
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-pip install torq_runtime-*.whl
+pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v1.5/torq_runtime-1.5.0-cp312-cp312-manylinux_2_28_aarch64.whl
 pip install -r requirements.txt
 ```
 
