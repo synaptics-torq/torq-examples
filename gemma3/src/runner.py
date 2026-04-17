@@ -32,6 +32,7 @@ class Gemma3Static:
         "_bos_token", "_eos_token", "_end_of_turn_id",
         "_reset_cache_state", "_warmup_len",
         "_token_embeddings", "_pos_buf", "_emb_buf",
+        "_cache_keep_n",
         "_n_tokens_gen", "_last_infer_ns",
         "_time_to_first_token_ns", "_start_time_ns",
     )
@@ -44,6 +45,7 @@ class Gemma3Static:
         n_threads: int | None = None,
         instruct_model: bool = False,
         *,
+        cache_keep_n: int | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
@@ -93,6 +95,7 @@ class Gemma3Static:
         self._max_seq_len = max_seq_len
         self._max_user_tokens: int | None = None
         self._sys_prompt = DEFAULT_SYS_PROMPT if instruct_model else None
+        self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
         self._top_k = top_k
@@ -297,8 +300,21 @@ class Gemma3Static:
         gen = [next_tok]
         while not self._stop(next_tok, gen):
             if pos >= self._max_seq_len:
-                self._logger.warning("Max generation tokens reached")
-                break
+                if self._cache_keep_n is not None:
+                    self._model.shift_kv(
+                        self._cache_keep_n,
+                        protect_first_n=self._warmup_len,
+                    )
+                    pos = self._warmup_len + self._cache_keep_n
+                    self._logger.debug(
+                        "Circular KV cache: shifted last %d entries after "
+                        "%d protected prefix tokens",
+                        self._cache_keep_n,
+                        self._warmup_len,
+                    )
+                else:
+                    self._logger.warning("Max generation tokens reached")
+                    break
             next_tok = self._llm_step(next_tok, pos)
             gen.append(next_tok)
             pos += 1

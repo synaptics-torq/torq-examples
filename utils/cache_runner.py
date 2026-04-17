@@ -105,6 +105,29 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         """Restore KV caches from a previously saved snapshot."""
         self._kv_cache = [self.allocate_device_array(arr) for arr in state]
 
+    def shift_kv(self, keep_last_n: int, seq_axis: int = 2, protect_first_n: int = 0) -> None:
+        """Shift the last *keep_last_n* entries to just after the first
+        *protect_first_n* positions, zeroing the rest."""
+        for i in range(self._n_kv):
+            host = self._kv_cache[i].to_host()
+            seq_len = host.shape[seq_axis]
+            dest_start = protect_first_n
+            if dest_start + keep_last_n >= seq_len:
+                continue
+            new = np.zeros_like(host)
+            # Preserve the protected prefix.
+            if protect_first_n > 0:
+                pfx = [slice(None)] * host.ndim
+                pfx[seq_axis] = slice(0, protect_first_n)
+                new[tuple(pfx)] = host[tuple(pfx)]
+            # Copy the last keep_last_n entries right after the prefix.
+            src = [slice(None)] * host.ndim
+            dst = [slice(None)] * host.ndim
+            src[seq_axis] = slice(seq_len - keep_last_n, seq_len)
+            dst[seq_axis] = slice(dest_start, dest_start + keep_last_n)
+            new[tuple(dst)] = host[tuple(src)]
+            self._kv_cache[i] = self.allocate_device_array(new)
+
 
 class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
     """VMFBInferenceRunner with managed self + cross attention KV cache.
