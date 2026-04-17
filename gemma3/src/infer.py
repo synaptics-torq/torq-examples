@@ -19,6 +19,7 @@ def main(args: argparse.Namespace):
         max_prompt_tokens=args.max_inp_len,
         n_threads=args.threads,
         instruct_model=args.instruct_model,
+        cache_keep_n=args.cache_keep_n,
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
@@ -76,6 +77,11 @@ if __name__ == "__main__":
     )
     add_logging_args(parser)
     inference_group = parser.add_argument_group("inference")
+    inference_group.add_argument(
+        "--cache-keep-n", type=int, default=2,
+        help="Shift the last N entries of full KV cache to the start and "
+             "continue generating, set to `None` to disable (default: %(default)s)",
+    )
     inference_group.add_argument(
         "--temperature", type=float, default=0.0,
         help="Sampling temperature (0.0 = greedy) (default: %(default)s)",
