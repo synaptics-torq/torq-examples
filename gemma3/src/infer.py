@@ -5,8 +5,27 @@ import argparse
 import logging
 import sys
 
-from runner import Gemma3Static
+from runner import Gemma3Static, InferenceInterrupted
 from utils.log import add_logging_args, configure_logging
+from utils.terminal import InferenceStopInput
+
+YELLOW = "\033[33m"
+RESET = "\033[0m"
+
+
+def _finish_interrupted_output(started_output: bool) -> None:
+    marker = f"{YELLOW}[Interrupt]{RESET}"
+    if started_output:
+        sys.stdout.write(f" {marker} \n")
+    else:
+        sys.stdout.write("\r" + " " * 80 + f"\r{marker} \n")
+    sys.stdout.flush()
+
+
+def _print_inference_stats(gemma3: Gemma3Static) -> None:
+    decode_ms = gemma3.last_infer_time - gemma3.time_to_first_token
+    tps = gemma3.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
+    print(f"  ({gemma3.last_infer_time:.0f} ms, TTFT: {gemma3.time_to_first_token:.0f} ms, {tps:.1f} tok/s)\n")
 
 
 def main(args: argparse.Namespace):
@@ -37,21 +56,41 @@ def main(args: argparse.Namespace):
                 break
 
             if args.logging.upper() == "DEBUG":
-                answer = gemma3.run(inp, args.max_seq_len)
-                sys.stdout.write(f"Agent: {answer}")
+                started_output = False
+                try:
+                    with InferenceStopInput(sys.stdin) as should_stop:
+                        answer = gemma3.run(
+                            inp,
+                            should_stop=should_stop,
+                        )
+                    sys.stdout.write(f"Agent: {answer}")
+                    started_output = True
+                except (InferenceInterrupted, KeyboardInterrupt):
+                    _finish_interrupted_output(started_output)
+                    _print_inference_stats(gemma3)
+                    continue
             else:
                 sys.stdout.write('\033[2m[thinking...]\033[0m')
                 sys.stdout.flush()
                 first = True
-                for chunk in gemma3.run_stream(inp, args.max_seq_len):
-                    if first:
-                        sys.stdout.write('\r' + ' ' * 40 + '\rAgent: ')
-                        first = False
-                    sys.stdout.write(chunk)
-                    sys.stdout.flush()
-            decode_ms = gemma3.last_infer_time - gemma3.time_to_first_token
-            tps = gemma3.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
-            print(f"  ({gemma3.last_infer_time:.0f} ms, TTFT: {gemma3.time_to_first_token:.0f} ms, {tps:.1f} tok/s)\n")
+                started_output = False
+                try:
+                    with InferenceStopInput(sys.stdin) as should_stop:
+                        for chunk in gemma3.run_stream(
+                            inp,
+                            should_stop=should_stop,
+                        ):
+                            if first:
+                                sys.stdout.write('\r' + ' ' * 40 + '\rAgent: ')
+                                first = False
+                                started_output = True
+                            sys.stdout.write(chunk)
+                            sys.stdout.flush()
+                except (InferenceInterrupted, KeyboardInterrupt):
+                    _finish_interrupted_output(started_output)
+                    _print_inference_stats(gemma3)
+                    continue
+            _print_inference_stats(gemma3)
     except KeyboardInterrupt:
         print()
 
