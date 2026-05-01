@@ -166,23 +166,17 @@ class Gemma3Static:
     def _tokenize(self, text: str, role: str | None = None) -> list[int]:
         if not self._instruct_model or role is None:
             return self._tokenizer.encode(text).ids
-        # Gemma 3 format: <start_of_turn>role\ntext<end_of_turn>\n
-        if role == "system":
-            return self._tokenizer.encode(
-                self._bos_token
-                + "<start_of_turn>user\n" + text + "\n\n"
+        # Gemma 3 chat format: <start_of_turn>role\ntext<end_of_turn>\n
+        # BOS is added once at warmup start; strip auto-prepended BOS here.
+        if role == "model":
+            ids = self._tokenizer.encode("<start_of_turn>model\n").ids
+        else:
+            ids = self._tokenizer.encode(
+                "<start_of_turn>" + role + "\n" + text + "<end_of_turn>\n"
             ).ids
-        if role == "user":
-            return self._tokenizer.encode(
-                self._bos_token
-                + "<start_of_turn>user\n" + text
-                + "<end_of_turn>\n<start_of_turn>model\n"
-            ).ids
-        if role == "user_continue":
-            return self._tokenizer.encode(
-                text + "<end_of_turn>\n<start_of_turn>model\n"
-            ).ids
-        return self._tokenizer.encode(text).ids
+        if ids and ids[0] == self._bos_token_id:
+            ids = ids[1:]
+        return ids
 
     def _llm_step(self, token: int, seq_pos: int, *, sample: bool = True) -> int:
         if self._emb_buf is not None:
@@ -258,7 +252,8 @@ class Gemma3Static:
         if not self._instruct_model:
             return 0
         self._logger.info("Warm-up started...")
-        sys_tokens = self._tokenize(self._sys_prompt, "system")
+        # Gemma3 format: <bos><start_of_turn>system\n{sys_prompt}<end_of_turn>\n
+        sys_tokens = [self._bos_token_id] + self._tokenize(self._sys_prompt, "system")
         if isinstance(self._max_prompt_tokens, int):
             sys_tokens = sys_tokens[: self._max_prompt_tokens]
             self._max_user_tokens = max(0, self._max_prompt_tokens - len(sys_tokens))
@@ -278,9 +273,9 @@ class Gemma3Static:
 
         self._reset_cache()
 
-        tokens = self._tokenize(
-            user_input, "user_continue" if self._warmup_len > 0 else "user"
-        )
+        tokens = self._tokenize(user_input, "user")
+        if self._instruct_model:
+            tokens += self._tokenize("", "model")
         # Truncate / pad to max user length
         limit = (
             self._max_user_tokens
