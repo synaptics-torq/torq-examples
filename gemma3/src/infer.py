@@ -23,6 +23,7 @@ def main(args: argparse.Namespace):
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
+        runtime_flags=args.runtime_flags,
     )
     try:
         while True:
@@ -75,6 +76,7 @@ if __name__ == "__main__":
         "-j", "--threads", type=int,
         help="Number of cores to use for CPU execution (default: all)",
     )
+    runtime_group = parser.add_argument_group("runtime")
     add_logging_args(parser)
     inference_group = parser.add_argument_group("inference")
     inference_group.add_argument(
@@ -108,5 +110,15 @@ if __name__ == "__main__":
     inference_group.add_argument(
         "--top-k", type=int, default=64,
         help="Top-k pre-filter size for sampling (default: %(default)s)",
+    )
+    runtime_group.add_argument(
+        "--runtime-flags",
+        nargs=argparse.REMAINDER,
+        default=None,
+        metavar="FLAG",
+        help=(
+            "[Advanced] Extra flags for the Torq runtime. "
+            "Must be specified last; all remaining arguments are forwarded."
+        ),
     )
     main(parser.parse_args())
