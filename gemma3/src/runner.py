@@ -49,10 +49,11 @@ class Gemma3Static:
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
+        runtime_flags: list[str] | None = None,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
 
-        self._model = ManagedSelfAttnCacheRunner(model_path, n_threads=n_threads)
+        self._model = ManagedSelfAttnCacheRunner(model_path, n_threads=n_threads, runtime_flags=runtime_flags)
 
         model_seq_len = self._query_model_seq_len()
         if max_seq_len is not None and model_seq_len is not None:
@@ -207,7 +208,9 @@ class Gemma3Static:
 
         if self._temperature <= 0:
             token_id = int(logits.argmax())
-            self._logger.debug("Sampling time: %.3f ms", (time.perf_counter_ns() - st) / 1e6)
+            self._logger.debug("Token ID: %d, Token: %r, Sampling time: %.3f ms",
+                               token_id, repr(self._tokenizer.decode([token_id], skip_special_tokens=False)),
+                               (time.perf_counter_ns() - st) / 1e6)
             return token_id
 
         # Pre-select top-k candidates via O(n) partition to avoid
