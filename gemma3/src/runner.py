@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -17,6 +18,17 @@ DEFAULT_SYS_PROMPT: Final[str] = (
     "You are a helpful AI assistant named Gemma. "
     "Answer in 1-2 sentences. No lists, no bullet points, no repetition."
 )
+
+StopCheck = Callable[[], bool]
+
+
+class InferenceInterrupted(Exception):
+    """Raised when interactive inference is cancelled by the user."""
+
+
+def _raise_if_stopped(should_stop: StopCheck | None) -> None:
+    if should_stop is not None and should_stop():
+        raise InferenceInterrupted
 
 
 class Gemma3Static:
@@ -228,12 +240,24 @@ class Gemma3Static:
         self._logger.debug("Sampling time: %.3f ms", (time.perf_counter_ns() - st) / 1e6)
         return token_id
 
-    def _prefill(self, tokens: list[int], start: int = 0) -> tuple[int, int]:
+    def _prefill(
+        self,
+        tokens: list[int],
+        start: int = 0,
+        should_stop: StopCheck | None = None,
+    ) -> tuple[int, int]:
         pos = start
         for tok_id in tokens[:-1]:
+            _raise_if_stopped(should_stop)
             self._llm_step(tok_id, pos, sample=False)
             pos += 1
-        tok = self._llm_step(tokens[-1], pos) if tokens else 0
+            _raise_if_stopped(should_stop)
+        if tokens:
+            _raise_if_stopped(should_stop)
+            tok = self._llm_step(tokens[-1], pos)
+            _raise_if_stopped(should_stop)
+        else:
+            tok = 0
         pos += 1
         return tok, pos
 
@@ -265,13 +289,24 @@ class Gemma3Static:
         )
         return n
 
-    def run(self, user_input: str, max_tokens: int | None = None) -> str:
-        return "".join(self.run_stream(user_input, max_tokens))
+    def run(
+        self,
+        user_input: str,
+        should_stop: StopCheck | None = None,
+    ) -> str:
+        return "".join(self.run_stream(user_input, should_stop=should_stop))
 
-    def run_stream(self, user_input: str, max_tokens: int | None = None):
+    def run_stream(
+        self,
+        user_input: str,
+        should_stop: StopCheck | None = None,
+    ):
         """Yield decoded text chunks as tokens are generated."""
 
         self._reset_cache()
+        self._n_tokens_gen = 0
+        self._last_infer_ns = 0
+        self._time_to_first_token_ns = 0
 
         tokens = self._tokenize(user_input, "user")
         if self._instruct_model:
@@ -288,41 +323,49 @@ class Gemma3Static:
             elif len(tokens) < limit:
                 tokens += [self._pad_token_id] * (limit - len(tokens))
 
+        gen: list[int] = []
         self._start_time_ns = time.perf_counter_ns()
-        next_tok, pos = self._prefill(tokens, start=self._warmup_len)
-        self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
+        try:
+            next_tok, pos = self._prefill(
+                tokens,
+                start=self._warmup_len,
+                should_stop=should_stop,
+            )
+            self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
 
-        prev_text = self._tokenizer.decode([next_tok])
-        yield prev_text
+            prev_text = self._tokenizer.decode([next_tok])
+            yield prev_text
 
-        gen = [next_tok]
-        while not self._stop(next_tok, gen):
-            if pos >= self._max_seq_len:
-                if self._cache_keep_n is not None:
-                    self._model.shift_kv(
-                        self._cache_keep_n,
-                        protect_first_n=self._warmup_len,
-                    )
-                    pos = self._warmup_len + self._cache_keep_n
-                    self._logger.debug(
-                        "Circular KV cache: shifted last %d entries after "
-                        "%d protected prefix tokens",
-                        self._cache_keep_n,
-                        self._warmup_len,
-                    )
-                else:
-                    self._logger.warning("Max generation tokens reached")
-                    break
-            next_tok = self._llm_step(next_tok, pos)
-            gen.append(next_tok)
-            pos += 1
-            # Incremental decode: decode full sequence, emit only the new chars
-            full_text = self._tokenizer.decode(gen)
-            yield full_text[len(prev_text):]
-            prev_text = full_text
-
-        self._n_tokens_gen = len(gen)
-        self._last_infer_ns = time.perf_counter_ns() - self._start_time_ns
+            gen = [next_tok]
+            while not self._stop(next_tok, gen):
+                _raise_if_stopped(should_stop)
+                if pos >= self._max_seq_len:
+                    if self._cache_keep_n is not None:
+                        self._model.shift_kv(
+                            self._cache_keep_n,
+                            protect_first_n=self._warmup_len,
+                        )
+                        pos = self._warmup_len + self._cache_keep_n
+                        self._logger.debug(
+                            "Circular KV cache: shifted last %d entries after "
+                            "%d protected prefix tokens",
+                            self._cache_keep_n,
+                            self._warmup_len,
+                        )
+                    else:
+                        self._logger.warning("Max generation tokens reached")
+                        break
+                next_tok = self._llm_step(next_tok, pos)
+                _raise_if_stopped(should_stop)
+                gen.append(next_tok)
+                pos += 1
+                # Incremental decode: decode full sequence, emit only the new chars
+                full_text = self._tokenizer.decode(gen)
+                yield full_text[len(prev_text):]
+                prev_text = full_text
+        finally:
+            self._n_tokens_gen = len(gen)
+            self._last_infer_ns = time.perf_counter_ns() - self._start_time_ns
 
 
 def format_answer(
