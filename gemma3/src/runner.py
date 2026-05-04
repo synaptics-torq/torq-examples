@@ -62,6 +62,7 @@ class Gemma3Static:
         top_p: float = 1.0,
         top_k: int = 64,
         runtime_flags: list[str] | None = None,
+        sys_prompt: str | None = None,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
 
@@ -107,7 +108,10 @@ class Gemma3Static:
         self._max_prompt_tokens = max_prompt_tokens
         self._max_seq_len = max_seq_len
         self._max_user_tokens: int | None = None
-        self._sys_prompt = DEFAULT_SYS_PROMPT if instruct_model else None
+        if instruct_model:
+            self._sys_prompt = sys_prompt or DEFAULT_SYS_PROMPT
+        else:
+            self._sys_prompt = None
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
