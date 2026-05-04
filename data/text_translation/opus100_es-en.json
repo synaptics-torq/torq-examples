@@ -1,0 +1,406 @@
+{
+  "src_lang": "Spanish",
+  "tgt_lang": "English",
+  "samples": [
+    {
+      "src": "No recuerdo por qué fue la pelea.",
+      "tgt": "I don't even remember what the fight was about."
+    },
+    {
+      "src": "Estos son los sitios en que cada Congreso ha tenido lugar:",
+      "tgt": "Here are the sites of each of those that have taken place:"
+    },
+    {
+      "src": "Sí. Soy el hombre que mató a Barbanegra.",
+      "tgt": "I'm the man who killed Blackbeard."
+    },
+    {
+      "src": "No te hagas el inteligente.",
+      "tgt": "Don't get smart."
+    },
+    {
+      "src": "¿Existe un límite de cuándo se padece y cuándo no?",
+      "tgt": "Is there an exact moment in the life of a soldier before which he is not suffering from shell-shock and after which he is?"
+    },
+    {
+      "src": "Sí, Joe.",
+      "tgt": "Yes, Joe."
+    },
+    {
+      "src": "¿Por qué dos meses?",
+      "tgt": "Why two months?"
+    },
+    {
+      "src": "No nos hace falta.",
+      "tgt": "- We don't need the rock."
+    },
+    {
+      "src": "Espero que a Umeko se le pase lo de casarse con él.",
+      "tgt": "I hope Umeko will forget about marrying him."
+    },
+    {
+      "src": "Ha dirigido varios proyectos y campañas en Suiza y en el extranjero.",
+      "tgt": "He has led several projects and campaigns in Switzerland and abroad."
+    },
+    {
+      "src": "Dicen que se casó con Liz Kelly.",
+      "tgt": "Said he went off and got hitched to Liz Kelly."
+    },
+    {
+      "src": "Establezcan un perímetro de dos cuadras alrededor de esta calle.",
+      "tgt": "Establish a 2-block perimeter around this block."
+    },
+    {
+      "src": "Otros continúan identificándose como gay y lesbiana y participan en las comunidades gay y lesbiana a la vez que mantienen relaciones heterosexuales a largo plazo, incluso primarias (una opción aceptada por algunos y vista con sospecha por otras en las comunidades).",
+      "tgt": "Others continue to identify as lesbian or gay and take part in lesbian/gay communities even while having long-term—even primary—heterosexual relationships, a choice accepted by some and viewed suspiciously by others in their communities."
+    },
+    {
+      "src": "Todos nosotros tenemos que tener muy presente que los problemas con que se tiene que hacer frente en Yugoslavia tienen unas raíces históricas muy profundas y son sumamente difíciles.",
+      "tgt": "We all have to bear in mind that the problems that are being faced in Yugoslavia are deep-rooted, historical problems and they are extremely difficult."
+    },
+    {
+      "src": "Ese es el desgraciado que conozco y que amo.",
+      "tgt": "Now there's the bastard I know and love."
+    },
+    {
+      "src": "La nueva Estrategia UE-África debe, por tanto, tener en cuenta esta realidad dual y apoyar este proceso, aún frágil, por medio de una asociación auténticamente política: una asociación que esté basada en la unidad, ya que es África en su totalidad, a través de la voz de la Unión Africana, la que ha de ser nuestro principal punto de contacto; en la equidad con una agenda que haya sido elaborada conjuntamente y no haya sido impuesta por el Norte, y en la humildad, ya que Europa no es el único socio que tiene África.",
+      "tgt": "The new EU-Africa strategy therefore needs to take this dual reality into account and support this still fragile process by means of a genuine political partnership: one that is based on unity, for it is Africa in its entirety, through the voice of the African Union, that has to be our main point of contact; on equity with an agenda that has been drawn up together and not imposed by the North, and on humility, for Europe is not the one and only partner Africa has."
+    },
+    {
+      "src": "La rosa de la productividad de trabajo se levantó por un porcentaje similar durante este período. Mientras tanto, el empleo guardó paso con el crecimiento demográfico.",
+      "tgt": "Labor productivity rose rose by a similar percentage during this period. Meanwhile, employment kept pace with population growth."
+    },
+    {
+      "src": "¿Celulosa?",
+      "tgt": "Cellulose?"
+    },
+    {
+      "src": "Hay un tipo de fascinación objetiva.",
+      "tgt": "- Then there's the objective kind of like fascination."
+    },
+    {
+      "src": "Me acostumbré a cómo los niños viven en Downton, pero aún es extraño.",
+      "tgt": "I'm used to the way the children live at Downton, but it seems odd."
+    },
+    {
+      "src": "En la proclamación del Año de la Fe, también yo he dicho que Cristo “hoy como ayer, nos envía por los caminos del mundo para proclamar su Evangelio a todos los pueblos de la tierra” (Carta apostólica Porta fidei, 7); una proclamación que, como afirmó también el Siervo de Dios Pablo VI en su Exhortación apostólica Evangelii nuntiandi, “no constituye para la Iglesia algo de orden facultativo: está de por medio el deber que le incumbe, por mandato del Señor, con vista a que los hombres crean y se salven. Sí, este mensaje es necesario.",
+      "tgt": "In announcing the Year of Faith, I too wrote that “today as in the past, he (Christ) sends us through the highways of the world to proclaim his Gospel to all the peoples of the earth” (Apostolic Letter Porta Fidei, n. 7). Such proclamation, as the Servant of God Paul VI said in his Apostolic Exhortation Evangelii Nuntiandi, “is not an optional contribution for the Church. It is the duty incumbent on her by the command of the Lord Jesus, so that people can believe and be saved. This message is indeed necessary."
+    },
+    {
+      "src": "http://www.quadkelten.de http://www.quadkelten.de/",
+      "tgt": "http://www.dagev.de http://www.dagev.de/"
+    },
+    {
+      "src": "Podría ser agradable tener a un chico malo rizando esas plumas perfectas.",
+      "tgt": "Might be nice to have a bad boy ruffle those perfect feathers."
+    },
+    {
+      "src": "¿Qué pasa?",
+      "tgt": "- What's wrong with you ?"
+    },
+    {
+      "src": "Catherine. ¡Oye!",
+      "tgt": "Catherine. Hey!"
+    },
+    {
+      "src": "Veo que no es el caso .",
+      "tgt": "I see that's not the case."
+    },
+    {
+      "src": "- ¡Ahora o nunca!",
+      "tgt": "- Now or never!"
+    },
+    {
+      "src": "\"Declaro las Olimpiadas inauguradas!\".",
+      "tgt": "That I declare the Olympics open!"
+    },
+    {
+      "src": "En muchos aspectos, sus grabaciones para Nuevos Medios aún no han sido superadas.",
+      "tgt": "In many aspects there haven't been any other recordings better than the ones La Barbería made with Nuevos Medios."
+    },
+    {
+      "src": "Conviene complementar el procedimiento de supervisión multilateral a que se refiere el artículo 121, apartados 3 y 4, del TFUE con normas específicas para la detección de los desequilibrios macroeconómicos, así como para la prevención y corrección de desequilibrios macroeconómicos excesivos dentro de la Unión.",
+      "tgt": "It is appropriate to supplement the multilateral surveillance procedure referred to in paragraphs 3 and 4 of Article 121 TFEU with specific rules for the detection of macroeconomic imbalances as well as the prevention and correction of excessive macroeconomic imbalances within the Union."
+    },
+    {
+      "src": "Comisión de la Verdad y la Reconciliación 53 - 59 16",
+      "tgt": "The Truth and Reconciliation Commission 53 - 59 15"
+    },
+    {
+      "src": "Santuario, Nicky.",
+      "tgt": "Sanctuary, Nicky."
+    },
+    {
+      "src": "No cuando yo tengo todos los naipes.",
+      "tgt": "Not when I hold all the cards."
+    },
+    {
+      "src": "Está preocupado.",
+      "tgt": "He's kind of worried."
+    },
+    {
+      "src": "- Estoy listo, Bob.",
+      "tgt": "- I'm ready, Bob. - Do it!"
+    },
+    {
+      "src": "Creo que necesita un poco de tiempo por a sí mismo.",
+      "tgt": "I think he needs a little time by himself."
+    },
+    {
+      "src": "Tenemos que cambiar rostros quirúrgicamente para poderme hacer pasar por ti y ganarme su corazón.",
+      "tgt": "We need to surgically switch faces, so I can pretend to be you and win her heart."
+    },
+    {
+      "src": "En un debate parlamentario en Nueva Zelanda en relación con las importaciones de fosfatos del Sahara Occidental el 26 de Julio de 2006, mencionó que era consciente de la opinión de Naciones Unidas desde 2002, y afirmó que los intereses de los territorios no autónomos deben ser primordiales en esta cuestión al examinar la legalidad de dichas importaciones.",
+      "tgt": "In a New Zealand parliamentary debate regarding the New Zealand phosphate imports from Western Sahara on July 26th 2006, you mentioned that you were indeed aware of the UN opinion from 2002, stating that the interests of the inhabitants of non-self governing territories must be paramount in such an issue when considering the legality of such imports."
+    },
+    {
+      "src": "- Pero hablemos de otra cosa.",
+      "tgt": "Let's change the subject..."
+    },
+    {
+      "src": "¿Vas a rechazar un trabajo de verdad solo para estar en una pequeña obra de la escuela?",
+      "tgt": "You're gonna turn down a job in a real music video. Just to be in some little play here at school?"
+    },
+    {
+      "src": "¿Pero cuánto es realmente lo que vale?",
+      "tgt": "But how much is that really worth?"
+    },
+    {
+      "src": "¿Tú crees?",
+      "tgt": "- You think? - Yes."
+    },
+    {
+      "src": "¡Vete a tú habitación y piensa en toda la cantidad de juguetes que tienes!",
+      "tgt": "Go to your room and think about all the toys you've got!"
+    },
+    {
+      "src": "Pensé que éste era el baño.",
+      "tgt": "- I thought this was the bathroom."
+    },
+    {
+      "src": "La correlación anatómica-ecocardiográfica fue precisa y permitió un mejor conocimiento de esta anomalía.",
+      "tgt": "The anatomoechocardiographic correlation was precise and allowed a better understanding of this anomaly."
+    },
+    {
+      "src": "Por eso no pude permitir que te ahogaras en el fondo del lago Reiden por eso era necesario permitir que el otro doctor Bishop lograra curarte.",
+      "tgt": "It was why I could not allow you to drown at the bottom of Reiden Lake. Why it was necessary to allow the other Dr. Bishop to cure you instead."
+    },
+    {
+      "src": "¡Yo tomaré las tijeras, Joe!",
+      "tgt": "I'll get the scissors, Joe!"
+    },
+    {
+      "src": "-Con otros niños, hace varios meses. ¿Qué te pasa?",
+      "tgt": "With other children, a few months ago ?"
+    },
+    {
+      "src": "De manera contraria al arte marroquí moderno mayoritario, bajo la presión de ajustarse a ciertos estándares, el arte independiente en darija rompe fronteras con blasfemias y jerga, se centra en temas muy polémicos y experimenta con estilos distintos.",
+      "tgt": "Unlike modern mainstream Moroccan art, which is under pressure to conform to certain standards, independent art in Darija pushes boundaries, using profanity and slang, touching on highly controversial themes, and experimenting with different styles."
+    },
+    {
+      "src": "Tenga a la mano su número de tarjeta de identificación de Peach State. El(la) enfermero(a) lo(a) puede dirigir a otro tipo de atención médica. O puede ayudarle por teléfono.",
+      "tgt": "The nurse may direct you to other care. Or the nurse may help you over the phone."
+    },
+    {
+      "src": "¿En serio?",
+      "tgt": "Really?"
+    },
+    {
+      "src": "¿Dónde fué eso, en Florencia?",
+      "tgt": "Where was that, in Florence?"
+    },
+    {
+      "src": "- Ahora mismo les aviso.",
+      "tgt": "- I'll call this now."
+    },
+    {
+      "src": "Bueno, de hecho fue en la conferencia de Copenhague.",
+      "tgt": "well actually that was the conference at Copenhagen"
+    },
+    {
+      "src": "Todavía te puedo ver como un bebé, pegado de la teta de tu mamá, con determinación.",
+      "tgt": "I can still see you as a baby, sucking on your mother's tit, with fierce determination."
+    },
+    {
+      "src": "Sé que he estado sobre tu caso, pero la verdad es que has hecho que todo esto sea posible.",
+      "tgt": "I know I've been on your case, but the truth is, you made this all happen."
+    },
+    {
+      "src": "Verás que somos el uno para el otro.",
+      "tgt": "You'll see that we belong together."
+    },
+    {
+      "src": "Se pierde en las páginas del tiempo de la Humanidad el origen de la cremación. Las antiguas civilizaciones la realizaban respetando sus respectivas costumbres y creencias.",
+      "tgt": "The origins of cremation cannot be traced back in the history of Mankind. Ancient civilizations performed it respecting their own customs and beliefs."
+    },
+    {
+      "src": "Mi excusa es el vodka.",
+      "tgt": "Mine's vodka."
+    },
+    {
+      "src": "Esta noche los estamos ofreciendo una de Piezas favoritas de Patrick Godureaux :",
+      "tgt": "Tonight we're offering you one of Patrick Godureaux's favorite pieces:"
+    },
+    {
+      "src": "Manteniendo nuestra política editorial, nos reservamos el derecho a eliminar comentarios que consideremos inapropiados, pero todas las voces civiles serán escuchadas y todas las opiniones, respetadas.",
+      "tgt": "In keeping with our editorial policies, we reserve the right to excise comments that we deem inappropriate, but all civil voices will be heard, all opinions respected."
+    },
+    {
+      "src": "¡Yo sigo viajando y espero llegar a un destino alguna vez!",
+      "tgt": "I am still travelling and hope to reach a destination sometime!"
+    },
+    {
+      "src": "Hay que añadir los honorarios del Sr. Rummschüttel.",
+      "tgt": "RummschuetteI will have to be paid if he remains our doctor."
+    },
+    {
+      "src": "Qué mostraba la imagen de NASA, y por qué esta imagen fue retenida de la mirada pública?",
+      "tgt": "What did NASA image and why is this image being withheld from public view?"
+    },
+    {
+      "src": "El Consejo de Seguridad se reúne de conformidad con el entendimiento alcanzado en sus consultas previas.",
+      "tgt": "The Council is meeting in accordance with the understanding reached in the course of its prior consultations."
+    },
+    {
+      "src": "Habla Lennox.",
+      "tgt": "This is Lennox."
+    },
+    {
+      "src": "Sí, usted ha dicho que, ma apos; am.",
+      "tgt": "Yes, you said that, ma'am."
+    },
+    {
+      "src": "La escalera de vuestra nación no va hacia arriba; va hacia abajo. - Nuestra Señora, 7 de Diciembre, 1971",
+      "tgt": "The ladder from your country is not going up; it is going down.\" - Our Lady, December 7, 1971"
+    },
+    {
+      "src": "La Junta consideró hasta qué punto los estados financieros se ajustaban a las normas contables del sistema de las Naciones Unidas.",
+      "tgt": "The Board assessed the extent to which the financial statements conformed to the United Nations system accounting standards."
+    },
+    {
+      "src": "http://theeworld.blogspot.com.es/",
+      "tgt": "http://theeworld.blogspot.com.es/"
+    },
+    {
+      "src": "H 12 Residuos que emiten gases tóxicos o muy tóxicos al entrar en contacto con el aire, con el agua o con un ácido.",
+      "tgt": "H 12 Waste which releases toxic or very toxic gases in contact with water, air or an acid."
+    },
+    {
+      "src": "¿Qué me dice del sello calidad para los alimentos no manipulados genéticamente?",
+      "tgt": "What of a stamp of quality for foodstuffs free from genetic modification?"
+    },
+    {
+      "src": "Es una mezcla de poliéster y poliolefina, como el que encuentras en el maletero de un auto.",
+      "tgt": "It's a polyester and polyolefin blend, like what you'd find in the trunk of a car."
+    },
+    {
+      "src": "Bien, ¿qué, qué, qué estás pensando?",
+      "tgt": "Okay, what, what, what are you thinking?"
+    },
+    {
+      "src": "Dorada (2) Correa",
+      "tgt": "Mens wristwatch (2)"
+    },
+    {
+      "src": "Todavía está con Richard.",
+      "tgt": "- He doesn't want to be interrupted."
+    },
+    {
+      "src": "Larry, ...no puedes algo así en secreto.",
+      "tgt": "Larry you can't keep on carrying a secret like that."
+    },
+    {
+      "src": "Hasta que entendí que no era más que un sueño.",
+      "tgt": "Until I realized it was just a dream."
+    },
+    {
+      "src": "Esto da un total de 132 paquetes huérfanos.",
+      "tgt": "This makes a total of 192 orphaned packages."
+    },
+    {
+      "src": "Cada capítulo de la saga gira en torno de un meteorito específico, de los muchos desenterrados, perdidos o todavía por descubrir en el suelo chaqueño.",
+      "tgt": "Each chapter of the saga revolves around one specific meteorite, of the many buried, lost or still to be discovered in the chaqueño soil."
+    },
+    {
+      "src": "- Eso sí que fue rápido.",
+      "tgt": "Whoa! That was crazy fast."
+    },
+    {
+      "src": "Ha escuchado el crujir de las hojas.",
+      "tgt": "Have you heard the rustling of the leaves."
+    },
+    {
+      "src": "solo tengo un disparo.",
+      "tgt": "I only have this one shot."
+    },
+    {
+      "src": "Ella está aquí por una razón diferente.",
+      "tgt": "She's, uh, she's here for a different reason. It doesn't matter."
+    },
+    {
+      "src": "A veces pienso que la escuela de postgrado es un extraño experimento sicológico",
+      "tgt": "Sometimes I think grad school's just a weird psychological experiment."
+    },
+    {
+      "src": "Trabaja aquí al lado.",
+      "tgt": "He works nearby."
+    },
+    {
+      "src": "¡Vaya! Bien. Bien, bien, bien, bien...",
+      "tgt": "Well... well,well,well,well,well."
+    },
+    {
+      "src": "Compromisos de los participantes",
+      "tgt": "Undertakings by Participants"
+    },
+    {
+      "src": "- ¿No te tomarás nada?",
+      "tgt": "- Won't you have something?"
+    },
+    {
+      "src": "Permíteme... - ¡No!",
+      "tgt": "Let me -- No!"
+    },
+    {
+      "src": "Sólo fue una estúpida... fiesta de cuentos de hadas.",
+      "tgt": "It was just some stupid... fairy-tale rave."
+    },
+    {
+      "src": "Muy bien, si Ud. Io dice...",
+      "tgt": "Very well. If you say so."
+    },
+    {
+      "src": "¿Necesitas atención médica o algo?",
+      "tgt": "Need some medical attention or something?"
+    },
+    {
+      "src": "Y ya falleció, por lo que debo seguir cumpliéndolo.",
+      "tgt": "And now he's dead, so I'm stuck with my vow."
+    },
+    {
+      "src": "Según los estudios, los dibujos pertenecen al periodo Magdaleniense y, por tanto, tienen más de 13.000 años . Están hechos con tinta negra.",
+      "tgt": "According to studies, the paintings go back to the Magdalenian period, and thus they are over 13.000 years old. They were made using black ink ."
+    },
+    {
+      "src": "Son puertas del nivel de seguridad 8.",
+      "tgt": "That' s a level- eight security door."
+    },
+    {
+      "src": "O acerca de algo en absoluto.",
+      "tgt": "About anything at all."
+    },
+    {
+      "src": "Klaus me salvó la vida.",
+      "tgt": "Klaus saved my life."
+    },
+    {
+      "src": "Era el puente constituido por las mismas almas, el puente que un día tendría que estar tendido entre el más allá y esta tierra, entre lo conocido y lo desconocido.",
+      "tgt": "It was the bridge constituted by the very souls –a bridge that one day should be tended between the beyond and this earth, between known and unknown."
+    },
+    {
+      "src": "La Sonata para violín n.º 36 en fa mayor, K. 547, fue completada el 10 de julio de 1788 por Wolfgang Amadeus Mozart.",
+      "tgt": "The Sonata in F for Violin and Keyboard, K. 547, was completed on July 10, 1788 by Wolfgang Amadeus Mozart."
+    }
+  ]
+}
