@@ -368,7 +368,7 @@ class Gemma3Static:
                 yield full_text[len(prev_text):]
                 prev_text = full_text
         finally:
-            self._n_tokens_gen = len(gen)
+            self._n_tokens_gen = max(0, len(gen) - 1) # exclude last prefill token
             self._last_infer_ns = time.perf_counter_ns() - self._start_time_ns
 
 
