@@ -12,7 +12,7 @@ from typing import Final
 import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
-from utils.cache_runner import ManagedSelfAttnCacheRunner
+from utils.inference import ManagedSelfAttnCacheRunner
 
 DEFAULT_SYS_PROMPT: Final[str] = (
     "You are a helpful AI assistant named Gemma. "
