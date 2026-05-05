@@ -43,7 +43,7 @@ class Gemma3Static:
         "_nl_token_id", "_double_nl_token_id",
         "_bos_token", "_eos_token", "_end_of_turn_id",
         "_reset_cache_state", "_warmup_len",
-        "_token_embeddings", "_pos_buf", "_emb_buf",
+        "_token_embeddings", "_token_id_lut", "_pos_buf", "_emb_buf",
         "_cache_keep_n",
         "_n_tokens_gen", "_last_infer_ns",
         "_time_to_first_token_ns", "_start_time_ns",
@@ -118,6 +118,12 @@ class Gemma3Static:
         self._top_k = top_k
 
         self._token_embeddings = self._load_embeddings()
+        self._token_id_lut = self._load_token_id_lut()
+        if self._token_id_lut is not None:
+            self._logger.info(
+                "Loaded token ID LUT (%d entries) for trimmed vocab remap",
+                len(self._token_id_lut),
+            )
         self._pos_buf = np.zeros((1, 1), dtype=np.int32)
         if self._token_embeddings is not None:
             self._emb_buf = np.zeros(
@@ -161,6 +167,12 @@ class Gemma3Static:
         if arr.dtype == np.dtype("V2"):
             arr = arr.view(ml_dtypes.bfloat16)
         return arr
+
+    def _load_token_id_lut(self) -> np.ndarray | None:
+        paths = list(self._model_dir.glob("token_id_lut.npy"))
+        if not paths:
+            return None
+        return np.load(paths[0])
 
     def _query_model_seq_len(self) -> int | None:
         """Extract max sequence length from the KV cache input shape."""
@@ -210,7 +222,16 @@ class Gemma3Static:
         if not sample:
             return 0
         # Only bring logits to host for sampling
-        return self._sample(results[0].to_host()[0, -1])
+        compact_idx = self._sample(results[0].to_host()[0, -1])
+        if self._token_id_lut is not None:
+            token_id = int(self._token_id_lut[compact_idx])
+        else:
+            token_id = compact_idx
+        self._logger.debug(
+            "Token ID: %d, Token: %r",
+            token_id, self._tokenizer.decode([token_id], skip_special_tokens=False),
+        )
+        return token_id
 
     def _sample(self, logits: np.ndarray) -> int:
         st = time.perf_counter_ns()
@@ -218,9 +239,7 @@ class Gemma3Static:
 
         if self._temperature <= 0:
             token_id = int(logits.argmax())
-            self._logger.debug("Token ID: %d, Token: %r, Sampling time: %.3f ms",
-                               token_id, repr(self._tokenizer.decode([token_id], skip_special_tokens=False)),
-                               (time.perf_counter_ns() - st) / 1e6)
+            self._logger.debug("Sampling time: %.3f ms", (time.perf_counter_ns() - st) / 1e6)
             return token_id
 
         # Pre-select top-k candidates via O(n) partition to avoid
