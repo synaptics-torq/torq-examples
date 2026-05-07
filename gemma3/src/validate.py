@@ -30,6 +30,7 @@ import math
 import os
 import re
 import sys
+from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
 
@@ -120,27 +121,14 @@ def corpus_bleu(hypotheses: list[str], references: list[str], max_n: int = 4) ->
 # ---------------------------------------------------------------------------
 
 def normalize_translation(text: str) -> str:
-    """Strip preamble and wrapper artifacts from model output.
-
-    Handles patterns like:
-      - 'Here's the translation:\n\n"Actual text"'
-      - 'Okay, here are the translations: ...'
-      - 'of "..." into Spanish:\n\n* **Actual text**'
-      - Leading/trailing quotes
-      - Markdown bold/italic wrappers
-      - Bullet-point markers
-    """
-    # Take only the first meaningful line/paragraph (split on double newline)
+    """Strip preamble and wrapper artifacts from model output."""
     parts = text.strip().split("\n\n")
-    # If preamble is on the first part and translation on a later part, skip it
     if len(parts) > 1 and _PREAMBLE_RE.search(parts[0]):
         text = "\n\n".join(parts[1:])
     else:
         text = text.strip()
     text = _PREAMBLE_RE.sub("", text).strip()
 
-    # Take only the first line of remaining text (multi-line output is usually
-    # the model continuing to generate beyond the translation)
     first_line = text.split("\n")[0].strip()
     if first_line:
         text = first_line
@@ -154,6 +142,10 @@ def normalize_translation(text: str) -> str:
 
     return text.strip()
 
+
+# ---------------------------------------------------------------------------
+# Dataset loading
+# ---------------------------------------------------------------------------
 
 def load_dataset(path: str | os.PathLike) -> tuple[list[dict], str, str]:
     """Load a JSON language pair text translation dataset.
@@ -183,7 +175,7 @@ def load_dataset(path: str | os.PathLike) -> tuple[list[dict], str, str]:
     try:
         src_lang: str = str(data["src_lang"])
         tgt_lang: str = str(data["tgt_lang"])
-        samples: list[dict[str,str]] = data["samples"]
+        samples: list[dict[str, str]] = data["samples"]
     except KeyError as e:
         raise ValueError(f"Dataset missing required metadata: {e}") from e
     missing = [i for i, d in enumerate(samples) if "src" not in d or "tgt" not in d]
@@ -195,132 +187,193 @@ def load_dataset(path: str | os.PathLike) -> tuple[list[dict], str, str]:
     return samples, src_lang, tgt_lang
 
 
-def validate(args: argparse.Namespace) -> None:
-    configure_logging(args.logging)
+# ---------------------------------------------------------------------------
+# Validators
+# ---------------------------------------------------------------------------
 
-    dataset_path = Path(args.dataset)
-    logger.info("Loading dataset from %s", dataset_path)
-    dataset, src_lang, tgt_lang = load_dataset(dataset_path)
+class BaseValidator(ABC):
+    """Shared setup for translation validation modes."""
 
-    n = len(dataset) if args.max_samples is None else min(args.max_samples, len(dataset))
-    logger.info("Evaluating on %d / %d samples", n, len(dataset))
+    def __init__(
+        self,
+        dataset_path: str | os.PathLike,
+        gemma3: Gemma3Static,
+        *,
+        max_samples: int | None = None,
+        output_csv: str | os.PathLike | None = None,
+        use_few_shot: bool = False,
+        few_shot_file: str | os.PathLike | None = None,
+        verbose: bool = False,
+    ) -> None:
+        dataset_path = Path(dataset_path)
+        logger.info("Loading dataset from %s", dataset_path)
+        self.dataset, self.src_lang, self.tgt_lang = load_dataset(dataset_path)
 
-    # Load few-shot prompt prefix
-    use_few_shot = args.use_few_shot
-    if use_few_shot:
-        if args.few_shot_file:
-            few_shot_prompt = Path(args.few_shot_file).read_text()
-            logger.info("Loaded few-shot prompt from %s", args.few_shot_file)
+        self.n = (
+            len(self.dataset) if max_samples is None
+            else min(max_samples, len(self.dataset))
+        )
+        logger.info("Evaluating on %d / %d samples", self.n, len(self.dataset))
+
+        self.verbose = verbose
+        self.output_csv = output_csv
+        self.use_few_shot = use_few_shot
+        self.few_shot_file = few_shot_file
+
+        self.gemma3 = gemma3
+
+        # Few-shot prompt setup
+        self.few_shot_prompt: str | None = None
+        if self.use_few_shot:
+            if self.few_shot_file:
+                self.few_shot_prompt = Path(self.few_shot_file).read_text()
+                logger.info("Loaded few-shot prompt from %s", self.few_shot_file)
+            else:
+                if self.src_lang.lower() != "english" or self.tgt_lang.lower() != "spanish":
+                    raise SystemExit(
+                        f"error: --use-few-shot requires --few-shot-file for language pair "
+                        f"{self.src_lang}->{self.tgt_lang}. Built-in examples are en->es only."
+                    )
+                lines = [f"Translate {self.src_lang} to {self.tgt_lang}.", ""]
+                for src, tgt in DEFAULT_FEW_SHOT_EXAMPLES:
+                    lines.extend([f"{self.src_lang}: {src}", f"{self.tgt_lang}: {tgt}", ""])
+                self.few_shot_prompt = "\n".join(lines).rstrip()
+                logger.info("Using built-in %d-shot examples (en-es)", len(DEFAULT_FEW_SHOT_EXAMPLES))
+
+    def build_prompt(self, src_text: str) -> str:
+        if self.few_shot_prompt is not None:
+            if self.few_shot_file:
+                return f"{self.few_shot_prompt}{src_text}"
+            return f"{self.few_shot_prompt}\n{self.src_lang}: {src_text}\n{self.tgt_lang}:"
+        return f"Translate to {self.tgt_lang}: \"{src_text}\""
+
+    def write_csv(self, rows: list[dict], fieldnames: list[str]) -> None:
+        if not self.output_csv:
+            return
+        with open(self.output_csv, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(rows)
+        logger.info("Per-sample results written to %s", self.output_csv)
+
+    @abstractmethod
+    def run(self) -> None: ...
+
+
+class TextGenerationValidator(BaseValidator):
+    """Validates generated translated text with corpus BLEU-4."""
+
+    def run(self) -> None:
+        if self.few_shot_prompt:
+            logger.info("Few-shot prompting enabled")
         else:
-            if src_lang.lower() != "english" or tgt_lang.lower() != "spanish":
-                parser_err = (
-                    f"--use-few-shot requires --few-shot-file for language pair "
-                    f"{src_lang}->{tgt_lang}. Built-in examples are en->es only."
+            logger.info("Using direct translation prompt")
+
+        hypotheses: list[str] = []
+        references: list[str] = []
+        csv_rows: list[dict] = []
+        infer_times: list[float] = []
+        ttfts: list[float] = []
+        toks_per_sec: list[float] = []
+
+        for i, item in enumerate(self.dataset[:self.n]):
+            src_text: str = item["src"]
+            tgt_text: str = item["tgt"]
+
+            sys.stdout.write(f"\r  [{i + 1}/{self.n}] generating...")
+            sys.stdout.flush()
+
+            prompt = self.build_prompt(src_text)
+            raw_output = self.gemma3.run(prompt)
+            hypothesis = normalize_translation(raw_output)
+            hypotheses.append(hypothesis)
+            references.append(tgt_text)
+
+            infer_ms = self.gemma3.last_infer_time
+            ttft_ms = self.gemma3.time_to_first_token
+            decode_ms = infer_ms - ttft_ms
+            tps = self.gemma3.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0.0
+
+            infer_times.append(infer_ms)
+            ttfts.append(ttft_ms)
+            toks_per_sec.append(tps)
+
+            if self.verbose:
+                print(
+                    f"\n  Src: {src_text[:120]}"
+                    f"\n  Ref: {tgt_text[:120]}"
+                    f"\n  Hyp: {hypothesis[:120]}"
+                    f"  ({infer_ms:.0f} ms, TTFT: {ttft_ms:.0f} ms, {tps:.1f} tok/s)"
                 )
-                raise SystemExit(f"error: {parser_err}")
-            # Build default prefix from built-in examples
-            lines = [f"Translate {src_lang} to {tgt_lang}.", ""]
-            for src, tgt in DEFAULT_FEW_SHOT_EXAMPLES:
-                lines.extend([f"{src_lang}: {src}", f"{tgt_lang}: {tgt}", ""])
-            few_shot_prompt = "\n".join(lines).rstrip()
-            logger.info("Using built-in %d-shot examples (en-es)", len(DEFAULT_FEW_SHOT_EXAMPLES))
-    else:
-        few_shot_prompt = None
 
-    use_instruct = args.instruct_model
-    if use_few_shot:
-        logger.info("Few-shot prompting enabled")
-    else:
-        logger.info("Using direct translation prompt")
+            if self.output_csv:
+                csv_rows.append({
+                    "source": src_text,
+                    "reference": tgt_text,
+                    "hypothesis": hypothesis,
+                    "infer_ms": f"{infer_ms:.0f}",
+                    "ttft_ms": f"{ttft_ms:.0f}",
+                    "tok_s": f"{tps:.1f}",
+                })
 
+        print()
+
+        bleu = corpus_bleu(hypotheses, references)
+        avg_infer = sum(infer_times) / len(infer_times) if infer_times else 0.0
+        avg_ttft = sum(ttfts) / len(ttfts) if ttfts else 0.0
+        avg_tps = sum(toks_per_sec) / len(toks_per_sec) if toks_per_sec else 0.0
+        print(
+            f"\nCorpus BLEU-4: {bleu:.2f}  (n={self.n})"
+            f"\navg {avg_infer:.0f} ms, TTFT: {avg_ttft:.0f} ms, {avg_tps:.1f} tok/s"
+        )
+
+        self.write_csv(
+            csv_rows,
+            ["source", "reference", "hypothesis", "infer_ms", "ttft_ms", "tok_s"],
+        )
+
+
+def main(args: argparse.Namespace) -> None:
+    configure_logging(args.logging)
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
         max_prompt_tokens=args.max_inp_len,
         n_threads=args.threads,
-        instruct_model=use_instruct,
+        instruct_model=args.instruct_model,
         cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
         temperature=0.0,   # greedy decoding for reproducibility
         runtime_flags=args.runtime_flags,
         lm_head_path=args.lm_head,
     )
-
-    hypotheses: list[str] = []
-    references: list[str] = []
-    csv_rows: list[dict] = []
-    infer_times: list[float] = []
-    ttfts: list[float] = []
-    toks_per_sec: list[float] = []
-
-    for i, item in enumerate(dataset[:n]):
-        src_text: str = item["src"]
-        tgt_text: str = item["tgt"]
-
-        sys.stdout.write(f"\r  [{i + 1}/{n}] generating...")
-        sys.stdout.flush()
-
-        if use_few_shot:
-            if args.few_shot_file:
-                prompt = few_shot_prompt
-            else:
-                prompt = f"{few_shot_prompt}\n{src_lang}: {src_text}\n{tgt_lang}: "
-        else:
-            prompt = f"Translate to {tgt_lang}: \"{src_text}\""
-        raw_output = gemma3.run(prompt)
-        hypothesis = normalize_translation(raw_output)
-
-        infer_ms = gemma3.last_infer_time
-        ttft_ms = gemma3.time_to_first_token
-        decode_ms = infer_ms - ttft_ms
-        tps = gemma3.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0.0
-
-        infer_times.append(infer_ms)
-        ttfts.append(ttft_ms)
-        toks_per_sec.append(tps)
-
-        hypotheses.append(hypothesis)
-        references.append(tgt_text)
-
-        if args.verbose:
-            print(f"\n  Src: {src_text[:120]}")
-            print(f"  Ref: {tgt_text[:120]}")
-            print(f"  Hyp: {hypothesis[:120]}  ({infer_ms:.0f} ms, TTFT: {ttft_ms:.0f} ms, {tps:.1f} tok/s)")
-
-        if args.output_csv:
-            csv_rows.append({
-                "source": src_text,
-                "reference": tgt_text,
-                "hypothesis": hypothesis,
-                "infer_ms": f"{infer_ms:.0f}",
-                "ttft_ms": f"{ttft_ms:.0f}",
-                "tok_s": f"{tps:.1f}",
-            })
-
-    print()
-
-    bleu = corpus_bleu(hypotheses, references)
-    avg_infer = sum(infer_times) / len(infer_times) if infer_times else 0.0
-    avg_ttft = sum(ttfts) / len(ttfts) if ttfts else 0.0
-    avg_tps = sum(toks_per_sec) / len(toks_per_sec) if toks_per_sec else 0.0
-    print(
-        f"\nCorpus BLEU-4: {bleu:.2f}  (n={n})"
-        f"\navg {avg_infer:.0f} ms, TTFT: {avg_ttft:.0f} ms, {avg_tps:.1f} tok/s"
-    )
-
-    if args.output_csv:
-        with open(args.output_csv, "w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=["source", "reference", "hypothesis", "infer_ms", "ttft_ms", "tok_s"])
-            writer.writeheader()
-            writer.writerows(csv_rows)
-        logger.info("Per-sample results written to %s", args.output_csv)
+    val_cls = VALIDATORS[args.mode]
+    val_cls(
+        args.dataset,
+        gemma3,
+        max_samples=args.max_samples,
+        output_csv=args.output_csv,
+        use_few_shot=args.use_few_shot,
+        few_shot_file=args.few_shot_file,
+        verbose=args.verbose,
+    ).run()
 
 
 if __name__ == "__main__":
+    VALIDATORS = {
+        "text-generation": TextGenerationValidator,
+    }
     parser = argparse.ArgumentParser(
         description=(
             "Validate a Gemma3 model on a JSON text translation dataset. "
-            "Reports corpus BLEU-4."
+            "Supports free-generation (BLEU) and teacher-forced (token accuracy) modes."
         )
+    )
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        default="text-generation",
+        choices=list(VALIDATORS),
+        help="Validation mode (default: %(default)s)",
     )
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Path to VMFB model"
@@ -342,24 +395,8 @@ if __name__ == "__main__":
         help="Cap the number of samples to evaluate (default: all)",
     )
     parser.add_argument(
-        "--max-seq-len", type=int, default=None,
-        help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
-    )
-    parser.add_argument(
-        "--max-inp-len", type=int,
-        help="Maximum prompt token length",
-    )
-    parser.add_argument(
-        "--instruct-model", action="store_true", default=False,
-        help="Is instruct model",
-    )
-    parser.add_argument(
-        "-j", "--threads", type=int,
-        help="Number of cores to use for CPU execution (default: all)",
-    )
-    parser.add_argument(
         "-v", "--verbose", action="store_true", default=False,
-        help="Print each source / reference / hypothesis",
+        help="Print per-sample details",
     )
     parser.add_argument(
         "--output-csv", type=str, default=None, metavar="FILE",
@@ -382,6 +419,22 @@ if __name__ == "__main__":
         ),
     )
     inference_group = parser.add_argument_group("inference")
+    inference_group.add_argument(
+        "--max-seq-len", type=int, default=None,
+        help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
+    )
+    inference_group.add_argument(
+        "--max-inp-len", type=int,
+        help="Maximum prompt token length",
+    )
+    inference_group.add_argument(
+        "--instruct-model", action="store_true", default=False,
+        help="Is instruct model",
+    )
+    inference_group.add_argument(
+        "-j", "--threads", type=int,
+        help="Number of cores to use for CPU execution (default: all)",
+    )
     inference_group.add_argument(
         "--kv-cache-window",
         type=int,
@@ -414,4 +467,4 @@ if __name__ == "__main__":
         ),
     )
     add_logging_args(parser)
-    validate(parser.parse_args())
+    main(parser.parse_args())
