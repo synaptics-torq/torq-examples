@@ -40,6 +40,29 @@ logger = logging.getLogger("Gemma3.validate")
 
 DEFAULT_DATASET = Path(__file__).resolve().parents[2] / "data" / "text_translation" / "opus100_en-es.json"
 
+# Default 3-shot examples for English -> Spanish.
+DEFAULT_FEW_SHOT_EXAMPLES: list[tuple[str, str]] = [
+    ("Good morning.", "Buenos días."),
+    ("Where is the train station?", "¿Dónde está la estación de tren?"),
+    ("I would like a glass of water.", "Me gustaría un vaso de agua."),
+]
+
+# Regex: preamble the model sometimes prepends before the actual translation.
+_PREAMBLE_RE = re.compile(
+    r'^\s*'
+    r'(?:'
+    r"(?:okay[,.]?\s*)?here(?:'s|\s+is|\s+are)\s+(?:the|a|your)?\s*translation[s]?[^:]*[:\-]?"
+    r'|traducción[^:]*[:\-]?'
+    r'|of\s+["\u201c].+?["\u201d]\s+into\s+\w+\s*[:\-]?'
+    r')\s*',
+    re.IGNORECASE,
+)
+
+# Regex: markdown bold/italic wrappers.
+_MD_BOLD_RE = re.compile(r'\*{1,2}(.+?)\*{1,2}')
+# Regex: leading bullet / list marker.
+_BULLET_RE = re.compile(r'^\s*[\*\-\u2022]\s*')
+
 
 # ---------------------------------------------------------------------------
 # Corpus BLEU-4
@@ -92,6 +115,46 @@ def corpus_bleu(hypotheses: list[str], references: list[str], max_n: int = 4) ->
     return bp * math.exp(log_avg) * 100.0
 
 
+# ---------------------------------------------------------------------------
+# Output normalization
+# ---------------------------------------------------------------------------
+
+def normalize_translation(text: str) -> str:
+    """Strip preamble and wrapper artifacts from model output.
+
+    Handles patterns like:
+      - 'Here's the translation:\n\n"Actual text"'
+      - 'Okay, here are the translations: ...'
+      - 'of "..." into Spanish:\n\n* **Actual text**'
+      - Leading/trailing quotes
+      - Markdown bold/italic wrappers
+      - Bullet-point markers
+    """
+    # Take only the first meaningful line/paragraph (split on double newline)
+    parts = text.strip().split("\n\n")
+    # If preamble is on the first part and translation on a later part, skip it
+    if len(parts) > 1 and _PREAMBLE_RE.search(parts[0]):
+        text = "\n\n".join(parts[1:])
+    else:
+        text = text.strip()
+    text = _PREAMBLE_RE.sub("", text).strip()
+
+    # Take only the first line of remaining text (multi-line output is usually
+    # the model continuing to generate beyond the translation)
+    first_line = text.split("\n")[0].strip()
+    if first_line:
+        text = first_line
+
+    text = _BULLET_RE.sub("", text).strip()
+    text = _MD_BOLD_RE.sub(r"\1", text).strip()
+    for q_open, q_close in [('"', '"'), ('\u201c', '\u201d'), ("'", "'")]:
+        if text.startswith(q_open) and text.endswith(q_close) and len(text) > 1:
+            text = text[len(q_open):-len(q_close)]
+            break
+
+    return text.strip()
+
+
 def load_dataset(path: str | os.PathLike) -> tuple[list[dict], str, str]:
     """Load a JSON language pair text translation dataset.
 
@@ -142,12 +205,40 @@ def validate(args: argparse.Namespace) -> None:
     n = len(dataset) if args.max_samples is None else min(args.max_samples, len(dataset))
     logger.info("Evaluating on %d / %d samples", n, len(dataset))
 
+    # Load few-shot prompt prefix
+    use_few_shot = args.use_few_shot
+    if use_few_shot:
+        if args.few_shot_file:
+            few_shot_prompt = Path(args.few_shot_file).read_text()
+            logger.info("Loaded few-shot prompt from %s", args.few_shot_file)
+        else:
+            if src_lang.lower() != "english" or tgt_lang.lower() != "spanish":
+                parser_err = (
+                    f"--use-few-shot requires --few-shot-file for language pair "
+                    f"{src_lang}->{tgt_lang}. Built-in examples are en->es only."
+                )
+                raise SystemExit(f"error: {parser_err}")
+            # Build default prefix from built-in examples
+            lines = [f"Translate {src_lang} to {tgt_lang}.", ""]
+            for src, tgt in DEFAULT_FEW_SHOT_EXAMPLES:
+                lines.extend([f"{src_lang}: {src}", f"{tgt_lang}: {tgt}", ""])
+            few_shot_prompt = "\n".join(lines).rstrip()
+            logger.info("Using built-in %d-shot examples (en-es)", len(DEFAULT_FEW_SHOT_EXAMPLES))
+    else:
+        few_shot_prompt = None
+
+    use_instruct = args.instruct_model
+    if use_few_shot:
+        logger.info("Few-shot prompting enabled")
+    else:
+        logger.info("Using direct translation prompt")
+
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
         max_prompt_tokens=args.max_inp_len,
         n_threads=args.threads,
-        instruct_model=args.instruct_model,
+        instruct_model=use_instruct,
         cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
         temperature=0.0,   # greedy decoding for reproducibility
         runtime_flags=args.runtime_flags,
@@ -168,7 +259,15 @@ def validate(args: argparse.Namespace) -> None:
         sys.stdout.write(f"\r  [{i + 1}/{n}] generating...")
         sys.stdout.flush()
 
-        hypothesis = gemma3.run(f"Translate to {tgt_lang}: \"{src_text}\"").strip().strip('"')
+        if use_few_shot:
+            if args.few_shot_file:
+                prompt = few_shot_prompt
+            else:
+                prompt = f"{few_shot_prompt}\n{src_lang}: {src_text}\n{tgt_lang}: "
+        else:
+            prompt = f"Translate to {tgt_lang}: \"{src_text}\""
+        raw_output = gemma3.run(prompt)
+        hypothesis = normalize_translation(raw_output)
 
         infer_ms = gemma3.last_infer_time
         ttft_ms = gemma3.time_to_first_token
@@ -265,6 +364,22 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-csv", type=str, default=None, metavar="FILE",
         help="Write per-sample results to a CSV file",
+    )
+    parser.add_argument(
+        "--use-few-shot", action="store_true", default=False,
+        help=(
+            "Use few-shot prompting instead of direct translation prompt. "
+            "Requires --few-shot-file for non en->es language pairs."
+        ),
+    )
+    parser.add_argument(
+        "--few-shot-file", type=str, default=None, metavar="FILE",
+        help=(
+            "Text file used as prompt prefix for few-shot prompting. "
+            "Contents are used verbatim; the source text is appended. "
+            "Only used when --use-few-shot is set. "
+            "If omitted, uses built-in 3-shot examples (only for en-es)."
+        ),
     )
     inference_group = parser.add_argument_group("inference")
     inference_group.add_argument(
