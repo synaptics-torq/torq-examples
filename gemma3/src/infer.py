@@ -43,6 +43,7 @@ def main(args: argparse.Namespace):
         top_p=args.top_p,
         top_k=args.top_k,
         runtime_flags=args.runtime_flags,
+        lm_head_path=args.lm_head,
     )
     try:
         while True:
@@ -99,6 +100,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Gemma3 VMFB inference.")
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Path to VMFB model"
+    )
+    parser.add_argument(
+        "--lm-head", type=str, default=None, metavar="PATH",
+        help="Path to a separately compiled LM head .vmfb (enables split-model inference)",
     )
     parser.add_argument(
         "--max-seq-len", type=int, default=None,

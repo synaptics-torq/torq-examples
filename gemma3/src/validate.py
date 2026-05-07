@@ -151,6 +151,7 @@ def validate(args: argparse.Namespace) -> None:
         cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
         temperature=0.0,   # greedy decoding for reproducibility
         runtime_flags=args.runtime_flags,
+        lm_head_path=args.lm_head,
     )
 
     hypotheses: list[str] = []
@@ -224,6 +225,10 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Path to VMFB model"
+    )
+    parser.add_argument(
+        "--lm-head", type=str, default=None, metavar="PATH",
+        help="Path to a separately compiled LM head .vmfb (enables split-model inference)",
     )
     parser.add_argument(
         "--dataset", type=str, default=str(DEFAULT_DATASET),

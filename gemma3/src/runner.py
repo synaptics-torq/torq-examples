@@ -12,7 +12,7 @@ from typing import Final
 import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
-from utils.inference import ManagedSelfAttnCacheRunner
+from utils.inference import ManagedSelfAttnCacheRunner, SplitLMHeadRunner
 
 DEFAULT_SYS_PROMPT: Final[str] = (
     "You are a helpful AI assistant named Gemma. "
@@ -63,10 +63,22 @@ class Gemma3Static:
         top_k: int = 64,
         runtime_flags: list[str] | None = None,
         sys_prompt: str | None = None,
+        lm_head_path: str | os.PathLike | None = None,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
 
-        self._model = ManagedSelfAttnCacheRunner(model_path, n_threads=n_threads, runtime_flags=runtime_flags)
+        self._model = ManagedSelfAttnCacheRunner(
+            model_path,
+            n_threads=n_threads,
+            runtime_flags=runtime_flags,
+        )
+        if lm_head_path is not None:
+            self._model = SplitLMHeadRunner(
+                self._model,
+                lm_head_path,
+                n_threads=n_threads,
+                runtime_flags=runtime_flags,
+            )
 
         model_seq_len = self._query_model_seq_len()
         if max_seq_len is not None and model_seq_len is not None:
