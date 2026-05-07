@@ -4,6 +4,7 @@
 import os
 from abc import abstractmethod
 from collections.abc import Iterable, Mapping
+from time import perf_counter_ns
 
 import numpy as np
 import numpy.typing as npt
@@ -235,3 +236,72 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
         self_state, cross_state = state
         self._self_cache = [self.allocate_device_array(a) for a in self_state]
         self._cross_cache = [self.allocate_device_array(a) for a in cross_state]
+
+
+class SplitLMHeadRunner:
+    """
+    Adapter for split body + lm_head inference.
+    """
+
+    def __init__(
+        self,
+        body: BaseManagedCacheRunner,
+        lm_head_path: str | os.PathLike,
+        **kwargs,
+    ) -> None:
+        self._body = body
+        self._infer_time_ms = 0.0
+        lm_head_kwargs = {
+            k: kwargs[k] for k in ("n_threads", "runtime_flags") if k in kwargs
+        }
+        self._lm_head = VMFBInferenceRunner(
+            lm_head_path,
+            device_outputs=True,
+            **lm_head_kwargs,
+        )
+
+    @property
+    def model_path(self) -> str | os.PathLike:
+        return self._body.model_path
+
+    @property
+    def infer_time_ms(self) -> float:
+        return self._infer_time_ms
+
+    @property
+    def inputs_info(self):
+        return self._body.inputs_info
+
+    @property
+    def outputs_info(self):
+        body_outputs = self._body.outputs_info
+        lm_head_outputs = self._lm_head.outputs_info
+        if not body_outputs or not lm_head_outputs:
+            return body_outputs
+        return [lm_head_outputs[0], *body_outputs[1:]]
+
+    @property
+    def device(self):
+        return self._body.device
+
+    def infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
+        start = perf_counter_ns()
+        results = self._body.infer(inputs)
+        lm_out = self._lm_head.infer([results[0]])
+        self._infer_time_ms = (perf_counter_ns() - start) / 1e6
+        return [lm_out[0], *results[1:]]
+
+    def allocate_device_array(self, array: npt.NDArray) -> DeviceArray:
+        return self._body.allocate_device_array(array)
+
+    def reset_kv(self) -> None:
+        self._body.reset_kv()
+
+    def save_kv_state(self):
+        return self._body.save_kv_state()
+
+    def restore_kv_state(self, state) -> None:
+        self._body.restore_kv_state(state)
+
+    def shift_kv(self, *args, **kwargs) -> None:
+        self._body.shift_kv(*args, **kwargs)
