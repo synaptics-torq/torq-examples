@@ -160,6 +160,10 @@ class Gemma3Static:
         self._logger.info("Loaded model '%s'", str(model_path))
 
     @property
+    def max_seq_len(self) -> int:
+        return self._max_seq_len
+
+    @property
     def last_infer_time(self) -> float:
         return self._last_infer_ns / 1e6
 
@@ -170,6 +174,10 @@ class Gemma3Static:
     @property
     def generated_tokens(self) -> int:
         return self._n_tokens_gen
+
+    @property
+    def is_instruct_model(self) -> bool:
+        return self._instruct_model
 
     def _load_embeddings(self) -> np.ndarray | None:
         paths = list(self._model_dir.glob("token_embeddings.npy"))
@@ -203,7 +211,7 @@ class Gemma3Static:
         else:
             self._model.reset_kv()
 
-    def _tokenize(self, text: str, role: str | None = None) -> list[int]:
+    def tokenize(self, text: str, role: str | None = None) -> list[int]:
         if not self._instruct_model or role is None:
             return self._tokenizer.encode(text).ids
         # Gemma 3 chat format: <start_of_turn>role\ntext<end_of_turn>\n
@@ -218,7 +226,7 @@ class Gemma3Static:
             ids = ids[1:]
         return ids
 
-    def _llm_step(self, token: int, seq_pos: int, *, sample: bool = True) -> int:
+    def llm_step(self, token: int, seq_pos: int, *, sample: bool = True) -> int:
         if self._emb_buf is not None:
             self._emb_buf[0, 0, :] = self._token_embeddings[token]
             first = self._emb_buf
@@ -284,12 +292,12 @@ class Gemma3Static:
         pos = start
         for tok_id in tokens[:-1]:
             _raise_if_stopped(should_stop)
-            self._llm_step(tok_id, pos, sample=False)
+            self.llm_step(tok_id, pos, sample=False)
             pos += 1
             _raise_if_stopped(should_stop)
         if tokens:
             _raise_if_stopped(should_stop)
-            tok = self._llm_step(tokens[-1], pos)
+            tok = self.llm_step(tokens[-1], pos)
             _raise_if_stopped(should_stop)
         else:
             tok = 0
@@ -312,7 +320,7 @@ class Gemma3Static:
             return 0
         self._logger.info("Warm-up started...")
         # Gemma3 format: <bos><start_of_turn>system\n{sys_prompt}<end_of_turn>\n
-        sys_tokens = [self._bos_token_id] + self._tokenize(self._sys_prompt, "system")
+        sys_tokens = [self._bos_token_id] + self.tokenize(self._sys_prompt, "system")
         if isinstance(self._max_prompt_tokens, int):
             sys_tokens = sys_tokens[: self._max_prompt_tokens]
             self._max_user_tokens = max(0, self._max_prompt_tokens - len(sys_tokens))
@@ -323,6 +331,20 @@ class Gemma3Static:
             n, self._max_seq_len - n
         )
         return n
+
+    def reset(self) -> None:
+        """Reset the model to its post-warmup state."""
+        self._reset_cache()
+
+    def prefill_tokens(
+        self,
+        tokens: list[int],
+    ) -> tuple[int, int]:
+        return self._prefill(
+            tokens,
+            start=self._warmup_len,
+            should_stop=None,
+        )
 
     def run(
         self,
@@ -343,9 +365,9 @@ class Gemma3Static:
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
 
-        tokens = self._tokenize(user_input, "user")
+        tokens = self.tokenize(user_input, "user")
         if self._instruct_model:
-            tokens += self._tokenize("", "model")
+            tokens += self.tokenize("", "model")
         # Truncate / pad to max user length
         limit = (
             self._max_user_tokens
@@ -390,7 +412,7 @@ class Gemma3Static:
                     else:
                         self._logger.warning("Max generation tokens reached")
                         break
-                next_tok = self._llm_step(next_tok, pos)
+                next_tok = self.llm_step(next_tok, pos)
                 _raise_if_stopped(should_stop)
                 gen.append(next_tok)
                 pos += 1
