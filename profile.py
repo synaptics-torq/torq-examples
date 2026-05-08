@@ -67,7 +67,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
     logger = logging.getLogger().setLevel(logging.INFO)
 
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + args.runtime_flags
+    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
 
     results = profile_vmfb_resources(
         args.model,
