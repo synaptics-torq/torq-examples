@@ -234,9 +234,9 @@ class BaseValidator(ABC):
                         f"error: --use-few-shot requires --few-shot-file for language pair "
                         f"{self.src_lang}->{self.tgt_lang}. Built-in examples are en->es only."
                     )
-                lines = [f"Translate {self.src_lang} to {self.tgt_lang}.", ""]
+                lines = ["Translate English to Spanish.", ""]
                 for src, tgt in DEFAULT_FEW_SHOT_EXAMPLES:
-                    lines.extend([f"{self.src_lang}: {src}", f"{self.tgt_lang}: {tgt}", ""])
+                    lines.extend([f"English: {src}", f"Spanish: {tgt}", ""])
                 self.few_shot_prompt = "\n".join(lines).rstrip()
                 logger.info("Using built-in %d-shot examples (en-es)", len(DEFAULT_FEW_SHOT_EXAMPLES))
 
@@ -333,6 +333,80 @@ class TextGenerationValidator(BaseValidator):
         )
 
 
+class TeacherForcedValidator(BaseValidator):
+    """Validates via teacher-forced next token prediction (token accuracy)."""
+
+    def run(self) -> None:
+        total_tokens = 0
+        correct_tokens = 0
+        csv_rows: list[dict] = []
+
+        for i, item in enumerate(self.dataset[:self.n]):
+            src_text: str = item["src"]
+            tgt_text: str = item["tgt"]
+
+            sys.stdout.write(f"\r  [{i + 1}/{self.n}] evaluating...")
+            sys.stdout.flush()
+
+            prompt = self.build_prompt(src_text)
+            prompt_ids = self.gemma3.tokenize(prompt, "user")
+            if self.gemma3.is_instruct_model:
+                prompt_ids += self.gemma3.tokenize("", "model")
+            target_ids = self.gemma3.tokenize(tgt_text)
+            if not target_ids:
+                continue
+            if target_ids[0] == self.gemma3._bos_token_id:
+                target_ids = target_ids[1:]
+
+            self.gemma3.reset()
+            next_tok, pos = self.gemma3.prefill_tokens(prompt_ids)
+
+            steps = min(len(target_ids), self.gemma3.max_seq_len - pos)
+            sample_correct = 0
+
+            for idx in range(steps):
+                gold = target_ids[idx]
+                if next_tok == gold:
+                    sample_correct += 1
+                # Teacher forcing: feed the gold token to get the next prediction.
+                if idx < steps - 1:
+                    next_tok = self.gemma3.llm_step(gold, pos)
+                    pos += 1
+
+            total_tokens += steps
+            correct_tokens += sample_correct
+            sample_acc = 100.0 * sample_correct / max(1, steps)
+
+            if self.verbose:
+                print(
+                    f"\n  Src: {src_text[:120]}"
+                    f"\n  Tgt: {tgt_text[:120]}"
+                    f"\n  Accuracy: {sample_acc:.1f}% ({sample_correct}/{steps})"
+                )
+
+            if self.output_csv:
+                csv_rows.append({
+                    "source": src_text,
+                    "reference": tgt_text,
+                    "correct": sample_correct,
+                    "total": steps,
+                    "accuracy": f"{sample_acc:.2f}",
+                })
+
+        print()
+
+        acc = 100.0 * correct_tokens / max(1, total_tokens)
+        print(
+            f"\nTeacher-forced token accuracy: {acc:.2f}%"
+            f"  (n={self.n}, tokens={total_tokens})"
+        )
+
+        self.write_csv(
+            csv_rows,
+            ["source", "reference", "correct", "total", "accuracy"],
+        )
+
+
 def main(args: argparse.Namespace) -> None:
     configure_logging(args.logging)
     gemma3 = Gemma3Static(
@@ -361,6 +435,7 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     VALIDATORS = {
         "text-generation": TextGenerationValidator,
+        "teacher-forced": TeacherForcedValidator,
     }
     parser = argparse.ArgumentParser(
         description=(
