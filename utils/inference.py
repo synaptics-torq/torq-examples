@@ -142,18 +142,28 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
     Args:
         model_path: Path to the ``.vmfb`` file.
         initial_cache: Cross-attn and initial self-attn cache values.
+            When ``None`` (the default), caches are zero-initialised from
+            the model's input metadata.
         cache_start_idx: Index of the first cache output in the model's
             output list. Defaults to 1 ([logits, self_v0, ...]).
+        input_cache_start_idx: Index of the first cache input in the
+            model's input list.  Defaults to *cache_start_idx*.
     """
 
     def __init__(
         self,
         model_path: str | os.PathLike,
-        initial_cache: list[npt.NDArray | DeviceArray],
+        initial_cache: list[npt.NDArray | DeviceArray] | None = None,
         cache_start_idx: int = 1,
+        input_cache_start_idx: int | None = None,
         **kwargs,
     ) -> None:
         super().__init__(model_path, cache_start_idx=cache_start_idx, **kwargs)
+
+        self._input_cache_start: int = (
+            input_cache_start_idx if input_cache_start_idx is not None
+            else cache_start_idx
+        )
 
         n_self_cache_outputs = len(self.outputs_info) - self._cache_start_idx
         if n_self_cache_outputs <= 0 or n_self_cache_outputs % 2 != 0:
@@ -164,23 +174,35 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
             )
         self._n_layers = n_self_cache_outputs // 2
 
-        n_cache_inputs = len(self.inputs_info) - cache_start_idx
+        n_cache_inputs = len(self.inputs_info) - self._input_cache_start
         if n_cache_inputs != 4 * self._n_layers:
             raise ValueError(
                 f"Expected {4 * self._n_layers} interleaved cache inputs "
                 f"({self._n_layers} layers * 4), got {n_cache_inputs}."
             )
 
-        expected = 4 * self._n_layers
-        if len(initial_cache) != expected:
-            raise ValueError(
-                f"Expected {expected} cache tensors "
-                f"({self._n_layers} layers * 4), got {len(initial_cache)}."
-            )
-        initial_cache = [
-            self.allocate_device_array(c) if isinstance(c, np.ndarray) else c
-            for c in initial_cache
-        ]
+        if initial_cache is not None:
+            expected = 4 * self._n_layers
+            if len(initial_cache) != expected:
+                raise ValueError(
+                    f"Expected {expected} cache tensors "
+                    f"({self._n_layers} layers * 4), got {len(initial_cache)}."
+                )
+            initial_cache = [
+                self.allocate_device_array(c) if isinstance(c, np.ndarray) else c
+                for c in initial_cache
+            ]
+        else:
+            in_info = self.inputs_info
+            initial_cache = [
+                self.allocate_device_array(
+                    np.zeros(
+                        in_info[self._input_cache_start + i].shape,
+                        dtype=np.dtype(in_info[self._input_cache_start + i].dtype),
+                    )
+                )
+                for i in range(4 * self._n_layers)
+            ]
         self._self_cache: list = [None] * (2 * self._n_layers)
         self._cross_cache: list = [None] * (2 * self._n_layers)
         for layer in range(self._n_layers):
@@ -189,6 +211,51 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
             self._self_cache[2 * layer + 1] = initial_cache[base + 1]
             self._cross_cache[2 * layer] = initial_cache[base + 2]
             self._cross_cache[2 * layer + 1] = initial_cache[base + 3]
+
+    def set_cache(
+        self,
+        interleaved_cache: list[npt.NDArray | DeviceArray],
+        *,
+        pad_axis: int = 2,
+    ) -> None:
+        """Set self and cross caches from an interleaved list.
+
+        Self-attention caches are zero-padded along *pad_axis* when their
+        shape is smaller than the model expects (e.g. a first decoder step
+        producing ``[B, H, 1, D]`` while the model needs ``[B, H, L, D]``).
+        """
+        expected = 4 * self._n_layers
+        if len(interleaved_cache) != expected:
+            raise ValueError(
+                f"Expected {expected} cache tensors "
+                f"({self._n_layers} layers * 4), got {len(interleaved_cache)}."
+            )
+
+        in_info = self.inputs_info
+        for layer in range(self._n_layers):
+            base = layer * 4
+            for j in range(2):  # self v, k
+                c = interleaved_cache[base + j]
+                if isinstance(c, DeviceArray):
+                    c = c.to_host()
+                else:
+                    c = np.asarray(c)
+                target = tuple(in_info[self._input_cache_start + base + j].shape)
+                if c.shape != target:
+                    padded = np.zeros(target, dtype=c.dtype)
+                    slices = [slice(None)] * c.ndim
+                    slices[pad_axis] = slice(0, c.shape[pad_axis])
+                    padded[tuple(slices)] = c
+                    c = padded
+                self._self_cache[2 * layer + j] = self.allocate_device_array(c)
+
+            for j in range(2):  # cross v, k
+                c = interleaved_cache[base + 2 + j]
+                if isinstance(c, DeviceArray):
+                    c = c.to_host()
+                else:
+                    c = np.asarray(c)
+                self._cross_cache[2 * layer + j] = self.allocate_device_array(c)
 
     def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
         # Rebuild interleaved cache: self_v, self_k, cross_v, cross_k per layer.
@@ -218,7 +285,7 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
         in_info = self.inputs_info
         for layer in range(self._n_layers):
             for j in range(2):  # v, k
-                idx = self._cache_start_idx + layer * 4 + j
+                idx = self._input_cache_start + layer * 4 + j
                 info = in_info[idx]
                 z = np.zeros(info.shape, dtype=np.dtype(info.dtype))
                 self._self_cache[2 * layer + j] = self.allocate_device_array(z)
