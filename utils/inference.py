@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+
+import logging
 import os
 from abc import abstractmethod
 from collections.abc import Iterable, Mapping
@@ -9,8 +11,58 @@ from time import perf_counter_ns
 import numpy as np
 import numpy.typing as npt
 
-from torq.runtime import VMFBInferenceRunner
+try:
+    import onnxruntime as ort
+    ORT_AVAILABLE = True
+except ImportError:
+    ORT_AVAILABLE = False
+from torq.runtime import (InferenceRunner, VMFBInferenceRunner)
+from torq.runtime.utils import TensorInfo
 from iree.runtime import DeviceArray
+
+
+class ORTInferenceRunner(InferenceRunner):
+
+    def __init__(
+        self,
+        model_path: str | os.PathLike,
+        *,
+        n_threads: int | None = None
+    ):
+        if not ORT_AVAILABLE:
+            raise RuntimeError("onnxruntime is not installed in this environment, please install with `pip install onnxruntime`")
+        super().__init__(model_path)
+        self._logger = logging.getLogger(__class__.__name__)
+
+        self._opts = ort.SessionOptions()
+        if isinstance(n_threads, int) and n_threads > 0:
+            self._opts.intra_op_num_threads = n_threads
+            self._opts.inter_op_num_threads = n_threads
+            self._logger.debug("Using %d threads for inference", n_threads)
+        self._sess = ort.InferenceSession(self._model_path, self._opts, providers=['CPUExecutionProvider'])
+        self._inputs_info = [
+            TensorInfo(None, i.shape) for i in self._sess.get_inputs()
+        ]
+        self._outputs_info = [
+            TensorInfo(None, o.shape) for o in self._sess.get_outputs()
+        ]
+        self._logger.info("Loaded ONNX model '%s'", str(self._model_path))
+
+    @property
+    def inputs_info(self) -> list[TensorInfo] | None:
+        return self._inputs_info
+
+    @property
+    def outputs_info(self) -> list[TensorInfo] | None:
+        return self._outputs_info
+
+    def _infer(self, inputs: list[np.ndarray] | dict[str, np.ndarray]) -> list[np.ndarray]:
+        if isinstance(inputs, list):
+            inputs = dict(zip([inp.name for inp in self._sess.get_inputs()], inputs))
+        st = perf_counter_ns()
+        result = [np.asarray(o) for o in self._sess.run(None, inputs)]
+        self._logger.debug("Infer '%s': %.3f ms", str(self._model_path), (perf_counter_ns() - st) / 1e6)
+        return result
 
 
 class BaseManagedCacheRunner(VMFBInferenceRunner):

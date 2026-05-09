@@ -5,16 +5,19 @@ import logging
 import os
 from pathlib import Path
 from time import perf_counter_ns
-from typing import Final
+from typing import Final, Union
 
 import numpy as np
 
 from torq.runtime import VMFBInferenceRunner
 
-from utils.inference import ManagedEncDecCacheRunner
+from utils.inference import ORTInferenceRunner, ManagedEncDecCacheRunner
 
 _START_TOKEN_ID: Final[int] = 1
 _END_TOKEN_ID: Final[int] = 2
+
+
+InferenceRunner = Union[ORTInferenceRunner, VMFBInferenceRunner]
 
 
 def _find_models(model_dir: Path) -> dict[str, Path]:
@@ -22,9 +25,28 @@ def _find_models(model_dir: Path) -> dict[str, Path]:
     known = {"preprocessor", "encoder", "decoder", "decoder_with_past"}
     models: dict[str, Path] = {}
     for f in model_dir.iterdir():
-        if f.is_file() and f.suffix == ".vmfb" and f.stem in known:
+        if f.is_file() and f.suffix in (".vmfb", ".onnx") and f.stem in known:
             models[f.stem] = f
     return models
+
+
+def _get_runner(
+    model_path: Path,
+    n_threads: int | None = None,
+    runtime_flags: list[str] | None = None,
+    *rargs, **rkwargs
+) -> InferenceRunner:
+    model_path = Path(model_path)
+    model_type = model_path.suffix.lower()
+    if model_type == ".onnx":
+        return ORTInferenceRunner(
+            model_path, n_threads=n_threads
+        )
+    elif model_type == ".vmfb":
+        return VMFBInferenceRunner(
+            model_path, n_threads=n_threads, runtime_flags=runtime_flags, *rargs, **rkwargs
+        )
+    raise TypeError(f"Invalid model type '{model_type}'")
 
 
 class MoonshineRunner:
@@ -69,13 +91,13 @@ class MoonshineRunner:
 
         rk: dict = dict(n_threads=n_threads, runtime_flags=runtime_flags)
 
-        self._preprocessor: VMFBInferenceRunner | None = (
-            VMFBInferenceRunner(components["preprocessor"], **rk)
+        self._preprocessor: InferenceRunner | None = (
+            _get_runner(components["preprocessor"], **rk)
             if "preprocessor" in components
             else None
         )
-        self._encoder = VMFBInferenceRunner(components["encoder"], **rk)
-        self._decoder = VMFBInferenceRunner(components["decoder"], **rk)
+        self._encoder = _get_runner(components["encoder"], **rk)
+        self._decoder = _get_runner(components["decoder"], **rk)
         self._decoder_cached = ManagedEncDecCacheRunner(
             components["decoder_with_past"],
             input_cache_start_idx=2,  # [token_emb, seq_len, *cache]
@@ -85,7 +107,7 @@ class MoonshineRunner:
 
         self._token_embeddings = self._load_embeddings(model_dir)
 
-        enc_info = self._encoder.inputs_info
+        enc_info = self._preprocessor.inputs_info if self._preprocessor else self._encoder.inputs_info
         if enc_info:
             self._max_inp_len: int | None = int(enc_info[0].shape[-1])
         else:
@@ -168,7 +190,12 @@ class MoonshineRunner:
         enc_info = self._encoder.inputs_info
         if enc_info:
             audio = audio.astype(np.dtype(enc_info[0].dtype))
-        return self._encoder.infer([audio])[0]
+        enc_out = self._encoder.infer([audio])[0]
+        self._logger.debug(
+            "Infer '%s': %.3f ms",
+            str(self._encoder.model_path), self._encoder.infer_time_ms
+        )
+        return enc_out
 
     # ------------------------------------------------------------------
     # Public API
@@ -211,6 +238,10 @@ class MoonshineRunner:
             token_emb = token_emb.astype(np.dtype(dec_info[0].dtype))
 
         results = self._decoder.infer([token_emb, encoder_out])
+        self._logger.debug(
+            "Infer '%s': %.3f ms",
+            str(self._decoder.model_path), self._decoder.infer_time_ms
+        )
         logits = results[0]
         initial_cache = results[1:]
         self._decoder_cached.set_cache(initial_cache)
@@ -231,6 +262,10 @@ class MoonshineRunner:
                 token_emb = token_emb.astype(np.dtype(dec_cached_info[0].dtype))
                 seq_len = seq_len.astype(np.dtype(dec_cached_info[1].dtype))
             [logits] = self._decoder_cached.infer([token_emb, seq_len])
+            self._logger.debug(
+                "Infer '%s': %.3f ms",
+                str(self._decoder_cached.model_path), self._decoder_cached.infer_time_ms
+            )
             next_token = int(np.asarray(logits)[0, -1].argmax())
             self._n_tokens_gen += 1
             tokens.append(next_token)
