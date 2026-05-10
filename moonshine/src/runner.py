@@ -15,6 +15,7 @@ from utils.inference import ORTInferenceRunner, ManagedEncDecCacheRunner
 
 _START_TOKEN_ID: Final[int] = 1
 _END_TOKEN_ID: Final[int] = 2
+_DEFAULT_INPUT_FREQ: Final[int] = 16000
 
 
 InferenceRunner = Union[ORTInferenceRunner, VMFBInferenceRunner]
@@ -67,6 +68,7 @@ class MoonshineRunner:
         "_decoder_cached",
         "_token_embeddings",
         "_max_inp_len",
+        "_input_freq",
         "_n_tokens_gen",
         "_last_infer_ns",
         "_time_to_first_token_ns",
@@ -76,6 +78,7 @@ class MoonshineRunner:
         self,
         model_dir: str | os.PathLike,
         *,
+        input_freq: int = _DEFAULT_INPUT_FREQ,
         n_threads: int | None = None,
         runtime_flags: list[str] | None = None,
     ):
@@ -117,6 +120,7 @@ class MoonshineRunner:
                 "audio will not be padded/truncated."
             )
 
+        self.input_freq = input_freq
         self._n_tokens_gen: int = 0
         self._last_infer_ns: int = 0
         self._time_to_first_token_ns: int = 0
@@ -144,6 +148,16 @@ class MoonshineRunner:
     @property
     def max_inp_len(self) -> int | None:
         return self._max_inp_len
+
+    @property
+    def input_freq(self) -> int:
+        return self._input_freq
+
+    @input_freq.setter
+    def input_freq(self, value: int) -> None:
+        if value <= 0:
+            raise ValueError(f"input_freq must be positive, got {value}")
+        self._input_freq = int(value)
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -220,7 +234,7 @@ class MoonshineRunner:
         audio = self._size_input(audio)
 
         if max_tokens is None:
-            max_tokens = max(1, int((audio.shape[-1] / 16000) * 6))
+            max_tokens = max(1, int((audio.shape[-1] / self._input_freq) * 6))
 
         start_ns = perf_counter_ns()
 
