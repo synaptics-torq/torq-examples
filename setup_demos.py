@@ -21,7 +21,7 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = ["gemma3"]
+DEMOS = ["gemma3", "moonshine"]
 
 
 def _site_packages_dir() -> str:
@@ -48,6 +48,9 @@ def setup_demo(name: str):
         if name == "gemma3":
             from gemma3.setup import setup_gemma3
             setup_gemma3(["instruct"])
+        elif name == "moonshine":
+            from moonshine.setup import setup_moonshine
+            setup_moonshine(["tiny-en"])
     except SetupError as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
