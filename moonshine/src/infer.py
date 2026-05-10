@@ -4,6 +4,7 @@
 import argparse
 import logging
 import os
+from typing import NamedTuple
 
 import numpy as np
 import soundfile as sf
@@ -16,25 +17,36 @@ GREEN = "\033[32m"
 RESET = "\033[0m"
 
 
+class TranscriptionResult(NamedTuple):
+    text: str
+    audio_duration_ms: float
+
+
 def _transcribe(
     wav: str | os.PathLike,
     runner: MoonshineRunner,
     tokenizer: Tokenizer,
-) -> str:
-    data, _ = sf.read(wav, dtype="float32")
+) -> TranscriptionResult:
+    data, sample_rate = sf.read(wav, dtype="float32")
+    runner.input_freq = sample_rate
+    audio_duration_ms = data.shape[0] / sample_rate * 1000 if sample_rate > 0 else 0
     audio = data.astype(np.float32)[np.newaxis, :]
     tokens = runner.run(audio)
-    return tokenizer.decode_batch(tokens.tolist(), skip_special_tokens=True)[0]
+    text = tokenizer.decode_batch(tokens.tolist(), skip_special_tokens=True)[0]
+    return TranscriptionResult(text, audio_duration_ms)
 
 
-def _print_result(text: str, runner: MoonshineRunner) -> None:
+def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
     ttft = runner.time_to_first_token
     total = runner.last_infer_time
     decode_ms = total - ttft
-    tps = runner.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
+    decode_tokens = max(0, runner.generated_tokens - 1)
+    tps = decode_tokens / decode_ms * 1000 if decode_ms > 0 else 0
+    rtf = total / result.audio_duration_ms if result.audio_duration_ms > 0 else 0
     print(
-        f"{GREEN}Transcribed: {text}{RESET}"
-        f"  ({total:.0f} ms, TTFT: {ttft:.0f} ms, {tps:.1f} tok/s)"
+        f"{GREEN}Transcribed: {result.text}{RESET}"
+        f"  ({total:.0f} ms, TTFT: {ttft:.0f} ms, "
+        f"{tps:.1f} tok/s, RTF: {rtf:.2f})"
     )
 
 
@@ -57,8 +69,8 @@ def main(args: argparse.Namespace):
 
     try:
         for wav in args.inputs:
-            text = _transcribe(wav, runner, tokenizer)
-            _print_result(text, runner)
+            result = _transcribe(wav, runner, tokenizer)
+            _print_result(result, runner)
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
 
