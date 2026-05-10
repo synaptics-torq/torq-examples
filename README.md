@@ -68,3 +68,14 @@ Run `python src/infer.py -h` to see all available inference options.
 ```sh
 python profile.py models/Synaptics/gemma-3-270m-it/model.vmfb -r 5
 ```
+
+## Validation
+
+Some demos include built-in validation scripts. For example, Gemma 3 can be validated on a text translation dataset:
+
+```sh
+cd gemma3
+python src/validate.py -m ../models/Synaptics/gemma-3-270m-it/model.vmfb --instruct-model --max-samples 10
+```
+
+Run the validation script with `-h` to see all available options.
