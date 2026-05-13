@@ -56,7 +56,7 @@ pip install -r requirements.txt  # if present
 Then run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
 
 ```sh
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it/model.vmfb --instruct-model
+python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model
 ```
 
 Run `python src/infer.py -h` to see all available inference options.
@@ -66,7 +66,7 @@ Run `python src/infer.py -h` to see all available inference options.
 `profile.py` at the repo root is a model-agnostic profiling tool. Point it at any VMFB:
 
 ```sh
-python profile.py models/Synaptics/gemma-3-270m-it/model.vmfb -r 5
+python profile.py models/Synaptics/gemma-3-270m-it-torq/model.vmfb -r 5
 ```
 
 ## Validation
@@ -75,7 +75,7 @@ Some demos include built-in validation scripts. For example, Gemma 3 can be vali
 
 ```sh
 cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270m-it/model.vmfb --instruct-model --max-samples 10
+python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model --max-samples 10
 ```
 
 Run the validation script with `-h` to see all available options.

@@ -13,7 +13,7 @@ python setup_demos.py gemma3
 This downloads the default instruct model files to:
 
 ```sh
-models/Synaptics/gemma-3-270m-it/
+models/Synaptics/gemma-3-270m-it-torq/
 ```
 
 ## Running
@@ -22,7 +22,7 @@ Run the demo from the `gemma3` directory:
 
 ```sh
 cd gemma3
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it/model.vmfb --instruct-model
+python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model
 ```
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
@@ -35,7 +35,7 @@ Gemma 3 includes a validation script for text translation datasets. For example:
 
 ```sh
 cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270m-it/model.vmfb --instruct-model --max-samples 10
+python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model --max-samples 10
 ```
 
 Run `python src/validate.py -h` to see all available validation options.
