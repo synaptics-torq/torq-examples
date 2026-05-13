@@ -12,8 +12,8 @@ from utils.errors import SetupError
 logger = logging.getLogger("Gemma3.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/gemma-3-270m",
-    "instruct": "Synaptics/gemma-3-270m-it"
+    "default": "Synaptics/gemma-3-270m-torq",
+    "instruct": "Synaptics/gemma-3-270m-it-torq"
 }
 _GEMMA3_MODEL_FILENAMES: Final[list[str]] = [
     "model.vmfb",
