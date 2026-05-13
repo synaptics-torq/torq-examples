@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Final
 
 from utils.deps import check_requirements
-from utils.download import download_from_hf
+from utils.download import download_from_hf, default_models_dir
 from utils.errors import SetupError
 
 logger = logging.getLogger("Gemma3.setup")
@@ -15,6 +15,33 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m",
     "instruct": "Synaptics/gemma-3-270m-it"
 }
+_GEMMA3_MODEL_FILENAMES: Final[list[str]] = [
+    "model.vmfb",
+    "model.vmfb.trim",
+]
+_GEMMA3_TRIM_LUT_FILENAME: Final[str] = "token_id_lut.npy"
+
+
+def _download_gemma3_model(repo_id: str, base_dir: Path) -> None:
+    """Download model.vmfb and/or model.vmfb.trim as they exist."""
+    local_dir = base_dir / repo_id
+    if any((local_dir / filename).exists() for filename in _GEMMA3_MODEL_FILENAMES):
+        return
+
+    from huggingface_hub import HfApi
+
+    hf_api = HfApi()
+    downloaded_any = False
+    for filename in _GEMMA3_MODEL_FILENAMES:
+        if hf_api.file_exists(repo_id=repo_id, filename=filename):
+            download_from_hf(repo_id, filename, base_dir=base_dir)
+            logger.info("Downloaded %s from %s", filename, repo_id)
+            downloaded_any = True
+
+    if not downloaded_any:
+        raise FileNotFoundError(
+            f"Neither model.vmfb nor model.vmfb.trim found in {repo_id}"
+        )
 
 
 def setup_gemma3(
@@ -22,13 +49,23 @@ def setup_gemma3(
 ):
     logger.info("Setting up gemma3 demo with models: [%s]", ", ".join(models))
     repos = [_HF_REPO_MAP.get(m, m) for m in models]
+    base_dir = default_models_dir()
     for repo_id in repos:
         try:
-            download_from_hf(repo_id, "model.vmfb")
-            download_from_hf(repo_id, "token_embeddings.npy")
-            download_from_hf(repo_id, "config.json")
-            download_from_hf(repo_id, "tokenizer.json")
+            _download_gemma3_model(repo_id, base_dir)
+            download_from_hf(repo_id, "token_embeddings.npy", base_dir=base_dir)
+            download_from_hf(repo_id, "config.json", base_dir=base_dir)
+            download_from_hf(repo_id, "tokenizer.json", base_dir=base_dir)
             logger.info("Downloaded gemma3 model files from %s", repo_id)
+            # Optional: trimmed vocab LUT
+            try:
+                from huggingface_hub import HfApi
+
+                hf_api = HfApi()
+                if hf_api.file_exists(repo_id=repo_id, filename=_GEMMA3_TRIM_LUT_FILENAME):
+                    download_from_hf(repo_id, _GEMMA3_TRIM_LUT_FILENAME, base_dir=base_dir)
+            except Exception:
+                pass
         except Exception as e:
             raise SetupError(f"Unable to download model files from {repo_id}") from e
     check_requirements(Path(__file__).parent / "requirements.txt")
