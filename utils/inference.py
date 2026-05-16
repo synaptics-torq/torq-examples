@@ -11,11 +11,6 @@ from time import perf_counter_ns
 import numpy as np
 import numpy.typing as npt
 
-try:
-    import onnxruntime as ort
-    ORT_AVAILABLE = True
-except ImportError:
-    ORT_AVAILABLE = False
 from torq.runtime import (InferenceRunner, VMFBInferenceRunner)
 from torq.runtime.utils import TensorInfo
 from iree.runtime import DeviceArray
@@ -29,8 +24,8 @@ class ORTInferenceRunner(InferenceRunner):
         *,
         n_threads: int | None = None
     ):
-        if not ORT_AVAILABLE:
-            raise RuntimeError("onnxruntime is not installed in this environment, please install with `pip install onnxruntime`")
+        import onnxruntime as ort
+
         super().__init__(model_path)
         self._logger = logging.getLogger(__class__.__name__)
 
