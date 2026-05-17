@@ -1,2 +1,2 @@
-onnxruntime
-soundfile
+onnxruntime==1.26.0
+soundfile==0.13.1
