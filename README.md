@@ -20,6 +20,13 @@ pip install https://github.com/synaptics-torq/torq-examples/releases/download/to
 pip install -r requirements.txt
 ```
 
+Additionally, install any demo-specific dependencies:
+
+```sh
+cd gemma3
+pip install -r requirements.txt  # if present
+```
+
 Run the setup script to install the repo on your Python path and download model assets:
 
 ```sh
@@ -46,20 +53,11 @@ Downloaded models are stored in `./models/` by default. Override with the `$MODE
 
 ## Running a Demo
 
-Each demo lives in its own directory. To run a demo, `cd` into its directory and install any demo-specific dependencies first:
-
-```sh
-cd gemma3
-pip install -r requirements.txt  # if present
-```
-
-Then run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
+Each demo lives in its own directory. To run a demo, `cd` into its directory and run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
 
 ```sh
 python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
 ```
-
-If the downloaded repo only contains `model.vmfb`, use that path instead.
 
 Run `python src/infer.py -h` to see all available inference options.
 
