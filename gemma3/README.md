@@ -25,7 +25,8 @@ cd gemma3
 python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
 ```
 
-If your downloaded model directory only contains `model.vmfb`, use that file instead.
+> [!TIP]
+> If the downloaded repo only contains `model.vmfb`, use that path instead.
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
