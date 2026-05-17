@@ -37,7 +37,7 @@ python setup_demos.py gemma3
 python setup_demos.py --all
 ```
 
-Individual demos also have their own `setup.py` for customizing setup, but `setup_demos.py` must be run at least once first.
+Individual demos also have their own `setup_demo.py` for customizing setup, but the top-level `setup_demos.py` must be run at least once first.
 
 Downloaded models are stored in `./models/` by default. Override with the `$MODELS` environment variable. Setup writes a small `.manifest.json` next to each downloaded model, so re-running setup reuses complete downloads and repairs incomplete model directories.
 
