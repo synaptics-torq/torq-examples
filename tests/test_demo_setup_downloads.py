@@ -4,8 +4,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from gemma3 import setup as gemma_setup
-from moonshine import setup as moonshine_setup
+from gemma3 import setup_demo as gemma_setup
+from moonshine import setup_demo as moonshine_setup
 from utils.download import write_manifest
 
 

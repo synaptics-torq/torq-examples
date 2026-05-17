@@ -46,10 +46,10 @@ def install():
 def setup_demo(name: str):
     try:
         if name == "gemma3":
-            from gemma3.setup import setup_gemma3
+            from gemma3.setup_demo import setup_gemma3
             setup_gemma3(["instruct"])
         elif name == "moonshine":
-            from moonshine.setup import setup_moonshine
+            from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
