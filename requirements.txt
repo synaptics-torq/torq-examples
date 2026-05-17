@@ -1,8 +1,8 @@
-huggingface_hub
-ml_dtypes
+huggingface-hub==0.31.4
+ml_dtypes>=0.4.0
 
 # FIXME: Switch to >=2.0.0b once toolchain is updated
 numpy<2.0.0b
 
-requests
-tqdm
+requests==2.33.1
+tqdm~=4.67.1
