@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sized
 from pathlib import Path
 from typing import Final
 
@@ -29,6 +29,59 @@ class InferenceInterrupted(Exception):
 def _raise_if_stopped(should_stop: StopCheck | None) -> None:
     if should_stop is not None and should_stop():
         raise InferenceInterrupted
+
+
+def resolve_token_id_lut(
+    logits_size: int | None,
+    vocab_size: int | None,
+    token_id_lut: Sized | None,
+    logger: logging.Logger | None = None,
+) -> Sized | None:
+    """Validate and choose the token ID LUT for a Gemma model."""
+    if logits_size is None:
+        if token_id_lut is not None and logger is not None:
+            logger.warning(
+                "Cannot validate token ID LUT because logits shape is unavailable; "
+                "using the LUT as provided."
+            )
+        return token_id_lut
+
+    if vocab_size is None:
+        if token_id_lut is not None and len(token_id_lut) != logits_size:
+            raise ValueError(
+                "Invalid token ID LUT: length "
+                f"{len(token_id_lut)} does not match logits size {logits_size}."
+            )
+        if logger is not None:
+            logger.warning(
+                "Cannot determine vocab_size from config.json; token ID LUT "
+                "requirement could not be fully validated."
+            )
+        return token_id_lut
+
+    if logits_size == vocab_size:
+        if token_id_lut is not None and logger is not None:
+            logger.warning(
+                "token_id_lut.npy exists, but logits size %d matches config "
+                "vocab_size %d; ignoring the LUT.",
+                logits_size,
+                vocab_size,
+            )
+        return None
+
+    if token_id_lut is None:
+        raise ValueError(
+            "token_id_lut.npy is required because logits size "
+            f"{logits_size} does not match config vocab_size {vocab_size}."
+        )
+
+    if len(token_id_lut) != logits_size:
+        raise ValueError(
+            "Invalid token_id_lut.npy: length "
+            f"{len(token_id_lut)} does not match logits size {logits_size}."
+        )
+
+    return token_id_lut
 
 
 class Gemma3Static:
@@ -130,7 +183,12 @@ class Gemma3Static:
         self._top_k = top_k
 
         self._token_embeddings = self._load_embeddings()
-        self._token_id_lut = self._load_token_id_lut()
+        self._token_id_lut = resolve_token_id_lut(
+            self._query_logits_size(),
+            cfg.get("vocab_size"),
+            self._load_token_id_lut(),
+            self._logger,
+        )
         if self._token_id_lut is not None:
             self._logger.info(
                 "Loaded token ID LUT (%d entries) for trimmed vocab remap",
@@ -203,6 +261,15 @@ class Gemma3Static:
         kv_shape = info[2].shape
         if len(kv_shape) >= 3 and isinstance(kv_shape[2], int):
             return kv_shape[2]
+        return None
+
+    def _query_logits_size(self) -> int | None:
+        info = self._model.outputs_info
+        if not info:
+            return None
+        logits_shape = info[0].shape
+        if logits_shape and isinstance(logits_shape[-1], int):
+            return logits_shape[-1]
         return None
 
     def _reset_cache(self):
@@ -382,6 +449,7 @@ class Gemma3Static:
 
         gen: list[int] = []
         self._start_time_ns = time.perf_counter_ns()
+        yield_ns = 0
         try:
             next_tok, pos = self._prefill(
                 tokens,
@@ -391,7 +459,9 @@ class Gemma3Static:
             self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
 
             prev_text = self._tokenizer.decode([next_tok])
+            yield_start_ns = time.perf_counter_ns()
             yield prev_text
+            yield_ns += time.perf_counter_ns() - yield_start_ns
 
             gen = [next_tok]
             while not self._stop(next_tok, gen):
@@ -418,11 +488,16 @@ class Gemma3Static:
                 pos += 1
                 # Incremental decode: decode full sequence, emit only the new chars
                 full_text = self._tokenizer.decode(gen)
-                yield full_text[len(prev_text):]
+                chunk = full_text[len(prev_text):]
+                yield_start_ns = time.perf_counter_ns()
+                yield chunk
+                yield_ns += time.perf_counter_ns() - yield_start_ns
                 prev_text = full_text
         finally:
             self._n_tokens_gen = max(0, len(gen) - 1) # exclude last prefill token
-            self._last_infer_ns = time.perf_counter_ns() - self._start_time_ns
+            self._last_infer_ns = (
+                time.perf_counter_ns() - self._start_time_ns - yield_ns
+            )
 
 
 def format_answer(
