@@ -14,8 +14,8 @@ import os
 import site
 import sys
 
-from utils.deps import check_requirements
-from utils.errors import SetupError
+from utils.deps import MissingRequirementsError, check_requirements
+from utils.download import DownloadError
 from utils.log import add_logging_args, configure_logging
 
 PTH_NAME = "torq-examples.pth"
@@ -51,7 +51,7 @@ def setup_demo(name: str):
         elif name == "moonshine":
             from moonshine.setup import setup_moonshine
             setup_moonshine(["tiny-en"])
-    except SetupError as e:
+    except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
             logger.error("Caused by: %s", e.__cause__)
@@ -81,7 +81,7 @@ if __name__ == "__main__":
 
     try:
         check_requirements("requirements.txt")
-    except SetupError as e:
+    except MissingRequirementsError as e:
         logger.error("%s", e)
         sys.exit(1)
 
