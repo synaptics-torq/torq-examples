@@ -24,10 +24,15 @@ class ORTInferenceRunner(InferenceRunner):
         *,
         n_threads: int | None = None
     ):
-        import onnxruntime as ort
+        try:
+            import onnxruntime as ort
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "onnxruntime is not installed; install with `pip install onnxruntime`"
+            ) from exc
 
         super().__init__(model_path)
-        self._logger = logging.getLogger(__class__.__name__)
+        self._logger = logging.getLogger(self.__class__.__name__)
 
         self._opts = ort.SessionOptions()
         if isinstance(n_threads, int) and n_threads > 0:

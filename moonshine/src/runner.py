@@ -62,6 +62,7 @@ class MoonshineRunner:
 
     __slots__ = (
         "_logger",
+        "_model_dir",
         "_preprocessor",
         "_encoder",
         "_decoder",
@@ -84,6 +85,7 @@ class MoonshineRunner:
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
         model_dir = Path(model_dir)
+        self._model_dir = model_dir
 
         components = _find_models(model_dir)
         for req in ("encoder", "decoder", "decoder_with_past"):
@@ -130,6 +132,10 @@ class MoonshineRunner:
     # ------------------------------------------------------------------
     # Properties
     # ------------------------------------------------------------------
+
+    @property
+    def model_dir(self) -> Path:
+        return self._model_dir
 
     @property
     def last_infer_time(self) -> float:
@@ -179,7 +185,7 @@ class MoonshineRunner:
         """Pad or truncate audio to ``max_inp_len``."""
         if self._max_inp_len is None:
             return audio
-        audio = audio.flatten()
+        audio = np.ravel(audio)
         if len(audio) > self._max_inp_len:
             self._logger.debug(
                 "Truncating input from %d to %d", len(audio), self._max_inp_len
@@ -203,7 +209,7 @@ class MoonshineRunner:
             audio = self._preprocessor.infer([audio])[0]
         enc_info = self._encoder.inputs_info
         if enc_info:
-            audio = audio.astype(np.dtype(enc_info[0].dtype))
+            audio = audio.astype(np.dtype(enc_info[0].dtype), copy=False)
         enc_out = self._encoder.infer([audio])[0]
         self._logger.debug(
             "Infer '%s': %.3f ms",
@@ -244,12 +250,12 @@ class MoonshineRunner:
         # Cast encoder output to the dtype the first decoder expects
         dec_info = self._decoder.inputs_info
         if dec_info and len(dec_info) > 1:
-            encoder_out = encoder_out.astype(np.dtype(dec_info[1].dtype))
+            encoder_out = encoder_out.astype(np.dtype(dec_info[1].dtype), copy=False)
 
         # 2. First decoder step → initial cache
         token_emb = self._get_token_input(_START_TOKEN_ID)
         if dec_info:
-            token_emb = token_emb.astype(np.dtype(dec_info[0].dtype))
+            token_emb = token_emb.astype(np.dtype(dec_info[0].dtype), copy=False)
 
         results = self._decoder.infer([token_emb, encoder_out])
         self._logger.debug(
@@ -273,8 +279,12 @@ class MoonshineRunner:
             token_emb = self._get_token_input(next_token)
             seq_len = np.array([[i + 1]], dtype=np.int32)
             if dec_cached_info:
-                token_emb = token_emb.astype(np.dtype(dec_cached_info[0].dtype))
-                seq_len = seq_len.astype(np.dtype(dec_cached_info[1].dtype))
+                token_emb = token_emb.astype(
+                    np.dtype(dec_cached_info[0].dtype), copy=False
+                )
+                seq_len = seq_len.astype(
+                    np.dtype(dec_cached_info[1].dtype), copy=False
+                )
             [logits] = self._decoder_cached.infer([token_emb, seq_len])
             self._logger.debug(
                 "Infer '%s': %.3f ms",
