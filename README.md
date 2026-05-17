@@ -16,7 +16,7 @@ Requires Python 3. Use a virtual environment and install requirements:
 ```sh
 python3 -m venv .venv
 source .venv/bin/activate
-pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v1.5/torq_runtime-1.5.0-cp312-cp312-manylinux_2_28_aarch64.whl
+pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v2.0-alpha/torq_runtime-2.0.0a1-cp312-cp312-manylinux_2_28_aarch64.whl
 pip install -r requirements.txt
 ```
 
@@ -32,7 +32,7 @@ python setup_demos.py --all
 
 Individual demos also have their own `setup.py` for customizing setup, but `setup_demos.py` must be run at least once first.
 
-Downloaded models are stored in `./models/` by default. Override with the `$MODELS` environment variable.
+Downloaded models are stored in `./models/` by default. Override with the `$MODELS` environment variable. Setup writes a small `.manifest.json` next to each downloaded model, so re-running setup reuses complete downloads and repairs incomplete model directories.
 
 > [!TIP]
 > Some models may require a HuggingFace access token. Set `HF_TOKEN` in your environment before running setup:
@@ -56,8 +56,10 @@ pip install -r requirements.txt  # if present
 Then run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
 
 ```sh
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model
+python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
 ```
+
+If the downloaded repo only contains `model.vmfb`, use that path instead.
 
 Run `python src/infer.py -h` to see all available inference options.
 
@@ -75,7 +77,7 @@ Some demos include built-in validation scripts. For example, Gemma 3 can be vali
 
 ```sh
 cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb --instruct-model --max-samples 10
+python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model --max-samples 10
 ```
 
 Run the validation script with `-h` to see all available options.
