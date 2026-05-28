@@ -1,11 +1,13 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+from __future__ import annotations
+
 import logging
 import os
 from pathlib import Path
 from time import perf_counter_ns
-from typing import Final, Union
+from typing import Final, TYPE_CHECKING, Union
 
 import numpy as np
 
@@ -17,8 +19,8 @@ _START_TOKEN_ID: Final[int] = 1
 _END_TOKEN_ID: Final[int] = 2
 _DEFAULT_INPUT_FREQ: Final[int] = 16000
 
-
-InferenceRunner = Union[ORTInferenceRunner, VMFBInferenceRunner]
+if TYPE_CHECKING:
+    InferenceRunner = Union[ORTInferenceRunner, VMFBInferenceRunner]
 
 
 def _find_models(model_dir: Path) -> dict[str, Path]:
