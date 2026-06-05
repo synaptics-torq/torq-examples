@@ -21,7 +21,7 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = ["gemma3", "moonshine"]
+DEMOS = ["gemma3", "moonshine", "object_detection"]
 
 
 def _site_packages_dir() -> str:
@@ -51,6 +51,9 @@ def setup_demo(name: str):
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
+        elif name == "object_detection":
+            from object_detection.setup_demo import setup_object_detection
+            setup_object_detection()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
