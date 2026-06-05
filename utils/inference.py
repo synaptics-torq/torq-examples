@@ -14,6 +14,63 @@ from torq.runtime import VMFBInferenceRunner
 from iree.runtime import DeviceArray
 
 
+class SimpleVMFBInferenceRunner:
+    """Wrapper for simple VMFB models with optional device I/O."""
+
+    def __init__(
+        self,
+        model_path: str | os.PathLike,
+        *,
+        device_uri: str = "torq",
+        function: str = "main",
+        runtime_flags: list[str] | None = None,
+        device_io: bool = False,
+        device_outputs: bool = False,
+        load_model_to_mem: bool = True,
+    ):
+        runner_kwargs = {
+            "device_uri": device_uri,
+            "function": function,
+            "load_model_to_mem": load_model_to_mem,
+            "device_outputs": device_outputs or device_io,
+        }
+        if runtime_flags:
+            runner_kwargs["runtime_flags"] = runtime_flags
+
+        self.runner = VMFBInferenceRunner(model_path, **runner_kwargs)
+        self.device_io = device_io
+
+    @property
+    def infer_time_ms(self):
+        return self.runner.infer_time_ms
+
+    def prepare_input(self, input_data):
+        if not self.device_io:
+            return input_data
+        return self.runner.allocate_device_array(input_data)
+
+    @staticmethod
+    def prepare_output(output):
+        if hasattr(output, "to_host"):
+            return output.to_host()
+        return output
+
+    def infer(self, input_data):
+        runner_input = self.prepare_input(input_data)
+        outputs = self.runner.infer([runner_input])
+
+        if isinstance(outputs, (list, tuple)):
+            if len(outputs) != 1:
+                raise RuntimeError(
+                    f"Expected a single output tensor from the model, but got {len(outputs)} outputs. "
+                    "This runner currently supports only single-output models. "
+                    "Please update the code to select the desired output tensor."
+                )
+            outputs = outputs[0]
+
+        return self.prepare_output(outputs)
+
+
 class BaseManagedCacheRunner(VMFBInferenceRunner):
     """Abstract base for inference runners with managed KV caches.
     """

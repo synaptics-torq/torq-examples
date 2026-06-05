@@ -8,13 +8,14 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
+| [object_detection](object_detection/) | YOLOv8n image and video object detection |
 
 ## Setup
 
 Requires Python 3. Use a virtual environment and install requirements:
 
 ```sh
-python3 -m venv .venv
+python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
 pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v2.0-alpha/torq_runtime-2.0.0a1-cp312-cp312-manylinux_2_28_aarch64.whl
 pip install -r requirements.txt
@@ -23,8 +24,15 @@ pip install -r requirements.txt
 Additionally, install any demo-specific dependencies:
 
 ```sh
+# Example: Gemma 3
 cd gemma3
 pip install -r requirements.txt  # if present
+cd ..
+
+# Example: Object Detection
+cd object_detection
+pip install -r requirements.txt
+cd ..
 ```
 
 Run the setup script to install the repo on your Python path and download model assets:
