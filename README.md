@@ -41,6 +41,8 @@ Individual demos also have their own `setup_demo.py` for customizing setup, but 
 
 Downloaded models are stored in `./models/` by default. Override with the `$MODELS` environment variable. Setup writes a small `.manifest.json` next to each downloaded model, so re-running setup reuses complete downloads and repairs incomplete model directories.
 
+The manifest also records the Hugging Face revision the files came from. When a model repo is updated upstream, re-running setup detects the change and automatically refreshes the local copy — there's no need to manually delete the model directory. The demos apply the same check when they start, so inference refreshes stale models even if setup wasn't re-run. If Hugging Face is unreachable (e.g. offline), the existing local files are used and a warning is logged that they may be out of date. To skip the update check entirely (for fast or airgapped runs), pass `--no-refresh` to a demo's `infer.py`.
+
 > [!TIP]
 > Some models may require a HuggingFace access token. Set `HF_TOKEN` in your environment before running setup:
 > ```sh
