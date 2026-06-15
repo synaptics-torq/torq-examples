@@ -87,7 +87,7 @@ def resolve_token_id_lut(
 class Gemma3Static:
 
     __slots__ = (
-        "_logger", "_model", "_model_dir", "_tokenizer",
+        "_logger", "_debug_logging", "_model", "_model_dir", "_tokenizer",
         "_max_prompt_tokens", "_max_seq_len", "_max_user_tokens",
         "_sys_prompt", "_temperature", "_top_p", "_top_k",
         "_n_layers", "_n_kv_heads", "_head_dim",
@@ -119,6 +119,7 @@ class Gemma3Static:
         lm_head_path: str | os.PathLike | None = None,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
+        self._debug_logging: bool = self._logger.isEnabledFor(logging.DEBUG)
 
         self._model = ManagedSelfAttnCacheRunner(
             model_path,
@@ -216,6 +217,8 @@ class Gemma3Static:
         self._start_time_ns: int = 0
 
         self._logger.info("Loaded model '%s'", str(model_path))
+        if self._debug_logging:
+            self._logger.warning("DEBUG logging enabled: inference time metrics may be inflated")
 
     @property
     def max_seq_len(self) -> int:
@@ -314,10 +317,11 @@ class Gemma3Static:
             token_id = int(self._token_id_lut[compact_idx])
         else:
             token_id = compact_idx
-        self._logger.debug(
-            "Token ID: %d, Token: %r",
-            token_id, self._tokenizer.decode([token_id], skip_special_tokens=False),
-        )
+        if self._debug_logging:
+            self._logger.debug(
+                "Token ID: %d, Token: %r",
+                token_id, self._tokenizer.decode([token_id], skip_special_tokens=False),
+            )
         return token_id
 
     def _sample(self, logits: np.ndarray) -> int:
