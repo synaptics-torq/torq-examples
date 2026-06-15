@@ -11,6 +11,7 @@ import soundfile as sf
 from tokenizers import Tokenizer
 
 from runner import MoonshineRunner
+from moonshine.setup_demo import ensure_moonshine_models
 from utils.log import add_logging_args, configure_logging
 
 GREEN = "\033[32m"
@@ -54,6 +55,8 @@ def main(args: argparse.Namespace):
     configure_logging(args.logging)
     logger = logging.getLogger("Moonshine")
     logger.info("Starting demo...")
+
+    ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
 
     runner = MoonshineRunner(
         args.model_dir,
@@ -104,6 +107,12 @@ if __name__ == "__main__":
         "--threads",
         type=int,
         help="Number of cores to use for CPU execution (default: all)",
+    )
+    parser.add_argument(
+        "--no-refresh",
+        action="store_true",
+        default=False,
+        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
     add_logging_args(parser)
     runtime_group = parser.add_argument_group("runtime")

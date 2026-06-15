@@ -4,8 +4,10 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from runner import Gemma3Static, InferenceInterrupted
+from gemma3.setup_demo import ensure_gemma3_models
 from utils.log import add_logging_args, configure_logging
 from utils.terminal import InferenceStopInput
 
@@ -32,6 +34,7 @@ def main(args: argparse.Namespace):
 
     configure_logging(args.logging)
     logging.getLogger("Gemma3").info("Starting assistant...")
+    ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
@@ -119,6 +122,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "-j", "--threads", type=int,
         help="Number of cores to use for CPU execution (default: all)",
+    )
+    parser.add_argument(
+        "--no-refresh", action="store_true", default=False,
+        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
     runtime_group = parser.add_argument_group("runtime")
     add_logging_args(parser)
