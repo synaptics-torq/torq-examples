@@ -30,6 +30,7 @@ class MoonshineRunner:
 
     __slots__ = (
         "_logger",
+        "_debug_logging",
         "_model_dir",
         "_encoder",
         "_decoder",
@@ -50,6 +51,7 @@ class MoonshineRunner:
         runtime_flags: list[str] | None = None,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
+        self._debug_logging: bool = self._logger.isEnabledFor(logging.DEBUG)
         model_dir = Path(model_dir)
         self._model_dir = model_dir
 
@@ -87,6 +89,8 @@ class MoonshineRunner:
         self._time_to_first_token_ns: int = 0
 
         self._logger.info("Loaded Moonshine models from '%s'", model_dir)
+        if self._debug_logging:
+            self._logger.warning("DEBUG logging enabled: inference time metrics may be inflated")
 
     # ------------------------------------------------------------------
     # Properties
