@@ -27,47 +27,8 @@ _MOONSHINE_REQUIRED_FILES: Final[tuple[str, ...]] = (
 )
 
 
-def _hf_file_exists(repo_id: str, filename: str) -> bool:
-    from huggingface_hub import HfApi
-
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
-
-
 def _has_moonshine_files(model_dir: Path) -> bool:
     return all((model_dir / filename).exists() for filename in _MOONSHINE_REQUIRED_FILES)
-
-
-def _download_preprocessor(repo_id: str, base_dir: Path) -> str | None:
-    preproc_vmfb = "preprocessor.vmfb"
-    preproc_onnx = "preprocessor.onnx"
-    local_dir = base_dir / repo_id
-    if (local_dir / preproc_vmfb).exists():
-        return preproc_vmfb
-    if (local_dir / preproc_onnx).exists():
-        return preproc_onnx
-
-    has_vmfb = _hf_file_exists(repo_id, preproc_vmfb)
-    has_onnx = _hf_file_exists(repo_id, preproc_onnx)
-
-    if has_vmfb:
-        if has_onnx:
-            logger.warning(
-                "Both optional preprocessor files exist in %s; using %s.",
-                repo_id,
-                preproc_vmfb,
-            )
-        download_from_hf(repo_id, preproc_vmfb, base_dir=base_dir)
-        return preproc_vmfb
-
-    if has_onnx:
-        download_from_hf(repo_id, preproc_onnx, base_dir=base_dir)
-        return preproc_onnx
-
-    logger.info(
-        "No preprocessor model found in %s; continuing without it.",
-        repo_id,
-    )
-    return None
 
 
 def setup_moonshine(
@@ -83,16 +44,10 @@ def setup_moonshine(
             continue
 
         try:
-            manifest_files: list[str] = []
-            preprocessor = _download_preprocessor(repo_id, base_dir)
-            if preprocessor is not None:
-                manifest_files.append(preprocessor)
-
             for filename in _MOONSHINE_REQUIRED_FILES:
                 download_from_hf(repo_id, filename, base_dir=base_dir)
-                manifest_files.append(filename)
 
-            write_manifest(model_dir, repo_id, manifest_files)
+            write_manifest(model_dir, repo_id, list(_MOONSHINE_REQUIRED_FILES))
             logger.info("Downloaded moonshine model files from %s", repo_id)
         except Exception as e:
             raise DownloadError(f"Unable to download model files from {repo_id}") from e

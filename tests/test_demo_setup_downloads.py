@@ -110,20 +110,15 @@ class DemoSetupDownloadsTest(unittest.TestCase):
 
             download.assert_not_called()
 
-    def test_moonshine_prefers_vmfb_preprocessor_and_writes_manifest(self):
+    def test_moonshine_downloads_required_files_and_writes_manifest(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
             repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
 
-            def exists(_repo_id, filename):
-                self.assertEqual(_repo_id, repo_id)
-                return filename in {"preprocessor.vmfb", "preprocessor.onnx"}
-
             with (
                 mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
                 mock.patch.object(moonshine_setup, "check_requirements"),
-                mock.patch.object(moonshine_setup, "_hf_file_exists", side_effect=exists),
                 mock.patch.object(
                     moonshine_setup,
                     "download_from_hf",
@@ -135,11 +130,13 @@ class DemoSetupDownloadsTest(unittest.TestCase):
             downloaded = [call.args[1] for call in download.call_args_list]
             self.assertEqual(
                 downloaded,
-                ["preprocessor.vmfb", *moonshine_setup._MOONSHINE_REQUIRED_FILES],
+                list(moonshine_setup._MOONSHINE_REQUIRED_FILES),
             )
             manifest = json.loads((model_dir / ".manifest.json").read_text())
-            self.assertIn("preprocessor.vmfb", manifest["files"])
-            self.assertNotIn("preprocessor.onnx", manifest["files"])
+            self.assertEqual(
+                manifest["files"],
+                sorted(moonshine_setup._MOONSHINE_REQUIRED_FILES),
+            )
 
 
 if __name__ == "__main__":

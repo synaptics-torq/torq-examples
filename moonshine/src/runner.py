@@ -7,64 +7,30 @@ import logging
 import os
 from pathlib import Path
 from time import perf_counter_ns
-from typing import Final, TYPE_CHECKING, Union
+from typing import Final
 
 import numpy as np
 
 from torq.runtime import VMFBInferenceRunner
 
-from utils.inference import ORTInferenceRunner, ManagedEncDecCacheRunner
+from utils.inference import ManagedEncDecCacheRunner
 
 _START_TOKEN_ID: Final[int] = 1
 _END_TOKEN_ID: Final[int] = 2
 _DEFAULT_INPUT_FREQ: Final[int] = 16000
-
-if TYPE_CHECKING:
-    InferenceRunner = Union[ORTInferenceRunner, VMFBInferenceRunner]
-
-
-def _find_models(model_dir: Path) -> dict[str, Path]:
-    """Discover Moonshine model files in a directory."""
-    known = {"preprocessor", "encoder", "decoder"}
-    models: dict[str, Path] = {}
-    for f in model_dir.iterdir():
-        if f.is_file() and f.suffix in (".vmfb", ".onnx") and f.stem in known:
-            models[f.stem] = f
-    return models
-
-
-def _get_runner(
-    model_path: Path,
-    n_threads: int | None = None,
-    runtime_flags: list[str] | None = None,
-    *rargs, **rkwargs
-) -> InferenceRunner:
-    model_path = Path(model_path)
-    model_type = model_path.suffix.lower()
-    if model_type == ".onnx":
-        return ORTInferenceRunner(
-            model_path, n_threads=n_threads
-        )
-    elif model_type == ".vmfb":
-        return VMFBInferenceRunner(
-            model_path, n_threads=n_threads, runtime_flags=runtime_flags, *rargs, **rkwargs
-        )
-    raise TypeError(f"Invalid model type '{model_type}'")
 
 
 class MoonshineRunner:
     """Moonshine speech-to-text inference runner.
 
     Requires ``encoder.vmfb`` and ``decoder.vmfb`` in the model directory.
-    An optional ``preprocessor.vmfb`` is applied before encoding,
-    and ``decoder_token_embeddings.npy`` enables embedding-lookup
-    input to the decoder.
+    ``decoder_token_embeddings.npy`` enables embedding-lookup input to the
+    decoder.
     """
 
     __slots__ = (
         "_logger",
         "_model_dir",
-        "_preprocessor",
         "_encoder",
         "_decoder",
         "_token_embeddings",
@@ -87,23 +53,17 @@ class MoonshineRunner:
         model_dir = Path(model_dir)
         self._model_dir = model_dir
 
-        components = _find_models(model_dir)
-        for req in ("encoder", "decoder"):
-            if req not in components:
-                raise ValueError(
-                    f"Missing required model '{req}.vmfb' in {model_dir}"
-                )
+        encoder_path = model_dir / "encoder.vmfb"
+        decoder_path = model_dir / "decoder.vmfb"
+        for req in (encoder_path, decoder_path):
+            if not req.is_file():
+                raise ValueError(f"Missing required model '{req.name}' in {model_dir}")
 
         rk: dict = dict(n_threads=n_threads, runtime_flags=runtime_flags)
 
-        self._preprocessor: InferenceRunner | None = (
-            _get_runner(components["preprocessor"], **rk)
-            if "preprocessor" in components
-            else None
-        )
-        self._encoder = _get_runner(components["encoder"], **rk)
+        self._encoder = VMFBInferenceRunner(encoder_path, **rk)
         self._decoder = ManagedEncDecCacheRunner(
-            components["decoder"],
+            decoder_path,
             input_cache_start_idx=2,  # [token_emb, current_len, *cache]
             cache_start_idx=1,  # [logits, *self_cache]
             **rk,
@@ -111,7 +71,7 @@ class MoonshineRunner:
 
         self._token_embeddings = self._load_embeddings(model_dir)
 
-        enc_info = self._preprocessor.inputs_info if self._preprocessor else self._encoder.inputs_info
+        enc_info = self._encoder.inputs_info
         if enc_info:
             self._max_inp_len: int | None = int(enc_info[0].shape[-1])
         else:
@@ -204,8 +164,6 @@ class MoonshineRunner:
         return np.array([[token_id]], dtype=np.int32)
 
     def _run_encoder(self, audio: np.ndarray) -> list[np.ndarray]:
-        if self._preprocessor is not None:
-            audio = self._preprocessor.infer([audio])[0]
         enc_info = self._encoder.inputs_info
         if enc_info:
             audio = audio.astype(np.dtype(enc_info[0].dtype), copy=False)
