@@ -8,10 +8,14 @@ from typing import Final
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import (
     DownloadError,
+    ModelStatus,
+    base_dir_for,
     default_models_dir,
     download_from_hf,
+    ensure_model,
+    get_hf_revision,
+    read_manifest,
     verify_manifest,
-    write_manifest,
 )
 
 logger = logging.getLogger("moonshine.setup")
@@ -31,6 +35,53 @@ def _has_moonshine_files(model_dir: Path) -> bool:
     return all((model_dir / filename).exists() for filename in _MOONSHINE_REQUIRED_FILES)
 
 
+def _download_moonshine(repo_id: str, base_dir: Path) -> list[str]:
+    """Download all required Moonshine files; return the manifest file list."""
+    for filename in _MOONSHINE_REQUIRED_FILES:
+        download_from_hf(repo_id, filename, base_dir=base_dir)
+    return list(_MOONSHINE_REQUIRED_FILES)
+
+
+def _refresh_moonshine(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
+    files_present = verify_manifest(model_dir) and _has_moonshine_files(model_dir)
+    revision = get_hf_revision(repo_id)
+    return ensure_model(
+        model_dir,
+        repo_id,
+        files_present=files_present,
+        revision=revision,
+        download=lambda: _download_moonshine(repo_id, base_dir),
+    )
+
+
+def ensure_moonshine_models(model_dir: str | Path, *, refresh: bool = True) -> None:
+    """Verify/refresh the Moonshine models in ``model_dir`` before inference.
+
+    Reads the repo id from the local manifest and applies the same revision
+    check as setup. When ``refresh`` is ``False`` the check is skipped entirely
+    (offline/airgapped runs). Refresh failures are logged, not raised, so
+    inference can still proceed on whatever is available locally.
+    """
+    model_dir = Path(model_dir)
+    if not refresh:
+        return
+    manifest = read_manifest(model_dir)
+    repo_id = manifest.get("repo_id") if manifest else None
+    if not repo_id:
+        logger.warning(
+            "No manifest in %s; cannot verify model freshness. "
+            "Run `python setup_demos.py moonshine` if inference fails.",
+            model_dir,
+        )
+        return
+    try:
+        _refresh_moonshine(repo_id, model_dir, base_dir_for(model_dir, repo_id))
+    except Exception as e:
+        logger.warning(
+            "Could not refresh models from %s (%s); using local files.", repo_id, e
+        )
+
+
 def setup_moonshine(
     models: list[str],
 ):
@@ -39,18 +90,14 @@ def setup_moonshine(
     base_dir = default_models_dir()
     for repo_id in repos:
         model_dir = base_dir / repo_id
-        if verify_manifest(model_dir) and _has_moonshine_files(model_dir):
-            logger.info("Using local moonshine model files from %s", model_dir)
-            continue
-
         try:
-            for filename in _MOONSHINE_REQUIRED_FILES:
-                download_from_hf(repo_id, filename, base_dir=base_dir)
-
-            write_manifest(model_dir, repo_id, list(_MOONSHINE_REQUIRED_FILES))
-            logger.info("Downloaded moonshine model files from %s", repo_id)
+            status = _refresh_moonshine(repo_id, model_dir, base_dir)
         except Exception as e:
             raise DownloadError(f"Unable to download model files from {repo_id}") from e
+        if status is ModelStatus.UP_TO_DATE:
+            logger.info("Using local moonshine model files from %s", model_dir)
+        else:
+            logger.info("Downloaded moonshine model files from %s", repo_id)
     check_requirements(Path(__file__).parent / "requirements.txt")
     logger.info("moonshine setup complete.")
 
