@@ -68,8 +68,10 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         self,
         model_path: str | os.PathLike,
         cache_start_idx: int = 1,
+        device_io: bool = False,
         **kwargs,
     ) -> None:
+        self._device_io = device_io
         super().__init__(model_path, cache_start_idx=cache_start_idx, **kwargs)
 
         self._n_kv = len(self.outputs_info) - self._cache_start_idx
@@ -83,9 +85,17 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
     def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
         if isinstance(inputs, Mapping):
-            full_inputs = list(inputs.values()) + self._kv_cache
+            user_inputs = list(inputs.values())
         else:
-            full_inputs = list(inputs) + self._kv_cache
+            user_inputs = list(inputs)
+
+        if self._device_io:
+            user_inputs = [
+                self.allocate_device_array(x) if isinstance(x, np.ndarray) else x
+                for x in user_inputs
+            ]
+
+        full_inputs = user_inputs + self._kv_cache
 
         results = super()._infer(full_inputs)
 

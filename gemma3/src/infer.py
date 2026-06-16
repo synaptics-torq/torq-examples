@@ -35,6 +35,8 @@ def main(args: argparse.Namespace):
     configure_logging(args.logging)
     logging.getLogger("Gemma3").info("Starting assistant...")
     ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
+
+    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
@@ -45,7 +47,8 @@ def main(args: argparse.Namespace):
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
-        runtime_flags=args.runtime_flags,
+        runtime_flags=runtime_flags,
+        device_io=(args.tda == "dmabuf"),
         lm_head_path=args.lm_head,
     )
     try:
@@ -128,6 +131,13 @@ if __name__ == "__main__":
         help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
     runtime_group = parser.add_argument_group("runtime")
+    runtime_group.add_argument(
+        "--tda",
+        type=str,
+        choices=["cpu", "dmabuf"],
+        default="cpu",
+        help="Allocator backing Torq device buffers (default: %(default)s)",
+    )
     add_logging_args(parser)
     inference_group = parser.add_argument_group("inference")
     inference_group.add_argument(
