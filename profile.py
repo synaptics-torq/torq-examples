@@ -47,7 +47,7 @@ if __name__ == "__main__":
     )
     runtime_group = parser.add_argument_group("runtime")
     runtime_group.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
+        "--tda", type=str, choices=["cpu", "dmabuf"], default="cpu",
         help="Allocator backing Torq device buffers (default: %(default)s)",
     )
     runtime_group.add_argument(
@@ -65,7 +65,7 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
-    logger = logging.getLogger().setLevel(logging.INFO)
+    logging.getLogger().setLevel(logging.INFO)
 
     runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
 

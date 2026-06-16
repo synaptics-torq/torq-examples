@@ -115,6 +115,7 @@ class Gemma3Static:
         top_p: float = 1.0,
         top_k: int = 64,
         runtime_flags: list[str] | None = None,
+        device_io: bool = False,
         sys_prompt: str | None = None,
         lm_head_path: str | os.PathLike | None = None,
     ):
@@ -125,6 +126,7 @@ class Gemma3Static:
             model_path,
             n_threads=n_threads,
             runtime_flags=runtime_flags,
+            device_io=device_io,
         )
         if lm_head_path is not None:
             self._model = SplitLMHeadRunner(
