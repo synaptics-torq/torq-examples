@@ -85,10 +85,17 @@ _install_runner_import_stubs()
 from gemma3.src.runner import (
     resolve_token_id_lut,
 )
-from utils.llm import discover_lm_head_path, resolve_lm_head_path
+from utils.llm import (
+    discover_lm_head_path,
+    resolve_lm_head_path,
+    resolve_token_id_lut as utils_resolve_token_id_lut,
+)
 
 
 class GemmaLutValidationTest(unittest.TestCase):
+    def test_gemma_reexports_utils_lut_resolver(self):
+        self.assertIs(resolve_token_id_lut, utils_resolve_token_id_lut)
+
     def test_full_vocab_logits_do_not_need_lut(self):
         self.assertIsNone(resolve_token_id_lut(262144, 262144, None))
 

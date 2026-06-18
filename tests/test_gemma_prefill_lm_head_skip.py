@@ -76,6 +76,19 @@ class PosBuffer:
         return list(self.values)
 
 
+class Encoded:
+    def __init__(self, ids):
+        self.ids = ids
+
+
+class FakeTokenizer:
+    def __init__(self, mapping):
+        self.mapping = mapping
+
+    def encode(self, text):
+        return Encoded(list(self.mapping[text]))
+
+
 class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
     def test_prefill_samples_only_last_token_by_default(self):
         runner = RecordingGemma()
@@ -103,6 +116,19 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
         self.assertEqual(
             runner.calls,
             [(10, 7, False, False), (11, 8, False, False), (12, 9, False, False)],
+        )
+
+    def test_prefill_tokens_starts_after_warmup(self):
+        runner = RecordingGemma()
+        runner._warmup_len = 4
+
+        next_token, pos = runner.prefill_tokens([10, 11])
+
+        self.assertEqual(next_token, 111)
+        self.assertEqual(pos, 6)
+        self.assertEqual(
+            runner.calls,
+            [(10, 4, False, False), (11, 5, True, True)],
         )
 
     def test_llm_step_uses_skip_lm_head_when_logits_are_disabled(self):
@@ -147,6 +173,51 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "requires compute_logits"):
             runner.llm_step(123, 5, compute_logits=False, sample_next=True)
+
+    def test_gemma_instruct_tokenize_strips_auto_bos(self):
+        runner = Gemma3Static.__new__(Gemma3Static)
+        runner._instruct_model = True
+        runner._bos_token_id = 1
+        runner._tokenizer = FakeTokenizer(
+            {
+                "<start_of_turn>user\nhello<end_of_turn>\n": [1, 10, 11],
+                "<start_of_turn>model\n": [1, 12],
+            }
+        )
+
+        self.assertEqual(runner.tokenize("hello", "user"), [10, 11])
+        self.assertEqual(runner.tokenize("", "model"), [12])
+
+    def test_gemma_build_prompt_adds_model_turn_for_instruct(self):
+        runner = Gemma3Static.__new__(Gemma3Static)
+        runner._instruct_model = True
+        runner._bos_token_id = 1
+        runner._tokenizer = FakeTokenizer(
+            {
+                "<start_of_turn>user\nhello<end_of_turn>\n": [1, 10, 11],
+                "<start_of_turn>model\n": [1, 12],
+            }
+        )
+
+        self.assertEqual(runner._build_prompt_tokens("hello"), [10, 11, 12])
+
+    def test_gemma_stop_policy_handles_eos_eot_and_newlines(self):
+        runner = Gemma3Static.__new__(Gemma3Static)
+        runner._eos_token_id = 1
+        runner._end_of_turn_id = 2
+        runner._instruct_model = True
+
+        self.assertTrue(runner._should_stop(1, [1]))
+        self.assertTrue(runner._should_stop(2, [2]))
+        self.assertFalse(runner._should_stop(3, [3]))
+
+        runner._instruct_model = False
+        runner._nl_token_id = 3
+        runner._double_nl_token_id = 4
+
+        self.assertTrue(runner._should_stop(4, [8, 9, 4]))
+        self.assertTrue(runner._should_stop(3, [8, 3, 3]))
+        self.assertFalse(runner._should_stop(3, [3, 3]))
 
     def test_split_runner_skip_lm_head_infer_does_not_call_lm_head(self):
         runner = SplitLMHeadRunner.__new__(SplitLMHeadRunner)
