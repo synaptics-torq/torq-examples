@@ -6,10 +6,11 @@ import logging
 import sys
 from pathlib import Path
 
-from runner import Gemma3Static, InferenceInterrupted
+from runner import Gemma3Static
 from gemma3.setup_demo import ensure_gemma3_models
 from utils.log import add_logging_args, configure_logging
 from utils.terminal import InferenceStopInput
+from utils.llm import InferenceInterrupted
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
