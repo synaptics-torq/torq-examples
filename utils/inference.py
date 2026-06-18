@@ -390,6 +390,17 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
         self._cross_cache = [self.allocate_device_array(a) for a in cross_state]
 
 
+def _canonical_dtype(dtype):
+    try:
+        return np.dtype(dtype)
+    except (AttributeError, TypeError, ValueError):
+        return str(dtype)
+
+
+def _tensor_info_summary(info) -> str:
+    return f"shape={getattr(info, 'shape', None)}, dtype={getattr(info, 'dtype', None)}"
+
+
 class SplitLMHeadRunner:
     """
     Adapter for split body + lm_head inference.
@@ -411,6 +422,41 @@ class SplitLMHeadRunner:
             device_outputs=True,
             **lm_head_kwargs,
         )
+        self._validate_lm_head_io(lm_head_path)
+
+    def _validate_lm_head_io(self, lm_head_path: str | os.PathLike) -> None:
+        body_outputs = self._body.outputs_info
+        lm_head_inputs = self._lm_head.inputs_info
+        if not body_outputs:
+            raise ValueError(
+                f"Body model '{self._body.model_path}' is missing output metadata "
+                "required to validate split LM head compatibility."
+            )
+        if not lm_head_inputs:
+            raise ValueError(
+                f"LM head model '{lm_head_path}' is missing input metadata "
+                "required to validate split LM head compatibility."
+            )
+
+        body_hidden = body_outputs[0]
+        lm_head_input = lm_head_inputs[0]
+        body_shape = tuple(body_hidden.shape)
+        lm_head_shape = tuple(lm_head_input.shape)
+        if body_shape != lm_head_shape:
+            raise ValueError(
+                "Split LM head input shape does not match body output shape: "
+                f"body output[0] {_tensor_info_summary(body_hidden)}, "
+                f"LM head input[0] {_tensor_info_summary(lm_head_input)}."
+            )
+
+        body_dtype = _canonical_dtype(body_hidden.dtype)
+        lm_head_dtype = _canonical_dtype(lm_head_input.dtype)
+        if body_dtype != lm_head_dtype:
+            raise ValueError(
+                "Split LM head input dtype does not match body output dtype: "
+                f"body output[0] {_tensor_info_summary(body_hidden)}, "
+                f"LM head input[0] {_tensor_info_summary(lm_head_input)}."
+            )
 
     @property
     def model_path(self) -> str | os.PathLike:

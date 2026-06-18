@@ -419,6 +419,7 @@ def main(args: argparse.Namespace) -> None:
         temperature=0.0,   # greedy decoding for reproducibility
         runtime_flags=args.runtime_flags,
         lm_head_path=args.lm_head,
+        disable_lm_head=args.no_lm_head,
     )
     val_cls = VALIDATORS[args.mode]
     val_cls(
@@ -453,9 +454,17 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Path to VMFB model"
     )
-    parser.add_argument(
+    lm_head_group = parser.add_mutually_exclusive_group()
+    lm_head_group.add_argument(
         "--lm-head", type=str, default=None, metavar="PATH",
-        help="Path to a separately compiled LM head .vmfb (enables split-model inference)",
+        help=(
+            "Path to a separately compiled LM head .vmfb. "
+            "Overrides sibling LM head auto-discovery."
+        ),
+    )
+    lm_head_group.add_argument(
+        "--no-lm-head", action="store_true", default=False,
+        help="Disable sibling LM head auto-discovery and run only --model.",
     )
     parser.add_argument(
         "--dataset", type=str, default=str(DEFAULT_DATASET),
