@@ -47,7 +47,7 @@ if __name__ == "__main__":
     )
     runtime_group = parser.add_argument_group("runtime")
     runtime_group.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="cpu",
+        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
         help="Allocator backing Torq device buffers (default: %(default)s)",
     )
     runtime_group.add_argument(
