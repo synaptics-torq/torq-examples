@@ -128,8 +128,8 @@ if __name__ == "__main__":
     runtime_group.add_argument(
         "--device-io",
         action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
+        default=False,
+        help="Preallocate encoder input and keep encoder outputs as device arrays (default: disabled)",
     )
     runtime_group.add_argument(
         "--runtime-flags",

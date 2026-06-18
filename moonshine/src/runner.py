@@ -75,7 +75,6 @@ class MoonshineRunner:
             decoder_path,
             input_cache_start_idx=2,  # [token_emb, current_len, *cache]
             cache_start_idx=1,  # [logits, *self_cache]
-            device_io=device_io,
             **rk,
         )
 

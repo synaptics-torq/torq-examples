@@ -224,10 +224,8 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
         initial_cache: list[npt.NDArray | DeviceArray] | None = None,
         cache_start_idx: int = 1,
         input_cache_start_idx: int | None = None,
-        device_io: bool = False,
         **kwargs,
     ) -> None:
-        self._device_io = device_io
         super().__init__(model_path, cache_start_idx=cache_start_idx, **kwargs)
 
         self._input_cache_start: int = (
@@ -337,17 +335,9 @@ class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
             interleaved.append(self._cross_cache[2 * layer + 1])
 
         if isinstance(inputs, Mapping):
-            user_inputs = list(inputs.values())
+            full_inputs = list(inputs.values()) + interleaved
         else:
-            user_inputs = list(inputs)
-
-        if self._device_io:
-            user_inputs = [
-                self.allocate_device_array(x) if isinstance(x, np.ndarray) else x
-                for x in user_inputs
-            ]
-
-        full_inputs = user_inputs + interleaved
+            full_inputs = list(inputs) + interleaved
 
         results = super()._infer(full_inputs)
 
