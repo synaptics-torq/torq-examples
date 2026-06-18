@@ -51,8 +51,10 @@ if __name__ == "__main__":
         help="Allocator backing Torq device buffers (default: %(default)s)",
     )
     runtime_group.add_argument(
-        "--device-io", action="store_true",
-        help="Preallocate inputs and keep outputs as device arrays",
+        "--device-io",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
     )
     runtime_group.add_argument(
         "--runtime-flags",
