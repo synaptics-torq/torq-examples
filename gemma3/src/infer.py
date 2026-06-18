@@ -48,7 +48,7 @@ def main(args: argparse.Namespace):
         top_p=args.top_p,
         top_k=args.top_k,
         runtime_flags=runtime_flags,
-        device_io=(args.tda == "dmabuf"),
+        device_io=args.device_io,
         lm_head_path=args.lm_head,
     )
     try:
@@ -130,14 +130,6 @@ if __name__ == "__main__":
         "--no-refresh", action="store_true", default=False,
         help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--tda",
-        type=str,
-        choices=["cpu", "dmabuf"],
-        default="cpu",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
     add_logging_args(parser)
     inference_group = parser.add_argument_group("inference")
     inference_group.add_argument(
@@ -171,6 +163,20 @@ if __name__ == "__main__":
     inference_group.add_argument(
         "--top-k", type=int, default=64,
         help="Top-k pre-filter size for sampling (default: %(default)s)",
+    )
+    runtime_group = parser.add_argument_group("runtime")
+    runtime_group.add_argument(
+        "--tda",
+        type=str,
+        choices=["cpu", "dmabuf"],
+        default="dmabuf",
+        help="Allocator backing Torq device buffers (default: %(default)s)",
+    )
+    runtime_group.add_argument(
+        "--device-io",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
     )
     runtime_group.add_argument(
         "--runtime-flags",
