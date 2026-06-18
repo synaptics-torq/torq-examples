@@ -1,7 +1,9 @@
 import logging
 import sys
+import tempfile
 import types
 import unittest
+from pathlib import Path
 
 
 def _install_runner_import_stubs():
@@ -80,7 +82,11 @@ def _install_runner_import_stubs():
 
 
 _install_runner_import_stubs()
-from gemma3.src.runner import resolve_token_id_lut
+from gemma3.src.runner import (
+    discover_lm_head_path,
+    resolve_lm_head_path,
+    resolve_token_id_lut,
+)
 
 
 class GemmaLutValidationTest(unittest.TestCase):
@@ -110,6 +116,65 @@ class GemmaLutValidationTest(unittest.TestCase):
     def test_unknown_vocab_still_checks_lut_length_when_possible(self):
         with self.assertRaisesRegex(ValueError, "does not match logits size"):
             resolve_token_id_lut(3, None, [10, 20])
+
+
+class GemmaLMHeadDiscoveryTest(unittest.TestCase):
+    def test_discovers_single_sibling_lm_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.vmfb"
+            lm_head = Path(tmp) / "model-lm-head.vmfb"
+            model.touch()
+            lm_head.touch()
+
+            self.assertEqual(discover_lm_head_path(model), lm_head)
+
+    def test_discovers_sibling_lm_head_with_vmfb_suffix(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.vmfb.trim"
+            lm_head = Path(tmp) / "lm_head.vmfb.w4a16"
+            model.touch()
+            lm_head.touch()
+
+            self.assertEqual(discover_lm_head_path(model), lm_head)
+
+    def test_discovery_ignores_model_path_itself(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "lm_head_model.vmfb"
+            model.touch()
+
+            self.assertIsNone(discover_lm_head_path(model))
+
+    def test_discovery_rejects_multiple_candidates(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.vmfb"
+            model.touch()
+            (Path(tmp) / "lm_head.vmfb").touch()
+            (Path(tmp) / "other-lm-head.vmfb").touch()
+
+            with self.assertRaisesRegex(ValueError, "multiple LM head candidates"):
+                discover_lm_head_path(model)
+
+    def test_explicit_lm_head_overrides_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.vmfb"
+            explicit = Path(tmp) / "elsewhere.vmfb"
+            model.touch()
+            explicit.touch()
+            (Path(tmp) / "lm_head.vmfb").touch()
+
+            self.assertEqual(resolve_lm_head_path(model, explicit), explicit)
+
+    def test_disable_lm_head_skips_discovery(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "model.vmfb"
+            model.touch()
+            (Path(tmp) / "lm_head.vmfb").touch()
+
+            self.assertIsNone(resolve_lm_head_path(model, disable_lm_head=True))
+
+    def test_rejects_explicit_and_disabled_lm_head(self):
+        with self.assertRaisesRegex(ValueError, "cannot be used together"):
+            resolve_lm_head_path("model.vmfb", "lm_head.vmfb", disable_lm_head=True)
 
 
 if __name__ == "__main__":

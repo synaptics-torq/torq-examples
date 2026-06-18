@@ -1,5 +1,6 @@
 import logging
 import unittest
+from unittest.mock import patch
 
 from tests.test_gemma_lut_validation import _install_runner_import_stubs
 
@@ -37,9 +38,31 @@ class FakeBody:
         return ["hidden"]
 
 
+class TensorInfo:
+    def __init__(self, shape, dtype):
+        self.shape = shape
+        self.dtype = dtype
+
+
+class MetadataBody:
+    model_path = "body.vmfb"
+
+    def __init__(self, outputs_info):
+        self.outputs_info = outputs_info
+
+
 class ExplodingLMHead:
     def infer(self, inputs):
         raise AssertionError("LM head should not run")
+
+
+def _fake_vmfb_runner(inputs_info):
+    class FakeVMFBRunner:
+        def __init__(self, *args, **kwargs):
+            self.inputs_info = inputs_info
+            self.outputs_info = [TensorInfo((1, 262144), "float32")]
+
+    return FakeVMFBRunner
 
 
 class PosBuffer:
@@ -134,6 +157,37 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
 
         self.assertEqual(runner.infer(["input"], skip_lm_head=True), ["hidden"])
         self.assertEqual(body.calls, [["input"]])
+
+    def test_split_runner_accepts_matching_body_and_lm_head_metadata(self):
+        body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
+
+        with patch(
+            "utils.inference.VMFBInferenceRunner",
+            _fake_vmfb_runner([TensorInfo((1, 1, 256), "float32")]),
+        ):
+            runner = SplitLMHeadRunner(body, "lm_head.vmfb")
+
+        self.assertIs(runner._body, body)
+
+    def test_split_runner_rejects_lm_head_shape_mismatch(self):
+        body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
+
+        with patch(
+            "utils.inference.VMFBInferenceRunner",
+            _fake_vmfb_runner([TensorInfo((1, 1, 128), "float32")]),
+        ):
+            with self.assertRaisesRegex(ValueError, "input shape"):
+                SplitLMHeadRunner(body, "lm_head.vmfb")
+
+    def test_split_runner_rejects_lm_head_dtype_mismatch(self):
+        body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
+
+        with patch(
+            "utils.inference.VMFBInferenceRunner",
+            _fake_vmfb_runner([TensorInfo((1, 1, 256), "float16")]),
+        ):
+            with self.assertRaisesRegex(ValueError, "input dtype"):
+                SplitLMHeadRunner(body, "lm_head.vmfb")
 
 
 if __name__ == "__main__":
