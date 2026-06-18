@@ -298,7 +298,17 @@ class Gemma3Static:
             ids = ids[1:]
         return ids
 
-    def llm_step(self, token: int, seq_pos: int, *, sample: bool = True) -> int:
+    def llm_step(
+        self,
+        token: int,
+        seq_pos: int,
+        *,
+        compute_logits: bool = True,
+        sample_next: bool = True,
+    ) -> int:
+        if sample_next and not compute_logits:
+            raise ValueError("sample_next=True requires compute_logits=True")
+
         if self._emb_buf is not None:
             self._emb_buf[0, 0, :] = self._token_embeddings[token]
             first = self._emb_buf
@@ -308,11 +318,20 @@ class Gemma3Static:
 
         self._pos_buf[0, 0] = seq_pos
 
+        if not compute_logits:
+            if isinstance(self._model, SplitLMHeadRunner):
+                self._model.infer([first, self._pos_buf], skip_lm_head=True)
+            else:
+                self._model.infer([first, self._pos_buf])
+            self._logger.debug("LLM step time: %.3f ms", self._model.infer_time_ms)
+            return 0
+
         results = self._model.infer([first, self._pos_buf])
         self._logger.debug("LLM step time: %.3f ms", self._model.infer_time_ms)
 
-        if not sample:
+        if not sample_next:
             return 0
+
         # Only bring logits to host for sampling
         compact_idx = self._sample(results[0].to_host()[0, -1])
         if self._token_id_lut is not None:
@@ -361,16 +380,23 @@ class Gemma3Static:
         tokens: list[int],
         start: int = 0,
         should_stop: StopCheck | None = None,
+        *,
+        produce_next_token: bool = True,
     ) -> tuple[int, int]:
         pos = start
         for tok_id in tokens[:-1]:
             _raise_if_stopped(should_stop)
-            self.llm_step(tok_id, pos, sample=False)
+            self.llm_step(tok_id, pos, compute_logits=False, sample_next=False)
             pos += 1
             _raise_if_stopped(should_stop)
         if tokens:
             _raise_if_stopped(should_stop)
-            tok = self.llm_step(tokens[-1], pos)
+            tok = self.llm_step(
+                tokens[-1],
+                pos,
+                compute_logits=produce_next_token,
+                sample_next=produce_next_token,
+            )
             _raise_if_stopped(should_stop)
         else:
             tok = 0
@@ -398,7 +424,7 @@ class Gemma3Static:
             sys_tokens = sys_tokens[: self._max_prompt_tokens]
             self._max_user_tokens = max(0, self._max_prompt_tokens - len(sys_tokens))
         n = len(sys_tokens)
-        self._prefill(sys_tokens)
+        self._prefill(sys_tokens, produce_next_token=False)
         self._logger.info(
             "Warm-up complete: system prompt consumed %d tokens, remaining capacity is %d tokens",
             n, self._max_seq_len - n
