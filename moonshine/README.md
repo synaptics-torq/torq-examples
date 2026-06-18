@@ -25,4 +25,7 @@ cd moonshine
 python src/infer.py -m ../models/Synaptics/moonshine-tiny-bf16-torq path/to/audio.wav
 ```
 
+> [!NOTE]
+> The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
+
 Run `python src/infer.py -h` to see all available inference options.

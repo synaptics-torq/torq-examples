@@ -56,7 +56,6 @@ python src/infer.py \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io
 ```
 
@@ -69,18 +68,17 @@ python src/infer.py \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --save-image \
   --display
 ```
 
-`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` or `cpu`.
+`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
 
 Image inference options:
 - `--labels`: label JSON file to map class IDs to names
 - `--device`: Torq device URI, defaults to `torq`
-- `--tda {cpu,dmabuf}`: allocator backing Torq buffers
+- `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
 - `--device-io`: preallocate input buffers and keep outputs as device arrays
 - `--save-image`: save the annotated output image as `output_yolo.jpg`
 - `--display`: show the annotated image with GStreamer/Wayland
@@ -94,7 +92,6 @@ python src/infer_video.py \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --rotate 0
 ```
@@ -108,7 +105,6 @@ python src/infer_video.py \
   --camera-device auto \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --display \
   --rotate 0
@@ -124,7 +120,6 @@ python src/infer_video.py \
   --camera-control-device /dev/v4l-subdev2 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --display \
   --exposure-auto 0
@@ -139,7 +134,6 @@ python src/infer_video.py \
   --rtsp-url rtsp://user:pass@host:port/stream \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --rotate 0 \
   --display
@@ -153,7 +147,6 @@ python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --device torq \
-  --tda dmabuf \
   --device-io \
   --profile
 ```
