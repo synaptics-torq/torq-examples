@@ -99,6 +99,83 @@ class DemoSetupDownloadsTest(unittest.TestCase):
             )
             self.assertEqual(manifest["revision"], _REVISION)
 
+    def test_gemma_downloads_split_lm_head_pair(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            model_dir = base_dir / repo_id
+
+            def exists(_repo_id, filename):
+                self.assertEqual(_repo_id, repo_id)
+                return filename in {"transformer.vmfb", "lm_head.vmfb.trim"}
+
+            with (
+                mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
+                mock.patch.object(gemma_setup, "check_requirements"),
+                mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
+                mock.patch.object(gemma_setup, "_hf_file_exists", side_effect=exists),
+                mock.patch.object(
+                    gemma_setup,
+                    "download_from_hf",
+                    side_effect=_fake_download(base_dir),
+                ) as download,
+            ):
+                gemma_setup.setup_gemma3(["instruct"])
+
+            downloaded = [call.args[1] for call in download.call_args_list]
+            expected_files = [
+                "transformer.vmfb",
+                "lm_head.vmfb.trim",
+                *gemma_setup._GEMMA3_REQUIRED_FILES,
+            ]
+            self.assertEqual(downloaded, expected_files)
+            manifest = json.loads((model_dir / ".manifest.json").read_text())
+            self.assertEqual(manifest["files"], sorted(expected_files))
+            self.assertEqual(manifest["revision"], _REVISION)
+
+    def test_gemma_repairs_existing_split_body_by_fetching_lm_head(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            base_dir = Path(tmp)
+            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            model_dir = base_dir / repo_id
+            model_dir.mkdir(parents=True)
+            (model_dir / "transformer.vmfb").write_text("model")
+            write_manifest(model_dir, repo_id, ["transformer.vmfb"], revision=_REVISION)
+
+            def exists(_repo_id, filename):
+                self.assertEqual(_repo_id, repo_id)
+                return filename in {"transformer.vmfb", "lm_head.vmfb"}
+
+            with (
+                mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
+                mock.patch.object(gemma_setup, "check_requirements"),
+                mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
+                mock.patch.object(gemma_setup, "_hf_file_exists", side_effect=exists),
+                mock.patch.object(
+                    gemma_setup,
+                    "download_from_hf",
+                    side_effect=_fake_download(base_dir),
+                ) as download,
+            ):
+                gemma_setup.setup_gemma3(["instruct"])
+
+            downloaded = [call.args[1] for call in download.call_args_list]
+            expected_files = [
+                "transformer.vmfb",
+                "lm_head.vmfb",
+                *gemma_setup._GEMMA3_REQUIRED_FILES,
+            ]
+            self.assertEqual(
+                downloaded,
+                [
+                    "lm_head.vmfb",
+                    *gemma_setup._GEMMA3_REQUIRED_FILES,
+                ],
+            )
+            manifest = json.loads((model_dir / ".manifest.json").read_text())
+            self.assertEqual(manifest["files"], sorted(expected_files))
+            self.assertEqual(manifest["revision"], _REVISION)
+
     def test_moonshine_skips_when_revision_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)

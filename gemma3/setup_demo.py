@@ -24,10 +24,12 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
     "instruct": "Synaptics/gemma-3-270m-it-torq"
 }
-_GEMMA3_MODEL_FILENAMES: Final[list[str]] = [
-    "model.vmfb",
-    "model.vmfb.trim",
-]
+_GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
+    ("transformer.vmfb", "lm_head.vmfb.trim"),
+    ("transformer.vmfb", "lm_head.vmfb"),
+    ("model.vmfb.trim",),
+    ("model.vmfb",),
+)
 _GEMMA3_TRIM_LUT_FILENAME: Final[str] = "token_id_lut.npy"
 _GEMMA3_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "token_embeddings.npy",
@@ -44,34 +46,56 @@ def _hf_file_exists(repo_id: str, filename: str) -> bool:
 
 def _has_gemma3_files(model_dir: Path) -> bool:
     has_model = any(
-        (model_dir / filename).exists() for filename in _GEMMA3_MODEL_FILENAMES
+        all((model_dir / filename).exists() for filename in filenames)
+        for filenames in _GEMMA3_MODEL_FILENAMES
     )
     has_required = all((model_dir / filename).exists() for filename in _GEMMA3_REQUIRED_FILES)
     return has_model and has_required
 
 
+def _local_gemma3_model_files(local_dir: Path) -> list[str] | None:
+    for filenames in _GEMMA3_MODEL_FILENAMES:
+        if all((local_dir / filename).exists() for filename in filenames):
+            return list(filenames)
+    return None
+
+
+def _format_gemma3_model_file_sets() -> str:
+    return " or ".join(
+        " + ".join(filenames) for filenames in _GEMMA3_MODEL_FILENAMES
+    )
+
+
 def _download_gemma3_model(repo_id: str, base_dir: Path) -> list[str]:
-    """Download model.vmfb and/or model.vmfb.trim as they exist."""
+    """Download the first supported Gemma3 model file set available."""
     local_dir = base_dir / repo_id
-    existing = [
-        filename for filename in _GEMMA3_MODEL_FILENAMES
-        if (local_dir / filename).exists()
-    ]
-    if existing:
+    existing = _local_gemma3_model_files(local_dir)
+    if existing is not None:
         return existing
 
-    downloaded: list[str] = []
-    for filename in _GEMMA3_MODEL_FILENAMES:
-        if _hf_file_exists(repo_id, filename):
+    available_cache: dict[str, bool] = {}
+
+    def is_available(filename: str) -> bool:
+        if (local_dir / filename).exists():
+            return True
+        if filename not in available_cache:
+            available_cache[filename] = _hf_file_exists(repo_id, filename)
+        return available_cache[filename]
+
+    for filenames in _GEMMA3_MODEL_FILENAMES:
+        if not all(is_available(filename) for filename in filenames):
+            continue
+        for filename in filenames:
+            if (local_dir / filename).exists():
+                continue
             download_from_hf(repo_id, filename, base_dir=base_dir)
             logger.info("Downloaded %s from %s", filename, repo_id)
-            downloaded.append(filename)
+        return list(filenames)
 
-    if not downloaded:
-        raise FileNotFoundError(
-            f"Neither model.vmfb nor model.vmfb.trim found in {repo_id}"
-        )
-    return downloaded
+    raise FileNotFoundError(
+        f"No supported Gemma3 model file set found in {repo_id}; expected "
+        f"{_format_gemma3_model_file_sets()}"
+    )
 
 
 def _download_optional_if_exists(repo_id: str, filename: str, base_dir: Path) -> str | None:
