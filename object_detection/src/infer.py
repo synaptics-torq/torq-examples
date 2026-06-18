@@ -93,7 +93,7 @@ def main():
         help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
     parser.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="cpu",
+        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
         help="Allocator backing Torq device buffers (default: %(default)s)",
     )
     parser.add_argument(

@@ -58,10 +58,12 @@ def main(args: argparse.Namespace):
 
     ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
 
+    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
     runner = MoonshineRunner(
         args.model_dir,
         n_threads=args.threads,
-        runtime_flags=args.runtime_flags,
+        runtime_flags=runtime_flags,
+        device_io=args.device_io,
     )
 
     tokenizer_path = args.tokenizer
@@ -116,6 +118,19 @@ if __name__ == "__main__":
     )
     add_logging_args(parser)
     runtime_group = parser.add_argument_group("runtime")
+    runtime_group.add_argument(
+        "--tda",
+        type=str,
+        choices=["cpu", "dmabuf"],
+        default="dmabuf",
+        help="Allocator backing Torq device buffers (default: %(default)s)",
+    )
+    runtime_group.add_argument(
+        "--device-io",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
+    )
     runtime_group.add_argument(
         "--runtime-flags",
         nargs=argparse.REMAINDER,
