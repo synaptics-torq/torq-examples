@@ -22,10 +22,10 @@ Run the demo from the `gemma3` directory:
 
 ```sh
 cd gemma3
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model --tda dmabuf
+python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
 ```
 > [!NOTE]
-> Use `--tda dmabuf` to run with DMA/dmabuf device-backed inputs, or `--tda cpu` to run with the CPU allocator and NumPy inputs.
+> The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
 
 > [!TIP]
 > If the downloaded repo only contains `model.vmfb`, use that path instead.
