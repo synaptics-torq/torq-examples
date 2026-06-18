@@ -436,9 +436,17 @@ class SplitLMHeadRunner:
     def device(self):
         return self._body.device
 
-    def infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
+    def infer(
+        self,
+        inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray],
+        *,
+        skip_lm_head: bool = False,
+    ) -> list:
         start = perf_counter_ns()
         results = self._body.infer(inputs)
+        if skip_lm_head:
+            self._infer_time_ms = (perf_counter_ns() - start) / 1e6
+            return results
         lm_out = self._lm_head.infer([results[0]])
         self._infer_time_ms = (perf_counter_ns() - start) / 1e6
         return [lm_out[0], *results[1:]]
