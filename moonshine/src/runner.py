@@ -37,6 +37,7 @@ class MoonshineRunner:
         "_token_embeddings",
         "_max_inp_len",
         "_input_freq",
+        "_device_io",
         "_n_tokens_gen",
         "_last_infer_ns",
         "_time_to_first_token_ns",
@@ -49,11 +50,13 @@ class MoonshineRunner:
         input_freq: int = _DEFAULT_INPUT_FREQ,
         n_threads: int | None = None,
         runtime_flags: list[str] | None = None,
+        device_io: bool = False,
     ):
         self._logger = logging.getLogger(self.__class__.__name__)
         self._debug_logging: bool = self._logger.isEnabledFor(logging.DEBUG)
         model_dir = Path(model_dir)
         self._model_dir = model_dir
+        self._device_io = device_io
 
         encoder_path = model_dir / "encoder.vmfb"
         decoder_path = model_dir / "decoder.vmfb"
@@ -63,11 +66,16 @@ class MoonshineRunner:
 
         rk: dict = dict(n_threads=n_threads, runtime_flags=runtime_flags)
 
-        self._encoder = VMFBInferenceRunner(encoder_path, **rk)
+        self._encoder = VMFBInferenceRunner(
+            encoder_path,
+            device_outputs=device_io,
+            **rk,
+        )
         self._decoder = ManagedEncDecCacheRunner(
             decoder_path,
             input_cache_start_idx=2,  # [token_emb, current_len, *cache]
             cache_start_idx=1,  # [logits, *self_cache]
+            device_io=device_io,
             **rk,
         )
 
@@ -171,6 +179,8 @@ class MoonshineRunner:
         enc_info = self._encoder.inputs_info
         if enc_info:
             audio = audio.astype(np.dtype(enc_info[0].dtype), copy=False)
+        if self._device_io:
+            audio = self._encoder.allocate_device_array(audio)
         enc_out = self._encoder.infer([audio])
         self._logger.debug(
             "Infer '%s': %.3f ms",
@@ -214,7 +224,10 @@ class MoonshineRunner:
         if dec_info:
             # Cast cross-cache to the dtype the decoder expects for encoder KV
             cross_dtype = np.dtype(dec_info[self._decoder._input_cache_start + 2].dtype)
-            cross_cache = [c.astype(cross_dtype, copy=False) for c in cross_cache]
+            cross_cache = [
+                c if hasattr(c, "to_host") else c.astype(cross_dtype, copy=False)
+                for c in cross_cache
+            ]
         self._decoder.reset_kv()
         self._decoder.set_cross_cache(cross_cache)
 
