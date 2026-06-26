@@ -6,6 +6,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 
 | Demo | Description |
 |------|-------------|
+| [ACT](ACT/) | ACT Robotics Model |
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
 | [object_detection](object_detection/) | YOLOv8n image and video object detection |

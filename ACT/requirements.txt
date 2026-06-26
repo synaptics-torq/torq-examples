@@ -1,0 +1,2 @@
+# The ACT on-board demo (src/run.py) needs only numpy + ml_dtypes, which ship with
+# torq-runtime in the torq-examples venv. No extra packages are required.
