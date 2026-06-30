@@ -1,0 +1,2 @@
+sounddevice
+tokenizers==0.23.1

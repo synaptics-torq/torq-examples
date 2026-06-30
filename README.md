@@ -8,6 +8,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
+| [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
 
 ## Setup
 
