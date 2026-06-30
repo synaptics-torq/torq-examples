@@ -22,8 +22,6 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
 _REQUIRED_FILES: Final[tuple[str, ...]] = (
     "encoder.vmfb",
     "decoder.vmfb",
-    "encoder.input_order.json",
-    "decoder.input_order.json",
     "streaming_config.json",
     "config.json",
     "adapter_pos_emb.npy",

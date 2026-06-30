@@ -8,7 +8,6 @@ static streaming inference. Model artifacts are read from a single flat model
 directory (``models/Synaptics/moonshine-streaming-tiny-torq/``):
 
   * ``encoder.vmfb`` / ``decoder.vmfb``      — the quantized Torq builds
-  * ``encoder.input_order.json`` / ``decoder.input_order.json`` — input names+shapes
   * ``streaming_config.json`` / ``config.json``
   * ``adapter_pos_emb.npy`` / ``decoder_token_embeddings.npy`` / ``tokenizer.json``
 
@@ -41,6 +40,24 @@ logger = logging.getLogger("moonshine_streaming")
 # This tree's model basenames (== the demo's fused_encoder / decoder_kv).
 ENCODER_NAME = "encoder"
 DECODER_NAME = "decoder"
+
+# A VMFB exposes its inputs positionally (no argument names), so the dict-based
+# feed interface needs to know each model's input order. These lists are the
+# canonical order baked into the compiled VMFBs, pinned to the
+# moonshine-streaming-tiny export (6 decoder layers, 6 encoder buffers). A
+# re-export with a different arity trips the arity check in ``_Session``; a pure
+# reordering would not, so keep these in sync with the model if it is rebuilt.
+ENCODER_INPUT_ORDER = [
+    "audio_chunk", "conv1_buffer", "conv2_buffer", "features_buffer",
+    "position_embeddings",
+    *(f"buf_{i}" for i in range(6)),
+]
+DECODER_INPUT_ORDER = [
+    "inputs_embeds",
+    *(nm for i in range(6) for nm in (f"k_self_{i}", f"v_self_{i}")),
+    *(nm for i in range(6) for nm in (f"k_cross_{i}", f"v_cross_{i}")),
+    "cross_attn_bias", "position_ids", "current_len",
+]
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -81,13 +98,13 @@ class _Session:
     """
     Wraps VMFBInferenceRunner with a dict-based run() interface similar to ORT.
 
-    Input ordering comes from a sidecar ``<name>.input_order.json`` (the VMFB
-    runner does not expose input names); dtype casting is driven by
-    VMFBInferenceRunner.inputs_info.  Outputs are always returned as float32
+    Input names come from the hardcoded ``input_order`` (the VMFB exposes inputs
+    positionally, with no names); their shapes and dtypes come from
+    ``VMFBInferenceRunner.inputs_info``.  Outputs are always returned as float32
     numpy arrays (all Moonshine model outputs are floating-point).
     """
 
-    def __init__(self, vmfb_path: str, meta_path: str, runtime_flags: list,
+    def __init__(self, vmfb_path: str, input_order: list, runtime_flags: list,
                  device_outputs: bool = False, function: str = "main"):
         self._runner = VMFBInferenceRunner(
             vmfb_path,
@@ -96,15 +113,28 @@ class _Session:
             runtime_flags=runtime_flags,
             device_outputs=device_outputs,
         )
-        with open(meta_path) as f:
-            meta = json.load(f)
-        self._input_names  = [inp["name"] for inp in meta["inputs"]]
-        self._input_shapes = [inp["shape"] for inp in meta["inputs"]]
-        self._dtypes       = self._runner.inputs_info  # list[TensorInfo] or None
+        self._input_names = list(input_order)
+        # The VMFB reports shapes + dtypes positionally (no names) via inputs_info;
+        # pair them with the hardcoded input order. A length mismatch means the
+        # model was re-exported with a different arity — fail loudly rather than
+        # silently feed tensors into the wrong argument slots.
+        info = self._runner.inputs_info  # list[TensorInfo] or None
+        if info is not None and len(info) != len(self._input_names):
+            raise ValueError(
+                f"Hardcoded input order ({len(self._input_names)}) does not match the "
+                f"VMFB input count ({len(info)}) for {os.path.basename(vmfb_path)}; the "
+                f"model may have been re-exported — update the *_INPUT_ORDER constant in "
+                f"runner.py."
+            )
+        self._dtypes       = info
+        self._input_shapes = (
+            [list(t.shape) for t in info] if info is not None
+            else [None] * len(self._input_names)
+        )
         # name -> model input dtype, for pre-uploading resident device buffers (P1)
         self.input_dtype = (
-            {n: info.dtype for n, info in zip(self._input_names, self._dtypes)}
-            if self._dtypes else {}
+            {n: t.dtype for n, t in zip(self._input_names, info)}
+            if info else {}
         )
 
     def get_inputs(self) -> list:
@@ -228,29 +258,28 @@ class MoonshineStaticStreamingModel:
     Orchestrates the 2 VMFB sessions for static streaming inference.
 
     Args:
-        model_dir: Flat directory holding the encoder/decoder ``.vmfb`` +
-            ``.input_order.json`` sidecars, configs, npy tables and tokenizer.
+        model_dir: Flat directory holding the encoder/decoder ``.vmfb`` files,
+            configs, npy tables and tokenizer.
         hw_type:   Torq hardware type flag (e.g. ``astra_machina``, ``sim``).
         function:  VMFB entry function name.
     """
     def __init__(self, model_dir: str, hw_type: str, function: str = "main"):
         runtime_flags = [f"--torq_hw_type={hw_type}"]
 
-        # Flat layout: VMFBs and their input-order sidecars, configs, npy tables
-        # and tokenizer all live in model_dir.
+        # Flat layout: VMFBs, configs, npy tables and tokenizer all live in
+        # model_dir. Input names are hardcoded (see *_INPUT_ORDER above).
         self.model_dir = model_dir
 
-        def session(name, device_outputs=False):
+        def session(name, input_order, device_outputs=False):
             vmfb = os.path.join(model_dir, name + ".vmfb")
-            meta = os.path.join(model_dir, name + ".input_order.json")
-            return _Session(vmfb, meta, runtime_flags,
+            return _Session(vmfb, input_order, runtime_flags,
                             device_outputs=device_outputs, function=function)
 
         logger.info("Loading VMFB sessions from %s", model_dir)
-        self.fused_encoder = session(ENCODER_NAME)
+        self.fused_encoder = session(ENCODER_NAME, ENCODER_INPUT_ORDER)
         # P2: device_outputs=True keeps self-KV (and the unread cross-KV/cross_attn)
         # outputs on device; the decode loop copies only logits back to host.
-        self.decoder = session(DECODER_NAME, device_outputs=True)
+        self.decoder = session(DECODER_NAME, DECODER_INPUT_ORDER, device_outputs=True)
 
         # Load streaming configuration
         cfg_path = find_asset(model_dir, "streaming_config.json")
