@@ -25,6 +25,7 @@ DEMOS = [
     "gemma3",
     "LiquidAI-LFM2.5-230M",
     "moonshine",
+    "moonshine_streaming",
     "LiquidAI-LFM2-VL-450M",
     "object_detection",
     "pose_estimation",
@@ -80,6 +81,9 @@ def setup_demo(name: str):
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
+        elif name == "moonshine_streaming":
+            from moonshine_streaming.setup_demo import setup_moonshine_streaming
+            setup_moonshine_streaming(["streaming-tiny-en"])
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl(["default"])
