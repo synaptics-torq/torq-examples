@@ -287,6 +287,7 @@ class WorkerProfiler:
             _np.save(out_dir / "worker_decode_steps.npy", _np.asarray(self.decode_steps))
             _np.save(out_dir / "worker_queue_depth.npy",
                      _np.asarray(self.queue_depth, dtype=_np.float64))
+            _np.save(out_dir / "chunk_budget_ms.npy", _np.array(self.chunk_budget_ms))
             print(f"  dumped raw arrays to {out_dir}/", file=sys.stderr)
         print("=" * 64, file=sys.stderr)
 
@@ -549,7 +550,7 @@ def main(args: argparse.Namespace):
         if not prof:
             return
         out = args.profile_out or os.path.join(
-            os.path.dirname(os.path.abspath(__file__)), "profile_results")
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profile_results")
         try:
             prof.summary(out_dir=out)
         except Exception as e:
@@ -632,7 +633,7 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--profile",       action="store_true",               help="Record per-chunk worker timing, missed-real-time count, decode/encode latency and queue depth; print + dump on exit")
-    parser.add_argument("--profile-out",   type=str,   default=None,           help="Directory for --profile dumps (default: ./profile_results)")
+    parser.add_argument("--profile-out",   type=str,   default=None,           help="Directory for --profile dumps (default: moonshine_streaming/profile_results)")
     parser.add_argument("--list-devices",  "-l", action="store_true",         help="List audio devices and exit")
     add_logging_args(parser)
     main(parser.parse_args())

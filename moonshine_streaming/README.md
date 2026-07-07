@@ -312,12 +312,43 @@ buffer-full) the final line is locked with `complete_line()`, the utterance coun
 ticks, `state.reset()` clears the memory + committed prefix, and it returns to
 "Listening…".
 
+## Profiling
+
+`--profile` records per-chunk worker timing, prints a real-time keep-up summary on
+exit, and dumps the raw arrays as `.npy` files to `profile_results/` (sibling to
+`src/`; override with `--profile-out`):
+
+```sh
+python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --wav sample.wav --profile
+```
+
+Then turn those dumps into plots with `plot_profile.py`:
+
+```sh
+python src/plot_profile.py
+```
+
+This reads `profile_results/*.npy` and writes PNGs to `profile_results/plots/`
+(override with `--profile-dir` / `--out-dir`):
+
+| Plot | Shows |
+|------|-------|
+| `chunk_times.png` | per-chunk worker time, cheap vs. with-decode, against the real-time budget line |
+| `encode_times.png` | encoder latency distribution (p50/p95/p99) |
+| `decode_times.png` | decode-call latency distribution (p50/p95/p99) |
+| `decode_steps.png` | decoder forward passes per decode call |
+| `queue_depth.png` | audio queue depth over time, with a linear trend line (sustained growth ⇒ falling behind) |
+| `realtime_factor.png` | running work/audio ratio over the session (>1.0x ⇒ cannot keep up) |
+
+Requires `matplotlib` (in `requirements.txt`).
+
 ## Notes
 
 - `--full-decode` restores the baseline re-decode-from-BOS behaviour (instead of
   the default committed-prefix incremental decode).
 - `--profile` records per-chunk worker timing and prints a real-time keep-up
-  summary on exit (and shows the VAD calibration line).
+  summary on exit (and shows the VAD calibration line); see
+  [Profiling](#profiling) to turn the dumps into plots.
 - `--hw-type` selects the Torq hardware target (default `astra_machina`; use `sim`
   for a software simulation).
 - `--preview-every`, `--commit-agreement`, `--commit-delay` tune the live-preview
