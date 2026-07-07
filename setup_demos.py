@@ -21,7 +21,7 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = ["gemma3", "moonshine", "object_detection"]
+DEMOS = ["gemma3", "moonshine", "liquidAI-VLM", "object_detection"]
 
 
 def _site_packages_dir() -> str:
@@ -51,6 +51,17 @@ def setup_demo(name: str):
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
+        elif name == "liquidAI-VLM":
+            # The demo dir name has a hyphen, so it is not importable as a package
+            # (`from liquidAI-VLM.setup_demo import ...` is a syntax error); load the
+            # module by file path instead.
+            import importlib.util
+            _path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "liquidAI-VLM", "setup_demo.py")
+            _spec = importlib.util.spec_from_file_location("liquidvl_setup_demo", _path)
+            _mod = importlib.util.module_from_spec(_spec)
+            _spec.loader.exec_module(_mod)
+            _mod.setup_liquidvl(["default"])
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
             setup_object_detection()
