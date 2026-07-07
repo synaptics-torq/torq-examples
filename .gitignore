@@ -15,3 +15,6 @@ test/
 *.bin
 .env
 *.whl
+
+# internal usage/benchmark doc — kept local, not part of the committed demo
+liquidAI-VLM/lfm2-vl-450m-usage.md
