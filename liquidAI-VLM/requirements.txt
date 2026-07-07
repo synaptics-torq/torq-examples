@@ -1,0 +1,5 @@
+tokenizers==0.23.1
+onnxruntime>=1.20  # vision encoder runs on CPU via onnxruntime
+pillow             # image preprocessing (numpy/PIL port of Lfm2VlImageProcessorFast)
+ml_dtypes
+numpy
