@@ -16,6 +16,7 @@ import re
 import sys
 import threading
 import time
+from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -408,6 +409,15 @@ def main(args: argparse.Namespace):
         resampled_buffer    = np.array([], dtype=np.float32)
         chunks_since_decode = 0
 
+        # Pre-speech look-behind buffer: rolls over every "silence" chunk so that
+        # when speech_start fires, we have a few chunks of real audio (ambient
+        # noise + whatever soft onset the VAD hadn't crossed threshold on yet)
+        # to replay instead of losing that window to the encoder's warmup
+        # discard (see the replay below). Defaults to warmup_chunks so the
+        # replay exactly covers the window that would otherwise be thrown away.
+        lookback_chunks = args.vad_lookback if args.vad_lookback is not None else model.warmup_chunks
+        lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
+
         def _decode():
             if args.full_decode:
                 return model.decode(state)
@@ -461,6 +471,22 @@ def main(args: argparse.Namespace):
                     chunks_since_decode = 0
                     utterance_count += 1
                     terminal.draw(f"\033[32m●\033[0m Utterance #{utterance_count}: [Listening...]")
+
+                    # Replay the buffered pre-speech chunks through the fresh state
+                    # before the triggering chunk below. chunk_idx is 0 right after
+                    # reset(), so these calls land in the encoder's warmup window
+                    # (their cross-KV output is discarded either way, see
+                    # process_audio_chunk) — we're just choosing to spend that
+                    # discarded window on real pre-onset audio instead of on the
+                    # first spoken syllables.
+                    for lb_chunk in lookback_buffer:
+                        if prof:
+                            _t_lb = time.perf_counter()
+                        model.process_audio_chunk(state, lb_chunk)
+                        model.encode(state, is_final=False)
+                        if prof:
+                            prof.encode_ms.append((time.perf_counter() - _t_lb) * 1000)
+                    lookback_buffer.clear()
 
                 if vad_status in ("speech", "speech_start"):
                     if prof:
@@ -540,6 +566,9 @@ def main(args: argparse.Namespace):
                     terminal.draw(f"\033[32m✓\033[0m Utterance #{utterance_count}: {text if text else '(empty)'}")
                     terminal.complete_line()
                     chunks_since_decode = 0
+
+                elif vad_status == "silence":
+                    lookback_buffer.append(audio_chunk_1280.copy())
 
                 if prof:
                     prof.record_chunk((time.perf_counter() - _t_chunk) * 1000, _had_decode)
@@ -628,6 +657,7 @@ if __name__ == "__main__":
     parser.add_argument("--function",      type=str,   default="main",         help="VMFB entry function name (default: main)")
     parser.add_argument("--vad-threshold", type=float, default=0.010,          help="Minimum VAD energy threshold (default: 0.010)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
+    parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
     parser.add_argument("--preview-every", type=int,   default=5,              help="Chunks the decoder waits between live preview decodes (default: 5)")
     parser.add_argument("--commit-agreement", type=int, default=2,             help="LocalAgreement-N: commit a token only if stable across the last N hypotheses (default: 2)")
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
