@@ -19,7 +19,12 @@ import time
 from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+except (ImportError, OSError):
+    # sounddevice/PortAudio not installed on this machine — fine for --wav-only usage.
+    sd = None
 
 try:
     from tokenizers import Tokenizer
@@ -35,6 +40,10 @@ logger = logging.getLogger("moonshine_streaming")
 
 # Default flat model directory (relative to repo root). Override with --model-dir.
 DEFAULT_MODEL_DIR = os.path.join("..", "models", "Synaptics", "moonshine-streaming-tiny-torq")
+
+# Sentinel put on the audio queue to mark end-of-input in --wav mode (never
+# emitted by the live mic path, which just keeps streaming until Ctrl+C).
+_END_OF_STREAM = object()
 
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
@@ -288,9 +297,20 @@ def main(args: argparse.Namespace):
     configure_logging(args.logging)
 
     if args.list_devices:
+        if sd is None:
+            logger.error("sounddevice/PortAudio is not available — cannot list audio devices.")
+            sys.exit(1)
         print("\nAvailable Audio Devices:")
         print(sd.query_devices())
         sys.exit(0)
+
+    wav_mode = bool(args.wav)
+    if not wav_mode and sd is None:
+        logger.error(
+            "sounddevice/PortAudio is not available. Install it (see README) or pass "
+            "--wav <file> to transcribe a pre-recorded file instead of the microphone."
+        )
+        sys.exit(1)
 
     if args.model_dir:
         model_dir = args.model_dir
@@ -321,13 +341,31 @@ def main(args: argparse.Namespace):
         logger.error("Error initializing models: %s", e)
         sys.exit(1)
 
-    logger.info("Setting up microphone stream...")
-
-    try:
-        device_info       = sd.query_devices(args.device, "input")
-        input_sample_rate = int(device_info.get("default_samplerate", 16000))
-    except Exception:
-        input_sample_rate = 16000
+    wav_audio = None
+    if wav_mode:
+        try:
+            import soundfile as sf
+        except ImportError:
+            logger.error("soundfile is required for --wav. Install it with: pip install soundfile")
+            sys.exit(1)
+        if not os.path.isfile(args.wav):
+            logger.error("WAV file %s not found.", args.wav)
+            sys.exit(1)
+        data, input_sample_rate = sf.read(args.wav, dtype="float32")
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        wav_audio = data.astype(np.float32)
+        logger.info(
+            "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
+            args.wav, len(wav_audio) / input_sample_rate, input_sample_rate,
+        )
+    else:
+        logger.info("Setting up microphone stream...")
+        try:
+            device_info       = sd.query_devices(args.device, "input")
+            input_sample_rate = int(device_info.get("default_samplerate", 16000))
+        except Exception:
+            input_sample_rate = 16000
 
     audio_queue = queue.Queue()
     running     = True
@@ -338,19 +376,21 @@ def main(args: argparse.Namespace):
         if in_data is not None:
             audio_queue.put(in_data.copy().astype(np.float32).flatten())
 
-    try:
-        sd_stream = sd.InputStream(
-            samplerate=input_sample_rate,
-            blocksize=4096,
-            latency="high",
-            device=args.device,
-            channels=1,
-            dtype="float32",
-            callback=audio_callback,
-        )
-    except sd.PortAudioError as e:
-        logger.error("Error opening audio device: %s", e)
-        sys.exit(1)
+    sd_stream = None
+    if not wav_mode:
+        try:
+            sd_stream = sd.InputStream(
+                samplerate=input_sample_rate,
+                blocksize=4096,
+                latency="high",
+                device=args.device,
+                channels=1,
+                dtype="float32",
+                callback=audio_callback,
+            )
+        except sd.PortAudioError as e:
+            logger.error("Error opening audio device: %s", e)
+            sys.exit(1)
 
     vad      = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
                          report_calibration=args.profile)
@@ -380,6 +420,25 @@ def main(args: argparse.Namespace):
                 chunk = audio_queue.get(timeout=0.1)
             except queue.Empty:
                 continue
+
+            if chunk is _END_OF_STREAM:
+                # --wav mode: input exhausted. Finalize whatever utterance is
+                # still in flight (the file may not end in enough trailing
+                # silence for the VAD to have called speech_end itself).
+                if state.cross_kv_fill > 0 or vad.is_speaking:
+                    terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
+                    model.encode(state, is_final=True)
+                    if prof:
+                        _t_dec = time.perf_counter()
+                    tokens = _decode()
+                    if prof:
+                        prof.decode_ms.append((time.perf_counter() - _t_dec) * 1000)
+                        prof.decode_steps.append(state.last_decode_steps)
+                    text = tokenizer.decode(tokens, skip_special_tokens=True)
+                    terminal.draw(f"\033[32m✓\033[0m Utterance #{utterance_count}: {text if text else '(empty)'}")
+                    terminal.complete_line()
+                audio_queue.task_done()
+                break
 
             chunk_16k        = resample(chunk, input_sample_rate, 16000)
             resampled_buffer = np.concatenate([resampled_buffer, chunk_16k])
@@ -486,38 +545,72 @@ def main(args: argparse.Namespace):
 
             audio_queue.task_done()
 
+    def print_profile_summary():
+        if not prof:
+            return
+        out = args.profile_out or os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "profile_results")
+        try:
+            prof.summary(out_dir=out)
+        except Exception as e:
+            print(f"[profile] summary failed: {e}", file=sys.stderr)
+
+    def feed_wav_to_queue():
+        """Push the WAV file onto audio_queue in mic-sized blocks, then signal
+        end-of-stream. A synthetic silence lead-in is prepended so the VAD's
+        self-calibration (~1s of ambient noise) has something to sample even
+        when the file starts talking immediately."""
+        lead_in = np.zeros(int(1.0 * input_sample_rate), dtype=np.float32)
+        full    = np.concatenate([lead_in, wav_audio])
+        block   = 4096
+        pos     = 0
+        while pos < len(full) and running:
+            end = min(pos + block, len(full))
+            audio_queue.put(full[pos:end])
+            if args.realtime:
+                time.sleep((end - pos) / input_sample_rate)
+            pos = end
+        audio_queue.put(_END_OF_STREAM)
+
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
 
-    print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
-    sd_stream.start()
-    time.sleep(1.0)
-
-    print(
-        ">>> Listening (Static 2-Split VMFB). Start speaking! Press Ctrl+C to exit. <<<\n",
-        file=sys.stderr,
-    )
-
-    try:
-        while True:
-            time.sleep(0.1)
-    except KeyboardInterrupt:
-        print("\n\nExiting...", file=sys.stderr)
-    finally:
-        running = False
+    if wav_mode:
+        print("\n[VAD] Calibrating noise floor from synthetic silence lead-in...", file=sys.stderr)
+        print(f">>> Transcribing {args.wav} (Static 2-Split VMFB)... <<<\n", file=sys.stderr)
         try:
-            sd_stream.stop()
-            sd_stream.close()
-        except Exception:
-            pass
-        worker_thread.join(timeout=1.0)
-        if prof:
-            out = args.profile_out or os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "profile_results")
+            feed_wav_to_queue()
+            worker_thread.join()
+        except KeyboardInterrupt:
+            print("\n\nInterrupted...", file=sys.stderr)
+            running = False
+            worker_thread.join(timeout=1.0)
+        finally:
+            print_profile_summary()
+    else:
+        print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
+        sd_stream.start()
+        time.sleep(1.0)
+
+        print(
+            ">>> Listening (Static 2-Split VMFB). Start speaking! Press Ctrl+C to exit. <<<\n",
+            file=sys.stderr,
+        )
+
+        try:
+            while True:
+                time.sleep(0.1)
+        except KeyboardInterrupt:
+            print("\n\nExiting...", file=sys.stderr)
+        finally:
+            running = False
             try:
-                prof.summary(out_dir=out)
-            except Exception as e:
-                print(f"[profile] summary failed: {e}", file=sys.stderr)
+                sd_stream.stop()
+                sd_stream.close()
+            except Exception:
+                pass
+            worker_thread.join(timeout=1.0)
+            print_profile_summary()
 
 
 if __name__ == "__main__":
@@ -525,13 +618,15 @@ if __name__ == "__main__":
         description="Moonshine Static Streaming Microphone Demo (2-Split VMFB)"
     )
     parser.add_argument("--device",        type=int,   default=1,              help="Input device index (default: 1)")
+    parser.add_argument("--wav",           type=str,   default=None,           help="Transcribe a WAV file instead of the live microphone")
+    parser.add_argument("--realtime",      action="store_true",               help="With --wav, pace the feed to match real-time playback speed (default: feed as fast as possible)")
     parser.add_argument("-m", "--model-dir", type=str, default=None,           help="Path to the flat moonshine-streaming-tiny model dir (default: ../models/Synaptics/moonshine-streaming-tiny-torq)")
     parser.add_argument("--hw-type",       type=str,   default="astra_machina",
                         choices=["sim", "astra_machina", "soc_fpga", "aws_fpga"],
                         help="Torq hardware type flag (default: astra_machina)")
     parser.add_argument("--function",      type=str,   default="main",         help="VMFB entry function name (default: main)")
     parser.add_argument("--vad-threshold", type=float, default=0.010,          help="Minimum VAD energy threshold (default: 0.010)")
-    parser.add_argument("--vad-silence",   type=float, default=8.0,            help="Silence gap to split utterances in seconds (default: 8.0)")
+    parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--preview-every", type=int,   default=5,              help="Chunks the decoder waits between live preview decodes (default: 5)")
     parser.add_argument("--commit-agreement", type=int, default=2,             help="LocalAgreement-N: commit a token only if stable across the last N hypotheses (default: 2)")
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")

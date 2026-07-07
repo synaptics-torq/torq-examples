@@ -4,7 +4,9 @@ Real-time microphone transcription with Moonshine-tiny English using a 2-split
 Torq VMFB model (fused encoder + KV decoder). A self-calibrating energy VAD splits
 utterances and a committed-prefix incremental decoder gives a live preview.
 
-> Requires a working microphone and the `sounddevice` package (PortAudio).
+> Requires a working microphone and the `sounddevice` package (PortAudio) — unless
+> you use [`--wav`](#transcribing-a-wav-file) to transcribe a pre-recorded file
+> instead, which needs neither.
 
 ## Setup
 
@@ -35,12 +37,12 @@ python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq
 Then start speaking. Press `Ctrl+C` to exit.
 
 The defaults are tuned for the board (`--hw-type astra_machina`, `--device 1`,
-`--vad-silence 8`, `--vad-threshold 0.010`, `--preview-every 5`), so the command
+`--vad-silence 2.5`, `--vad-threshold 0.010`, `--preview-every 5`), so the command
 above is equivalent to:
 
 ```sh
 python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq \
-    --hw-type astra_machina --device 1 --vad-silence 8 --vad-threshold 0.010 --preview-every 5
+    --hw-type astra_machina --device 1 --vad-silence 2.5 --vad-threshold 0.010 --preview-every 5
 ```
 
 List audio input devices and pick a different one:
@@ -52,6 +54,35 @@ python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --devic
 
 Run `python src/infer.py -h` to see all available options (VAD thresholds, decode
 mode, hardware type, profiling).
+
+## Transcribing a WAV file
+
+For testing against pre-recorded audio instead of a live mic (e.g. a real
+conversation or speech sample), pass `--wav`:
+
+```sh
+python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --wav /path/to/sample.wav
+```
+
+This reads the file with `soundfile` (mixed to mono if stereo, resampled like any
+other input source), feeds it through the same VAD/encode/decode pipeline as the
+mic path, and exits automatically once the file is fully transcribed — no `Ctrl+C`
+needed. A silent 1 s lead-in is synthesized ahead of the file so the VAD has
+something to calibrate against, since a recording — unlike a live mic — often
+starts talking immediately.
+
+By default the file is fed as fast as possible (for quick batch testing). Pass
+`--realtime` to pace the feed to match the file's real playback speed instead, so
+you can watch the live preview update the way it would from a mic:
+
+```sh
+python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --wav /path/to/sample.wav --realtime
+```
+
+`--vad-silence` (default `2.5`s) still governs where the file is split into
+utterances — lower it for tightly-paced conversational audio. `--wav` mode doesn't
+need `sounddevice`/PortAudio at all, so it also works on machines without a mic or
+audio drivers set up.
 
 ## Running on a board
 
@@ -292,3 +323,6 @@ ticks, `state.reset()` clears the memory + committed prefix, and it returns to
 - `--preview-every`, `--commit-agreement`, `--commit-delay` tune the live-preview
   cadence and how eagerly tokens are frozen; `--vad-threshold` / `--vad-silence`
   tune speech detection and utterance splitting.
+- `--wav <file>` transcribes a pre-recorded file instead of the mic (see
+  [Transcribing a WAV file](#transcribing-a-wav-file)); `--realtime` paces the feed
+  to match playback speed.
