@@ -15,12 +15,13 @@ from utils.download import (
     ensure_model,
     get_hf_revision,
     read_manifest,
+    resolve_repo_id,
     verify_manifest,
 )
 
 logger = logging.getLogger("Gemma3.setup")
 
-_HF_REPO_MAP: Final[dict[str, str]] = {
+GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
     "instruct": "Synaptics/gemma-3-270m-it-torq"
 }
@@ -130,6 +131,49 @@ def _refresh_gemma3(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatu
     )
 
 
+def local_gemma3_model_path(
+    model: str = "instruct",
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the local ``model.vmfb.trim`` path for ``model`` if it exists."""
+    if base_dir is None:
+        base_dir = default_models_dir()
+    repo_id = resolve_repo_id(model, GEMMA3_HF_REPO_MAP)
+    model_path = Path(base_dir) / repo_id / "model.vmfb.trim"
+    return model_path if model_path.exists() else None
+
+
+def download_gemma3(
+    models: list[str] | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> dict[str, Path]:
+    """Download/refresh the given Gemma3 models; return ``{name: model_dir}``.
+
+    Unlike :func:`setup_gemma3`, this does not check demo requirements, so it can
+    be reused by other projects that manage their own environment and models dir.
+    """
+    if models is None:
+        models = ["instruct"]
+    if base_dir is None:
+        base_dir = default_models_dir()
+    base_dir = Path(base_dir)
+
+    logger.info("Resolving Gemma3 models: [%s]", ", ".join(models))
+    result: dict[str, Path] = {}
+    for name in models:
+        repo_id = resolve_repo_id(name, GEMMA3_HF_REPO_MAP)
+        model_dir = base_dir / repo_id
+        try:
+            _refresh_gemma3(repo_id, model_dir, base_dir)
+        except Exception as exc:
+            raise DownloadError(f"Unable to download Gemma3 files from {repo_id}") from exc
+        result[name] = model_dir
+        logger.info("Gemma3 model files ready at '%s'", model_dir)
+    return result
+
+
 def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None:
     """Verify/refresh the Gemma3 models in ``model_dir`` before inference.
 
@@ -162,18 +206,7 @@ def setup_gemma3(
     models: list[str],
 ):
     logger.info("Setting up gemma3 demo with models: [%s]", ", ".join(models))
-    repos = [_HF_REPO_MAP.get(m, m) for m in models]
-    base_dir = default_models_dir()
-    for repo_id in repos:
-        model_dir = base_dir / repo_id
-        try:
-            status = _refresh_gemma3(repo_id, model_dir, base_dir)
-        except Exception as e:
-            raise DownloadError(f"Unable to download model files from {repo_id}") from e
-        if status is ModelStatus.UP_TO_DATE:
-            logger.info("Using local gemma3 model files from %s", model_dir)
-        else:
-            logger.info("Downloaded gemma3 model files from %s", repo_id)
+    download_gemma3(models)
     check_requirements(Path(__file__).parent / "requirements.txt")
     logger.info("gemma3 setup complete.")
 
@@ -183,7 +216,7 @@ if __name__ == "__main__":
     import sys
     from utils.log import add_logging_args, configure_logging
 
-    available_models = ", ".join(f"'{model_name}' ({repo_id})" for model_name, repo_id in _HF_REPO_MAP.items())
+    available_models = ", ".join(f"'{model_name}' ({repo_id})" for model_name, repo_id in GEMMA3_HF_REPO_MAP.items())
     parser = argparse.ArgumentParser(
         description="Download Gemma3 model files.",
     )
