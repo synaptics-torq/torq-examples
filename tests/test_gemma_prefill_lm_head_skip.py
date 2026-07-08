@@ -1,11 +1,10 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
+
 import logging
-import unittest
 from unittest.mock import patch
 
-from tests.test_gemma_lut_validation import _install_runner_import_stubs
-
-
-_install_runner_import_stubs()
+import pytest
 
 from gemma3.src.runner import Gemma3Static
 from utils.inference import SplitLMHeadRunner
@@ -89,18 +88,19 @@ class FakeTokenizer:
         return Encoded(list(self.mapping[text]))
 
 
-class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
+class TestGemmaPrefillLMHeadSkip:
     def test_prefill_samples_only_last_token_by_default(self):
         runner = RecordingGemma()
 
         next_token, pos = runner._prefill([10, 11, 12], start=7)
 
-        self.assertEqual(next_token, 112)
-        self.assertEqual(pos, 10)
-        self.assertEqual(
-            runner.calls,
-            [(10, 7, False, False), (11, 8, False, False), (12, 9, True, True)],
-        )
+        assert next_token == 112
+        assert pos == 10
+        assert runner.calls == [
+            (10, 7, False, False),
+            (11, 8, False, False),
+            (12, 9, True, True),
+        ]
 
     def test_prefill_can_skip_producing_next_token(self):
         runner = RecordingGemma()
@@ -111,12 +111,13 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
             produce_next_token=False,
         )
 
-        self.assertEqual(next_token, 0)
-        self.assertEqual(pos, 10)
-        self.assertEqual(
-            runner.calls,
-            [(10, 7, False, False), (11, 8, False, False), (12, 9, False, False)],
-        )
+        assert next_token == 0
+        assert pos == 10
+        assert runner.calls == [
+            (10, 7, False, False),
+            (11, 8, False, False),
+            (12, 9, False, False),
+        ]
 
     def test_prefill_tokens_starts_after_warmup(self):
         runner = RecordingGemma()
@@ -124,12 +125,12 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
 
         next_token, pos = runner.prefill_tokens([10, 11])
 
-        self.assertEqual(next_token, 111)
-        self.assertEqual(pos, 6)
-        self.assertEqual(
-            runner.calls,
-            [(10, 4, False, False), (11, 5, True, True)],
-        )
+        assert next_token == 111
+        assert pos == 6
+        assert runner.calls == [
+            (10, 4, False, False),
+            (11, 5, True, True),
+        ]
 
     def test_llm_step_uses_skip_lm_head_when_logits_are_disabled(self):
         runner = Gemma3Static.__new__(Gemma3Static)
@@ -146,8 +147,8 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
 
         token = runner.llm_step(123, 5, compute_logits=False, sample_next=False)
 
-        self.assertEqual(token, 0)
-        self.assertEqual(len(body.calls), 1)
+        assert token == 0
+        assert len(body.calls) == 1
 
     def test_llm_step_can_compute_logits_without_sampling(self):
         runner = Gemma3Static.__new__(Gemma3Static)
@@ -164,14 +165,14 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
 
         token = runner.llm_step(123, 5, compute_logits=True, sample_next=False)
 
-        self.assertEqual(token, 0)
-        self.assertEqual(len(body.calls), 1)
-        self.assertEqual(len(model._lm_head.calls), 1)
+        assert token == 0
+        assert len(body.calls) == 1
+        assert len(model._lm_head.calls) == 1
 
     def test_llm_step_rejects_sampling_without_logits(self):
         runner = Gemma3Static.__new__(Gemma3Static)
 
-        with self.assertRaisesRegex(ValueError, "requires compute_logits"):
+        with pytest.raises(ValueError, match="requires compute_logits"):
             runner.llm_step(123, 5, compute_logits=False, sample_next=True)
 
     def test_gemma_instruct_tokenize_strips_auto_bos(self):
@@ -185,8 +186,8 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(runner.tokenize("hello", "user"), [10, 11])
-        self.assertEqual(runner.tokenize("", "model"), [12])
+        assert runner.tokenize("hello", "user") == [10, 11]
+        assert runner.tokenize("", "model") == [12]
 
     def test_gemma_build_prompt_adds_model_turn_for_instruct(self):
         runner = Gemma3Static.__new__(Gemma3Static)
@@ -199,7 +200,7 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(runner._build_prompt_tokens("hello"), [10, 11, 12])
+        assert runner._build_prompt_tokens("hello") == [10, 11, 12]
 
     def test_gemma_stop_policy_handles_eos_eot_and_newlines(self):
         runner = Gemma3Static.__new__(Gemma3Static)
@@ -207,17 +208,17 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
         runner._end_of_turn_id = 2
         runner._instruct_model = True
 
-        self.assertTrue(runner._should_stop(1, [1]))
-        self.assertTrue(runner._should_stop(2, [2]))
-        self.assertFalse(runner._should_stop(3, [3]))
+        assert runner._should_stop(1, [1])
+        assert runner._should_stop(2, [2])
+        assert not runner._should_stop(3, [3])
 
         runner._instruct_model = False
         runner._nl_token_id = 3
         runner._double_nl_token_id = 4
 
-        self.assertTrue(runner._should_stop(4, [8, 9, 4]))
-        self.assertTrue(runner._should_stop(3, [8, 3, 3]))
-        self.assertFalse(runner._should_stop(3, [3, 3]))
+        assert runner._should_stop(4, [8, 9, 4])
+        assert runner._should_stop(3, [8, 3, 3])
+        assert not runner._should_stop(3, [3, 3])
 
     def test_split_runner_skip_lm_head_infer_does_not_call_lm_head(self):
         runner = SplitLMHeadRunner.__new__(SplitLMHeadRunner)
@@ -226,8 +227,8 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
         runner._lm_head = ExplodingLMHead()
         runner._infer_time_ms = 0.0
 
-        self.assertEqual(runner.infer(["input"], skip_lm_head=True), ["hidden"])
-        self.assertEqual(body.calls, [["input"]])
+        assert runner.infer(["input"], skip_lm_head=True) == ["hidden"]
+        assert body.calls == [["input"]]
 
     def test_split_runner_accepts_matching_body_and_lm_head_metadata(self):
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
@@ -238,7 +239,7 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
         ):
             runner = SplitLMHeadRunner(body, "lm_head.vmfb")
 
-        self.assertIs(runner._body, body)
+        assert runner._body is body
 
     def test_split_runner_rejects_lm_head_shape_mismatch(self):
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
@@ -247,7 +248,7 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
             "utils.inference.VMFBInferenceRunner",
             _fake_vmfb_runner([TensorInfo((1, 1, 128), "float32")]),
         ):
-            with self.assertRaisesRegex(ValueError, "input shape"):
+            with pytest.raises(ValueError, match="input shape"):
                 SplitLMHeadRunner(body, "lm_head.vmfb")
 
     def test_split_runner_rejects_lm_head_dtype_mismatch(self):
@@ -257,9 +258,5 @@ class GemmaPrefillLMHeadSkipTest(unittest.TestCase):
             "utils.inference.VMFBInferenceRunner",
             _fake_vmfb_runner([TensorInfo((1, 1, 256), "float16")]),
         ):
-            with self.assertRaisesRegex(ValueError, "input dtype"):
+            with pytest.raises(ValueError, match="input dtype"):
                 SplitLMHeadRunner(body, "lm_head.vmfb")
-
-
-if __name__ == "__main__":
-    unittest.main()
