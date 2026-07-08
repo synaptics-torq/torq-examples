@@ -82,7 +82,7 @@ def _install_runner_import_stubs():
 
 
 _install_runner_import_stubs()
-from gemma3.src.runner import (
+from utils.llm import (
     resolve_token_id_lut,
 )
 from utils.llm import (
