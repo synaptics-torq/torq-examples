@@ -25,6 +25,8 @@ __all__ = [
     "clear_model_dir",
     "base_dir_for",
     "ensure_model",
+    "resolve_repo_id",
+    "local_model_dir",
 ]
 
 logger = logging.getLogger(__name__)
@@ -230,6 +232,31 @@ def base_dir_for(model_dir: Path, repo_id: str) -> Path:
     for _ in Path(repo_id).parts:
         base = base.parent
     return base
+
+
+def resolve_repo_id(model: str, repo_map: dict[str, str]) -> str:
+    """Resolve a model name to its HF repo id via ``repo_map``.
+
+    Unknown names pass through unchanged so callers can also supply a raw repo id.
+    """
+    return repo_map.get(model, model)
+
+
+def local_model_dir(
+    model: str,
+    repo_map: dict[str, str],
+    *,
+    base_dir: str | os.PathLike | None = None,
+) -> Path | None:
+    """Return the local dir for ``model`` if it has a valid manifest, else ``None``.
+
+    The dir is ``base_dir / <resolved repo id>``; ``base_dir`` defaults to
+    :func:`default_models_dir`.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    model_dir = Path(base_dir) / resolve_repo_id(model, repo_map)
+    return model_dir if verify_manifest(model_dir) else None
 
 
 def ensure_model(
