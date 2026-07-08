@@ -26,7 +26,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_gemma_skips_when_revision_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
             model_dir = base_dir / repo_id
             files = [
                 "model.vmfb.trim",
@@ -51,7 +51,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_gemma_repairs_incomplete_download_and_records_lut(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
             model_dir = base_dir / repo_id
             model_dir.mkdir(parents=True)
             (model_dir / "model.vmfb.trim").write_text("model")
@@ -102,7 +102,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_gemma_downloads_split_lm_head_pair(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
             model_dir = base_dir / repo_id
 
             def exists(_repo_id, filename):
@@ -136,7 +136,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_gemma_repairs_existing_split_body_by_fetching_lm_head(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = gemma_setup._HF_REPO_MAP["instruct"]
+            repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
             model_dir = base_dir / repo_id
             model_dir.mkdir(parents=True)
             (model_dir / "transformer.vmfb").write_text("model")
@@ -179,7 +179,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_moonshine_skips_when_revision_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
             files = list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
             for filename in files:
@@ -201,7 +201,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_moonshine_downloads_required_files_and_records_revision(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
 
             with (
@@ -231,7 +231,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_moonshine_refreshes_and_clears_stale_files_on_revision_change(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
             model_dir.mkdir(parents=True)
             # A complete-but-old copy, including a file dropped from the new set.
@@ -281,7 +281,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_inference_refreshes_stale_models(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = self._make_moonshine_copy(base_dir, repo_id, "old-revision")
 
             with (
@@ -304,7 +304,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_inference_no_refresh_skips_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = self._make_moonshine_copy(base_dir, repo_id, "old-revision")
 
             with (
@@ -319,7 +319,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_inference_without_manifest_does_not_download(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
             model_dir.mkdir(parents=True)
 
@@ -335,7 +335,7 @@ class DemoSetupDownloadsTest(unittest.TestCase):
     def test_moonshine_offline_uses_local_files(self):
         with tempfile.TemporaryDirectory() as tmp:
             base_dir = Path(tmp)
-            repo_id = moonshine_setup._HF_REPO_MAP["tiny-en"]
+            repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
             model_dir = base_dir / repo_id
             files = list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
             for filename in files:
