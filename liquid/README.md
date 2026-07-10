@@ -61,15 +61,20 @@ LFM2.5-230M is a hybrid conv + attention model with **14 layers** (8 depthwise-c
 `past_conv.N` state `[1, 1024, 3]`) or an attention block (per-layer KV cache,
 8 KV heads × 64 head-dim, 256-token window).
 
-The runner threads these per-layer conv/KV caches **manually** (present → past,
-kept on the torq device). The generic `ManagedSelfAttnCacheRunner` mishandles
-this model's *mixed* conv/KV cache and yields degenerate output (repeated/garbage
-tokens); the explicit manual threading is bit-exact against the fp32 reference.
+The runner (`src/runner.py`) is a thin subclass of the shared
+[`DecoderOnlyLLMRunner`](../utils/llm.py); it only supplies the LFM2.5 ChatML
+chat format, system-prompt warm-up, and stop conditions. Its
+`ManagedSelfAttnCacheRunner` cache manager is agnostic to what each cached
+tensor is — it zero-inits every per-layer cache from the model's input-shape
+metadata and shuttles each present output back to its past input — so the
+*mixed* conv/KV caches thread correctly with no special-casing (board-verified
+bit-coherent against the fp32 reference).
 
 The token-embedding lookup is done on the CPU from `token_embeddings.npy`; the
 VMFB takes the embedded vector `[1, 1, 1024]` as input 0 (not `input_ids`).
 
 > [!NOTE]
-> The manual-cache runner does not implement the sliding-window KV cache
-> (`--kv-cache-window` / `shift_kv`): generation stops at the 256-token cache
-> limit instead of shifting. Normal short chat turns are unaffected.
+> The sliding-window KV shift (`--kv-cache-window` / `shift_kv`) is left off for
+> LFM2.5: it slices a KV sequence axis, which is not safe for the rank-3 conv
+> caches. Generation stops at the 256-token cache limit instead of shifting;
+> normal short chat turns are unaffected.
