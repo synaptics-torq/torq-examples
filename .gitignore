@@ -18,3 +18,5 @@ test/
 
 # internal usage/benchmark doc — kept local, not part of the committed demo
 liquidAI-VLM/lfm2-vl-450m-usage.md
+# Local board handoff notes — contains internal IPs/ssh details, do not commit
+RUN_ON_BOARD.md
