@@ -63,15 +63,11 @@ Dir: `~/torq/torq-examples/liquidAI-LLM/`. Model dir:
 `token_embeddings.npy` / `config.json` / `tokenizer.json` from
 [`Synaptics/liquidAI-LFM2p5-230M-LLM`](https://huggingface.co/Synaptics/liquidAI-LFM2p5-230M-LLM).
 Interactive chat loop; `--instruct-model` enables the ChatML/system-prompt; type
-`exit` to quit. ~6.3 tok/s on the SL2619.
+`exit` to quit. ~6.3 tok/s on the SL2619. Runs the **split** decoder (body +
+lm_head) — the lm_head is skipped during prefill (TTFT ~2381 → 1578 ms):
 
-**Monolithic:**
 ```sh
 cd ~/torq/torq-examples/liquidAI-LLM
-python src/infer.py -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/model.vmfb --instruct-model
-```
-**Split (lower TTFT — lm_head skipped during prefill, ~2381 → 1578 ms):**
-```sh
 python src/infer.py \
   -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/body.vmfb \
   --lm-head ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/lm_head.vmfb --instruct-model
