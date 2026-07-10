@@ -21,9 +21,8 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
     "230m": "Synaptics/liquidAI-LFM2p5-230M-LLM",
 }
 _LIQUID_MODEL_FILENAMES: Final[list[str]] = [
-    "model.vmfb",   # fused decoder (monolithic)
-    "body.vmfb",    # decoder minus lm_head (split path)
-    "lm_head.vmfb", # standalone lm_head (split path)
+    "body.vmfb",    # decoder minus lm_head
+    "lm_head.vmfb", # standalone lm_head (skipped during prefill)
 ]
 _LIQUID_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "token_embeddings.npy",

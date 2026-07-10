@@ -16,9 +16,8 @@ into `models/Synaptics/liquidAI-LFM2p5-230M-LLM/`:
 
 ```
 models/Synaptics/liquidAI-LFM2p5-230M-LLM/
-├── model.vmfb            ← full decoder (logits output, bf16, 256-token KV cache)
-├── body.vmfb             ← decoder minus lm_head (hidden output) — for the split path
-├── lm_head.vmfb          ← standalone lm_head (hidden -> logits)
+├── body.vmfb             ← decoder minus lm_head (hidden output, bf16, 256-token KV cache)
+├── lm_head.vmfb          ← standalone lm_head (hidden -> logits; skipped during prefill)
 ├── token_embeddings.npy  ← CPU-side embedding LUT (bf16)
 ├── config.json
 └── tokenizer.json
@@ -26,27 +25,10 @@ models/Synaptics/liquidAI-LFM2p5-230M-LLM/
 
 ## Running
 
-```sh
-cd liquid
-python src/infer.py -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/model.vmfb --instruct-model
-```
-
-Multi-turn chat loop. Type `exit` or `quit` to stop; press <kbd>Ctrl</kbd>+<kbd>C</kbd>
-/ <kbd>Ctrl</kbd>+<kbd>D</kbd> to interrupt an in-flight answer. Stats print per
-answer as `(<total_ms>, TTFT: <ms>, <tok/s>)` — the 230M runs ~6.3 tok/s on the
-SL2619. `--instruct-model` enables the ChatML chat format + system-prompt warm-up
-(drop it for a base/completion model).
-
-Run `python src/infer.py -h` for all options.
-
-## Faster TTFT: split body + lm_head
-
-The decoder runs one token per NPU invocation, and the `[1024, 65536]` lm_head
-MatMul (~134 MB bf16) produces logits — needed **only** when a token is sampled.
-Split the decoder into a **body** (decoder minus lm_head → hidden state) and a
-standalone **lm_head** (hidden → logits): the body runs every step; the lm_head
-runs only when sampling (the last prefill token + each decode step), so
-**prefill skips the lm_head entirely**.
+The decoder is split into a **body** (decoder minus lm_head → hidden state) and a
+standalone **lm_head** (hidden → logits). The `[1024, 65536]` lm_head MatMul
+(~134 MB bf16) only produces logits, so it runs only when a token is sampled (the
+last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
 cd liquid
@@ -56,15 +38,21 @@ python src/infer.py \
   --instruct-model
 ```
 
-- `-m` is the **body** vmfb; `--lm-head` is the standalone lm_head vmfb.
-- The body's hidden state (`[1,1,1024]`, 2 KB) is handed to the lm_head via the host.
-- Measured on the SL2619: TTFT 2381 ms → **1578 ms** (−34%); decode 6.3 tok/s in
-  both modes. The win scales with prompt length (more prefill tokens skip the lm_head).
+`-m` is the **body** vmfb; `--lm-head` is the standalone lm_head. Multi-turn chat
+loop — type `exit` or `quit` to stop; press <kbd>Ctrl</kbd>+<kbd>C</kbd> /
+<kbd>Ctrl</kbd>+<kbd>D</kbd> to interrupt an in-flight answer. Stats print per
+answer as `(<total_ms>, TTFT: <ms>, <tok/s>)` — the 230M runs ~6.3 tok/s on the
+SL2619, TTFT ~1.6 s (skipping the lm_head in prefill is ~34% faster than the
+fused model). `--instruct-model` enables the ChatML chat format + system-prompt
+warm-up (drop it for a base/completion model). Run `python src/infer.py -h` for
+all options.
 
 > [!TIP]
 > The `body.vmfb` + `lm_head.vmfb` pair is produced by the exporter's
 > `--split-decoder` flag:
 > `torq-export-model liquid --model-size 230m --convert-dtypes --extract-embeddings --split-decoder`.
+> (A fused single-file `model.vmfb` — run with just `-m`, no `--lm-head` — is also
+> in the HF repo if you prefer the monolithic path.)
 
 ## Model notes
 
