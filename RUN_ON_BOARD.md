@@ -55,34 +55,26 @@ python src/infer.py \
 - Stats line: `(vision: <ms>, prefill: <N tok>, TTFT: <ms>, gen: <N tok @ tok/s>)`. `prefill` = input tokens (image + text); `gen` = generated; TTFT excludes model load.
 - 256-res images for the 64-token path: `../data/vlm/two-dogs-256.jpg`, `cats-and-dogs-256.jpg`, `dogs-256.jpg`.
 
-## LLM — LFM2.5-350M (text chat)
+## LLM — LFM2.5-230M (text chat)
 
-Dir: `~/torq/torq-examples/liquidAI-LLM/`. Model dir: `../models/Synaptics/LFM2.5-350M-torq/`. Interactive chat loop; `--instruct-model` enables the ChatML/system-prompt; type `exit` to quit.
+Dir: `~/torq/torq-examples/liquidAI-LLM/`. Model dir:
+`../models/Synaptics/liquidAI-LFM2p5-230M-LLM/` — fetch with
+`python setup_demos.py liquid`, or download the vmfbs +
+`token_embeddings.npy` / `config.json` / `tokenizer.json` from
+[`Synaptics/liquidAI-LFM2p5-230M-LLM`](https://huggingface.co/Synaptics/liquidAI-LFM2p5-230M-LLM).
+Interactive chat loop; `--instruct-model` enables the ChatML/system-prompt; type
+`exit` to quit. ~6.3 tok/s on the SL2619.
 
 **Monolithic:**
 ```sh
 cd ~/torq/torq-examples/liquidAI-LLM
-python src/infer.py -m ../models/Synaptics/LFM2.5-350M-torq/model.vmfb --instruct-model
+python src/infer.py -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/model.vmfb --instruct-model
 ```
-**Split (lower TTFT):**
+**Split (lower TTFT — lm_head skipped during prefill, ~2381 → 1578 ms):**
 ```sh
 python src/infer.py \
-  -m ../models/Synaptics/LFM2.5-350M-torq/body.vmfb \
-  --lm-head ../models/Synaptics/LFM2.5-350M-torq/lm_head.vmfb --instruct-model
-```
-
-## LLM — LFM2.5-230M (text chat)
-
-Smaller/faster LFM2.5 (14 layers vs 16; ~6.3 tok/s vs ~4.5 on the SL2619).
-Model dir: `../models/Synaptics/liquidAI-LFM2p5-230M-LLM/` (fetch it with
-`python liquid/setup_demo.py 230m`, or download `model.vmfb`,
-`token_embeddings.npy`, `config.json`, `tokenizer.json` from
-[`Synaptics/liquidAI-LFM2p5-230M-LLM`](https://huggingface.co/Synaptics/liquidAI-LFM2p5-230M-LLM)).
-Single fused vmfb — no split variant.
-
-```sh
-cd ~/torq/torq-examples/liquidAI-LLM
-python src/infer.py -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/model.vmfb --instruct-model
+  -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/body.vmfb \
+  --lm-head ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/lm_head.vmfb --instruct-model
 ```
 
 ## Key gotchas

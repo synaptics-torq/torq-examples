@@ -17,12 +17,13 @@ from utils.download import (
 logger = logging.getLogger("Liquid.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/LFM2.5-350M-torq",
-    "350m": "Synaptics/LFM2.5-350M-torq",
+    "default": "Synaptics/liquidAI-LFM2p5-230M-LLM",
     "230m": "Synaptics/liquidAI-LFM2p5-230M-LLM",
 }
 _LIQUID_MODEL_FILENAMES: Final[list[str]] = [
-    "model.vmfb",
+    "model.vmfb",   # fused decoder (monolithic)
+    "body.vmfb",    # decoder minus lm_head (split path)
+    "lm_head.vmfb", # standalone lm_head (split path)
 ]
 _LIQUID_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "token_embeddings.npy",
@@ -48,27 +49,23 @@ def _has_liquid_files(model_dir: Path) -> bool:
 
 
 def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
-    """Download model.vmfb."""
+    """Download the model vmfbs (fused model.vmfb + the split body/lm_head pair,
+    whichever the repo has). Downloads each missing file individually so a
+    partially-populated dir is completed rather than skipped."""
     local_dir = base_dir / repo_id
-    existing = [
-        filename for filename in _LIQUID_MODEL_FILENAMES
-        if (local_dir / filename).exists()
-    ]
-    if existing:
-        return existing
-
-    downloaded: list[str] = []
+    present: list[str] = []
     for filename in _LIQUID_MODEL_FILENAMES:
+        if (local_dir / filename).exists():
+            present.append(filename)
+            continue
         if _hf_file_exists(repo_id, filename):
             download_from_hf(repo_id, filename, base_dir=base_dir)
             logger.info("Downloaded %s from %s", filename, repo_id)
-            downloaded.append(filename)
+            present.append(filename)
 
-    if not downloaded:
-        raise FileNotFoundError(
-            f"model.vmfb not found in {repo_id}"
-        )
-    return downloaded
+    if not present:
+        raise FileNotFoundError(f"no model vmfb found in {repo_id}")
+    return present
 
 
 def setup_liquid(models: list[str]):
