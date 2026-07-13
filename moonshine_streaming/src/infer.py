@@ -119,6 +119,7 @@ class TerminalListener:
     """ANSI terminal renderer supporting clean wrapped multi-line overwriting."""
     def __init__(self):
         self.prev_rows = 1
+        self._last_live_draw = 0.0
 
     def draw(self, text):
         try:
@@ -127,12 +128,30 @@ class TerminalListener:
             cols = 80
         if self.prev_rows > 1:
             sys.stdout.write(f"\033[{self.prev_rows - 1}A")
-        sys.stdout.write("\r\033[J")
+        sys.stdout.write("\r")
+        # Paint the new frame over the old one in place (unchanged characters
+        # are simply overwritten, never blanked), then trim whatever trails
+        # off past the new content. Erasing *before* writing (the previous
+        # order) blanks the whole block on every redraw, which is what
+        # produced the visible flicker at the ~12.5 Hz this is called during
+        # speech.
         sys.stdout.write(text)
+        sys.stdout.write("\033[J")
         sys.stdout.flush()
         visible = _ANSI_RE.sub('', text)
         rows = sum(max(1, (len(line) + cols - 1) // cols) for line in visible.split('\n'))
         self.prev_rows = max(1, rows)
+
+    def draw_live(self, text, min_interval=0.1):
+        """Throttled variant of draw() for the high-frequency, mostly-cosmetic
+        live indicator (vol/buffer bars), which is otherwise redrawn on every
+        80 ms audio chunk (~12.5 Hz) even when nothing meaningful changed.
+        Skips the redraw if the previous one was less than min_interval ago."""
+        now = time.monotonic()
+        if now - self._last_live_draw < min_interval:
+            return
+        self._last_live_draw = now
+        self.draw(text)
 
     def complete_line(self):
         sys.stdout.write("\n")
@@ -536,20 +555,16 @@ def main(args: argparse.Namespace):
                         chunks_since_decode = 0
 
                     text = tokenizer.decode(tokens, skip_special_tokens=True) if tokens else ""
+                    dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
+                    indicator = (
+                        f"{dot} Utterance #{utterance_count}"
+                        f"  vol {_vol_bar(vad.last_rms, vad.threshold)}"
+                        f"  buf {_buf_bar(state.cross_kv_fill, model.max_memory_len)}"
+                    )
                     if vad.silence_remaining_sec > 0:
-                        indicator = (
-                            f"\033[33m●\033[0m Utterance #{utterance_count}"
-                            f"  finalizing in \033[33m{vad.silence_remaining_sec:.1f}s\033[0m"
-                            f"  {_vol_bar(vad.last_rms, vad.threshold)}"
-                            f"  buf {_buf_bar(state.cross_kv_fill, model.max_memory_len)}"
-                        )
-                    else:
-                        indicator = (
-                            f"\033[32m●\033[0m Utterance #{utterance_count}"
-                            f"  vol {_vol_bar(vad.last_rms, vad.threshold)}"
-                            f"  buf {_buf_bar(state.cross_kv_fill, model.max_memory_len)}"
-                        )
-                    terminal.draw(f"{indicator}\n{text if text else '...'}")
+                        # Constant label, only the trailing seconds count changes.
+                        indicator += f"  \033[33mfinalizing {vad.silence_remaining_sec:.1f}s\033[0m"
+                    terminal.draw_live(f"{indicator}\n{text if text else '...'}")
 
                 elif vad_status == "speech_end":
                     terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
