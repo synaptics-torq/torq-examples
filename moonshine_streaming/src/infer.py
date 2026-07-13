@@ -620,42 +620,53 @@ def main(args: argparse.Namespace):
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
 
-    if wav_mode:
-        print("\n[VAD] Calibrating noise floor from synthetic silence lead-in...", file=sys.stderr)
-        print(f">>> Transcribing {args.wav} (Static 2-Split VMFB)... <<<\n", file=sys.stderr)
-        try:
-            feed_wav_to_queue()
-            worker_thread.join()
-        except KeyboardInterrupt:
-            print("\n\nInterrupted...", file=sys.stderr)
-            running = False
-            worker_thread.join(timeout=1.0)
-        finally:
-            print_profile_summary()
-    else:
-        print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
-        sd_stream.start()
-        time.sleep(1.0)
-
-        print(
-            ">>> Listening (Static 2-Split VMFB). Start speaking! Press Ctrl+C to exit. <<<\n",
-            file=sys.stderr,
-        )
-
-        try:
-            while True:
-                time.sleep(0.1)
-        except KeyboardInterrupt:
-            print("\n\nExiting...", file=sys.stderr)
-        finally:
-            running = False
+    # Hide the terminal cursor while the live transcript is being redrawn in
+    # place — draw() writes "\r" (parking the cursor at column 0, right on
+    # the leading "●") before overwriting it with new text, so at the redraw
+    # rate used here the terminal's own blinking block cursor visibly flashes
+    # over that character. Always restored in the finally below.
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        if wav_mode:
+            print("\n[VAD] Calibrating noise floor from synthetic silence lead-in...", file=sys.stderr)
+            print(f">>> Transcribing {args.wav} (Static 2-Split VMFB)... <<<\n", file=sys.stderr)
             try:
-                sd_stream.stop()
-                sd_stream.close()
-            except Exception:
-                pass
-            worker_thread.join(timeout=1.0)
-            print_profile_summary()
+                feed_wav_to_queue()
+                worker_thread.join()
+            except KeyboardInterrupt:
+                print("\n\nInterrupted...", file=sys.stderr)
+                running = False
+                worker_thread.join(timeout=1.0)
+            finally:
+                print_profile_summary()
+        else:
+            print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
+            sd_stream.start()
+            time.sleep(1.0)
+
+            print(
+                ">>> Listening (Static 2-Split VMFB). Start speaking! Press Ctrl+C to exit. <<<\n",
+                file=sys.stderr,
+            )
+
+            try:
+                while True:
+                    time.sleep(0.1)
+            except KeyboardInterrupt:
+                print("\n\nExiting...", file=sys.stderr)
+            finally:
+                running = False
+                try:
+                    sd_stream.stop()
+                    sd_stream.close()
+                except Exception:
+                    pass
+                worker_thread.join(timeout=1.0)
+                print_profile_summary()
+    finally:
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
 
 
 if __name__ == "__main__":
