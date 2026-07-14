@@ -15,12 +15,15 @@ from utils.download import (
     ensure_model,
     get_hf_revision,
     read_manifest,
+    resolve_repo_id,
     verify_manifest,
 )
 
 logger = logging.getLogger("object_detection.setup")
 
-_HF_REPO_ID: Final[str] = "Synaptics/yolov8-od-nano-320-int8-torq"
+_OD_HF_REPO_MAP: Final[dict[str, str]] = {
+    "nano": "Synaptics/yolov8-od-nano-320-int8-torq",
+}
 _MODEL_FILENAME: Final[str] = "yolo_8n_2.0.0_npu.vmfb"
 _LABELS_FILENAME: Final[str] = "labels.json"
 _SAMPLES_PREFIX: Final[str] = "samples/"
@@ -73,6 +76,35 @@ def _refresh_object_detection(repo_id: str, model_dir: Path, base_dir: Path) -> 
         download=lambda: _download_object_detection(repo_id, base_dir),
     )
 
+def download_object_detection(
+    models: list[str] | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> dict[str, Path]:
+    """Download/refresh the given Yolo models; return ``{name: model_dir}``.
+
+    Unlike :func:`setup_object_detection`, this does not check demo requirements, so it
+    can be reused by other projects that manage their own environment and models dir.
+    """
+    if models is None:
+        models = ["nano"]
+    if base_dir is None:
+        base_dir = default_models_dir()
+    base_dir = Path(base_dir)
+
+    logger.info("Resolving Yolo models: [%s]", ", ".join(models))
+    result: dict[str, Path] = {}
+    for name in models:
+        repo_id = resolve_repo_id(name, _OD_HF_REPO_MAP)
+        model_dir = base_dir / repo_id
+        try:
+            _refresh_object_detection(repo_id, model_dir, base_dir)
+        except Exception as exc:
+            raise DownloadError(f"Unable to download Yolo files from {repo_id}") from exc
+        result[name] = model_dir
+        logger.info("Yolo model files ready at '%s'", model_dir)
+    return result
+
 
 def ensure_object_detection_models(model_dir: str | Path, *, refresh: bool = True) -> None:
     """Verify/refresh object detection assets before inference.
@@ -107,7 +139,7 @@ def ensure_object_detection_models(model_dir: str | Path, *, refresh: bool = Tru
 
 
 def setup_object_detection():
-    repo_id = _HF_REPO_ID
+    repo_id = _OD_HF_REPO_MAP["nano"]
     base_dir = default_models_dir()
     model_dir = base_dir / repo_id
 
