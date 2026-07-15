@@ -3,9 +3,10 @@
 
 """Moonshine streaming microphone demo (2-Split VMFB).
 
-Captures live microphone audio, runs a self-calibrating energy VAD to split
-utterances, and transcribes them with committed-prefix incremental decode for a
-real-time live preview. See ``runner.py`` for the inference engine.
+Captures live microphone audio, runs a VAD (self-calibrating energy detector,
+or optionally Silero's neural VAD) to split utterances, and transcribes them
+with committed-prefix incremental decode for a real-time live preview. See
+``runner.py`` for the inference engine.
 """
 
 import argparse
@@ -35,6 +36,7 @@ except ImportError:
     sys.exit(1)
 
 from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
+from utils.download import default_models_dir, download_from_url
 from utils.log import add_logging_args, configure_logging
 
 logger = logging.getLogger("moonshine_streaming")
@@ -49,45 +51,38 @@ _END_OF_STREAM = object()
 
 # ── VAD ───────────────────────────────────────────────────────────────────────
 
-class EnergyVAD:
+# Pinned release of https://github.com/snakers4/silero-vad — same ONNX graph
+# published under the `silero-vad` PyPI package, fetched directly so this demo
+# doesn't need to pull in Silero's torch/torchaudio dependencies just to reach
+# a 2 MB onnx file.
+_SILERO_VAD_URL = "https://github.com/snakers4/silero-vad/raw/v5.1.2/src/silero_vad/data/silero_vad.onnx"
+
+
+class _HangoverVAD:
     """
-    Simple RMS energy-based voice activity detector for streaming.
-    Self-calibrating: samples ambient noise during the first 12 chunks (~960 ms).
+    Shared speech/silence endpointing: given a per-chunk score from a
+    subclass, tracks speech_start/speech_end transitions with a fixed
+    silence-duration hangover before ending an utterance. Both VAD backends
+    below are driven by this identical state machine — only how the score is
+    computed differs.
     """
-    def __init__(self, threshold=0.015, silence_duration=2.5, sample_rate=16000,
-                 report_calibration=False):
-        self.base_threshold           = threshold
+    def __init__(self, threshold, silence_duration, sample_rate):
         self.threshold                = threshold
         self.silence_duration_samples = int(silence_duration * sample_rate)
         self.sample_rate              = sample_rate
-        self.report_calibration       = report_calibration
         self.silence_counter          = 0
         self.is_speaking              = False
-        self.ambient_rms              = []
-        self.calibrated               = False
-        self.last_rms                 = 0.0
+        self.last_score               = 0.0
         self.silence_remaining_sec    = 0.0
 
+    def _score(self, audio_chunk) -> float:
+        raise NotImplementedError
+
     def process_chunk(self, audio_chunk):
-        rms = np.sqrt(np.mean(audio_chunk ** 2)) if len(audio_chunk) > 0 else 0.0
-        self.last_rms = rms
+        score = self._score(audio_chunk)
+        self.last_score = score
 
-        if not self.calibrated:
-            self.ambient_rms.append(rms)
-            if len(self.ambient_rms) >= 12:
-                mean_rms = np.mean(self.ambient_rms)
-                std_rms  = np.std(self.ambient_rms)
-                self.threshold = max(mean_rms + 4 * std_rms, self.base_threshold)
-                if self.report_calibration:
-                    print(
-                        f"\n[VAD Calibration] Ambient Noise RMS: {mean_rms:.5f} "
-                        f"(std: {std_rms:.5f}). Threshold set to: {self.threshold:.5f}",
-                        file=sys.stderr,
-                    )
-                self.calibrated = True
-            return "silence"
-
-        is_speech = rms > self.threshold
+        is_speech = score > self.threshold
         if is_speech:
             self.silence_counter       = 0
             self.silence_remaining_sec = 0.0
@@ -108,6 +103,105 @@ class EnergyVAD:
                 return "speech"
             self.silence_remaining_sec = 0.0
             return "silence"
+
+
+class EnergyVAD(_HangoverVAD):
+    """
+    Simple RMS energy-based voice activity detector for streaming.
+    Self-calibrating: samples ambient noise during the first 12 chunks (~960 ms).
+    """
+    def __init__(self, threshold=0.015, silence_duration=2.5, sample_rate=16000,
+                 report_calibration=False):
+        super().__init__(threshold, silence_duration, sample_rate)
+        self.base_threshold     = threshold
+        self.report_calibration = report_calibration
+        self.ambient_rms        = []
+        self.calibrated         = False
+
+    def _score(self, audio_chunk):
+        return np.sqrt(np.mean(audio_chunk ** 2)) if len(audio_chunk) > 0 else 0.0
+
+    def process_chunk(self, audio_chunk):
+        if not self.calibrated:
+            rms = self._score(audio_chunk)
+            self.last_score = rms
+            self.ambient_rms.append(rms)
+            if len(self.ambient_rms) >= 12:
+                mean_rms = np.mean(self.ambient_rms)
+                std_rms  = np.std(self.ambient_rms)
+                self.threshold = max(mean_rms + 4 * std_rms, self.base_threshold)
+                if self.report_calibration:
+                    print(
+                        f"\n[VAD Calibration] Ambient Noise RMS: {mean_rms:.5f} "
+                        f"(std: {std_rms:.5f}). Threshold set to: {self.threshold:.5f}",
+                        file=sys.stderr,
+                    )
+                self.calibrated = True
+            return "silence"
+        return super().process_chunk(audio_chunk)
+
+
+class SileroVAD(_HangoverVAD):
+    """
+    Neural VAD using Silero's ONNX model (https://github.com/snakers4/silero-vad).
+    The exported graph only accepts fixed-size windows (validated here for
+    192-512 samples at 16 kHz); each incoming pipeline chunk is split into
+    512-sample (32 ms) windows, zero-padding a short final window, and the max
+    per-window speech probability becomes the chunk's score — so one utterance
+    onset anywhere in the chunk is enough to trigger speech_start.
+    """
+    _WINDOW = 512  # samples per native inference call at 16 kHz
+
+    def __init__(self, model_path, threshold=0.5, silence_duration=2.5, sample_rate=16000,
+                 report_calibration=False):
+        if sample_rate != 16000:
+            raise ValueError("SileroVAD only supports 16 kHz audio")
+        super().__init__(threshold, silence_duration, sample_rate)
+        try:
+            import onnxruntime as ort
+        except ImportError:
+            print("Error: onnxruntime is required for --vad-backend silero. Install it with:",
+                  file=sys.stderr)
+            print("  pip install onnxruntime", file=sys.stderr)
+            sys.exit(1)
+        self.session     = ort.InferenceSession(str(model_path), providers=["CPUExecutionProvider"])
+        self._state      = np.zeros((2, 1, 128), dtype=np.float32)
+        self._sr         = np.array(sample_rate, dtype=np.int64)
+        self.calibrated  = True  # fixed probability threshold, no ambient-noise warm-up needed
+        if report_calibration:
+            print(f"\n[VAD] Silero neural VAD ready — probability threshold: {threshold:.2f}",
+                  file=sys.stderr)
+
+    def _score(self, audio_chunk):
+        if len(audio_chunk) == 0:
+            return 0.0
+        prob = 0.0
+        for start in range(0, len(audio_chunk), self._WINDOW):
+            window = audio_chunk[start:start + self._WINDOW]
+            if len(window) < self._WINDOW:
+                window = np.pad(window, (0, self._WINDOW - len(window)))
+            out, self._state = self.session.run(
+                None,
+                {
+                    "input": window[np.newaxis, :].astype(np.float32),
+                    "state": self._state,
+                    "sr":    self._sr,
+                },
+            )
+            prob = max(prob, float(out[0, 0]))
+        return prob
+
+
+def _resolve_silero_model_path(explicit_path):
+    """Return a local path to the Silero VAD onnx model, downloading it into
+    the shared models dir (next to the ASR model files) on first use."""
+    if explicit_path:
+        return Path(explicit_path)
+    target = default_models_dir() / "silero_vad" / "silero_vad.onnx"
+    if not target.exists():
+        logger.info("Downloading Silero VAD model to %s ...", target)
+        download_from_url(_SILERO_VAD_URL, target)
+    return target
 
 
 # ── Terminal renderer ─────────────────────────────────────────────────────────
@@ -413,7 +507,17 @@ def main(args: argparse.Namespace):
             logger.error("Error opening audio device: %s", e)
             sys.exit(1)
 
-    vad      = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
+    vad_threshold = args.vad_threshold
+    if vad_threshold is None:
+        vad_threshold = 0.5 if args.vad_backend == "silero" else 0.010
+    if args.vad_backend == "silero":
+        vad_model_path = _resolve_silero_model_path(args.vad_model)
+        logger.info("VAD backend:      silero (%s, threshold %.2f)", vad_model_path, vad_threshold)
+        vad = SileroVAD(vad_model_path, threshold=vad_threshold, silence_duration=args.vad_silence,
+                         report_calibration=args.profile)
+    else:
+        logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", vad_threshold)
+        vad = EnergyVAD(threshold=vad_threshold, silence_duration=args.vad_silence,
                          report_calibration=args.profile)
     terminal = TerminalListener()
     state    = model.create_state()
@@ -558,7 +662,7 @@ def main(args: argparse.Namespace):
                     dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
                     indicator = (
                         f"{dot} Utterance #{utterance_count}"
-                        f"  vol {_vol_bar(vad.last_rms, vad.threshold)}"
+                        f"  vol {_vol_bar(vad.last_score, vad.threshold)}"
                         f"  buf {_buf_bar(state.cross_kv_fill, model.max_memory_len)}"
                     )
                     if vad.silence_remaining_sec > 0:
@@ -629,7 +733,8 @@ def main(args: argparse.Namespace):
     sys.stdout.flush()
     try:
         if wav_mode:
-            print("\n[VAD] Calibrating noise floor from synthetic silence lead-in...", file=sys.stderr)
+            if args.vad_backend == "energy":
+                print("\n[VAD] Calibrating noise floor from synthetic silence lead-in...", file=sys.stderr)
             print(f">>> Transcribing {args.wav} (Static 2-Split VMFB)... <<<\n", file=sys.stderr)
             try:
                 feed_wav_to_queue()
@@ -641,7 +746,8 @@ def main(args: argparse.Namespace):
             finally:
                 print_profile_summary()
         else:
-            print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
+            if args.vad_backend == "energy":
+                print("\n[VAD] Calibrating noise floor — please remain silent...", file=sys.stderr)
             sd_stream.start()
             time.sleep(1.0)
 
@@ -681,7 +787,11 @@ if __name__ == "__main__":
                         choices=["sim", "astra_machina", "soc_fpga", "aws_fpga"],
                         help="Torq hardware type flag (default: astra_machina)")
     parser.add_argument("--function",      type=str,   default="main",         help="VMFB entry function name (default: main)")
-    parser.add_argument("--vad-threshold", type=float, default=0.010,          help="Minimum VAD energy threshold (default: 0.010)")
+    parser.add_argument("--vad-backend",   type=str,   default="energy",
+                        choices=["energy", "silero"],
+                        help="VAD implementation: self-calibrating RMS energy, or Silero's neural VAD (default: energy)")
+    parser.add_argument("--vad-model",     type=str,   default=None,           help="Path to the Silero VAD onnx file (only used with --vad-backend silero; default: auto-download into the shared models dir)")
+    parser.add_argument("--vad-threshold", type=float, default=None,           help="VAD trigger threshold: RMS floor for 'energy' (default: 0.010), speech probability for 'silero' (default: 0.5)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
     parser.add_argument("--preview-every", type=int,   default=5,              help="Chunks the decoder waits between live preview decodes (default: 5)")

@@ -1,8 +1,9 @@
 # Moonshine Streaming Demo
 
 Real-time microphone transcription with Moonshine-tiny English using a 2-split
-Torq VMFB model (fused encoder + KV decoder). A self-calibrating energy VAD splits
-utterances and a committed-prefix incremental decoder gives a live preview.
+Torq VMFB model (fused encoder + KV decoder). A VAD (self-calibrating energy
+detector by default, or optionally Silero's neural VAD) splits utterances and
+a committed-prefix incremental decoder gives a live preview.
 
 > Requires a working microphone and the `sounddevice` package (PortAudio) — unless
 > you use [`--wav`](#transcribing-a-wav-file) to transcribe a pre-recorded file
@@ -44,6 +45,17 @@ above is equivalent to:
 python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq \
     --hw-type astra_machina --device 1 --vad-silence 2.5 --vad-threshold 0.010 --preview-every 5
 ```
+
+To try the Silero neural VAD instead of the default energy detector (see the
+VAD step under [Step by step](#step-by-step) below for the tradeoff), install
+`onnxruntime` and pass `--vad-backend silero`:
+
+```sh
+pip install onnxruntime
+python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --vad-backend silero
+```
+
+The Silero onnx model (~2 MB) is auto-downloaded on first use.
 
 List audio input devices and pick a different one:
 
@@ -188,7 +200,7 @@ mic ──callback──> audio_queue ──> worker thread ──> resample to 
                                         │
                           ┌─────────────┴──────────────┐
                           ▼                             ▼
-                      EnergyVAD                  if speaking:
+                   EnergyVAD/SileroVAD          if speaking:
                    (speech? silence?)       process_audio_chunk()  ← ENCODER
                           │                        │ grows cross-KV
                           │                        ▼
@@ -228,11 +240,26 @@ across utterances):
 Nothing is reallocated during streaming. `reset()` (on `speech_start`) clears
 `cross_kv_fill`, `chunk_idx`, `committed_tokens`, `recent_hyps`.
 
-**4. VAD** (`EnergyVAD`): a self-calibrating RMS energy detector. It samples the
-room for the first ~12 chunks (~1 s) and sets `threshold = max(mean + 4·std,
---vad-threshold)`, then per chunk emits `speech_start` / `speech` / `speech_end`
-(after `--vad-silence` s of quiet) / `silence`. (The `[VAD Calibration]` line only
-prints with `--profile`.)
+**4. VAD** — two interchangeable backends, selected with `--vad-backend`, sharing
+the same speech/silence endpointing state machine (`_HangoverVAD`): per chunk
+they emit `speech_start` / `speech` / `speech_end` (after `--vad-silence` s of
+quiet) / `silence`.
+
+- `energy` (default, `EnergyVAD`): a self-calibrating RMS energy detector. It
+  samples the room for the first ~12 chunks (~1 s) and sets
+  `threshold = max(mean + 4·std, --vad-threshold)`. (The `[VAD Calibration]`
+  line only prints with `--profile`.) Zero extra dependencies, but it can't
+  tell speech from any other sound of similar loudness.
+- `silero` (`SileroVAD`): runs [Silero's](https://github.com/snakers4/silero-vad)
+  small neural VAD (ONNX, ~2 MB) instead of raw RMS — actually models
+  speech's spectral/temporal structure, so it's far more robust to
+  non-stationary background noise (coughs, TV, keyboard, HVAC). Each 1280-sample
+  pipeline chunk is split into 512-sample windows fed through the model in
+  sequence (max probability across windows = the chunk's score), compared
+  against `--vad-threshold` (default `0.5`, a probability). Requires
+  `onnxruntime` (`pip install onnxruntime`); the onnx model itself is
+  auto-downloaded on first use into `models/silero_vad/silero_vad.onnx`, or
+  point `--vad-model` at a local copy.
 
 **5. Encoder step** (`process_audio_chunk`, runs on every speech chunk). Builds a
 feed dict keyed by the encoder's input names (audio, the three rolling buffers, a
