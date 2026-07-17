@@ -22,7 +22,7 @@ logger = logging.getLogger("LiquidVL.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/LiquidAI-LFM2-VL-450M",
-    "liquidAI-VLM": "Synaptics/LiquidAI-LFM2-VL-450M",  # accept the demo name as an alias
+    "LiquidAI-LFM2-VL-450M": "Synaptics/LiquidAI-LFM2-VL-450M",  # accept the demo name as an alias
 }
 
 # The full LFM2-VL-450M asset set the demo needs for the one-shot image-prefill
@@ -80,7 +80,7 @@ def ensure_lfm2vl_models(model_dir: str | Path, *, refresh: bool = True) -> None
     if not repo_id:
         logger.warning(
             "No manifest in %s; cannot verify model freshness. "
-            "Run `python setup_demos.py liquidAI-VLM` if inference fails.",
+            "Run `python setup_demos.py LiquidAI-LFM2-VL-450M` if inference fails.",
             model_dir,
         )
         return
@@ -93,7 +93,7 @@ def ensure_lfm2vl_models(model_dir: str | Path, *, refresh: bool = True) -> None
 
 
 def setup_liquidvl(models: list[str]):
-    logger.info("Setting up liquidAI-VLM demo with models: [%s]", ", ".join(models))
+    logger.info("Setting up LiquidAI-LFM2-VL-450M demo with models: [%s]", ", ".join(models))
     repos = [_HF_REPO_MAP.get(m, m) for m in models]
     base_dir = default_models_dir()
     for repo_id in repos:
@@ -103,11 +103,11 @@ def setup_liquidvl(models: list[str]):
         except Exception as e:
             raise DownloadError(f"Unable to download model files from {repo_id}") from e
         if status is ModelStatus.UP_TO_DATE:
-            logger.info("Using local liquidAI-VLM model files from %s", model_dir)
+            logger.info("Using local LiquidAI-LFM2-VL-450M model files from %s", model_dir)
         else:
-            logger.info("Downloaded liquidAI-VLM model files from %s", repo_id)
+            logger.info("Downloaded LiquidAI-LFM2-VL-450M model files from %s", repo_id)
     check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("liquidAI-VLM setup complete. Model dir: %s", base_dir / repos[0])
+    logger.info("LiquidAI-LFM2-VL-450M setup complete. Model dir: %s", base_dir / repos[0])
 
 
 if __name__ == "__main__":

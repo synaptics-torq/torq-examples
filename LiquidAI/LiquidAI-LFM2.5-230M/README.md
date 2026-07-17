@@ -7,7 +7,7 @@ Interactive text chat with LiquidAI **LFM2.5-230M** using a Torq VMFB.
 From the repo root — downloads the 230M model from HuggingFace:
 
 ```sh
-python setup_demos.py liquid
+python setup_demos.py LiquidAI-LFM2.5-230M
 ```
 
 This fetches the artifacts from

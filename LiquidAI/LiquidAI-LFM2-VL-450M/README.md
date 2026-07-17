@@ -9,7 +9,7 @@ is encoded once and cached, so you can ask multiple questions about it in one se
 From the repo root, run:
 
 ```sh
-python setup_demos.py liquidAI-VLM
+python setup_demos.py LiquidAI-LFM2-VL-450M
 ```
 
 This downloads the model files to:

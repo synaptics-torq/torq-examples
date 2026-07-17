@@ -68,7 +68,7 @@ def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
 
 
 def setup_liquid(models: list[str]):
-    logger.info("Setting up liquid demo with models: [%s]", ", ".join(models))
+    logger.info("Setting up LiquidAI-LFM2.5-230M demo with models: [%s]", ", ".join(models))
     repos = [_HF_REPO_MAP.get(m, m) for m in models]
     base_dir = default_models_dir()
     for repo_id in repos:
