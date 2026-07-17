@@ -54,3 +54,7 @@ Press <kbd>Ctrl</kbd>+<kbd>C</kbd>/<kbd>D</kbd> to interrupt a generation. Add
 
 Run `python src/infer.py -h` for all options (`--cpu-lm-head`, `--image-decoder`
 splits, `--native-res`, etc.).
+
+This example is a redistribution of a model created by Liquid AI, Inc., licensed 
+under the LFM Open License v1.0.
+
