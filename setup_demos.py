@@ -21,7 +21,7 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = ["gemma3", "liquid", "moonshine", "liquidAI-VLM", "object_detection"]
+DEMOS = ["gemma3", "LiquidAI-LFM2.5-230M", "moonshine", "LiquidAI-LFM2-VL-450M", "object_detection"]
 
 
 def _site_packages_dir() -> str:
@@ -64,7 +64,7 @@ def setup_demo(name: str):
         if name == "gemma3":
             from gemma3.setup_demo import setup_gemma3
             setup_gemma3(["instruct"])
-        elif name == "liquid":
+        elif name == "LiquidAI-LFM2.5-230M":
             # 230M is the LFM2.5 size with a published runtime HF repo
             # (Synaptics/LiquidAI-LFM2.5-230M); the 350M runtime repo is
             # not published yet.
@@ -73,7 +73,7 @@ def setup_demo(name: str):
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
-        elif name == "liquidAI-VLM":
+        elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl(["default"])
         elif name == "object_detection":
