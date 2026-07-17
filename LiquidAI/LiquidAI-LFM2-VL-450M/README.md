@@ -15,7 +15,7 @@ python setup_demos.py liquidAI-VLM
 This downloads the model files to:
 
 ```sh
-models/Synaptics/liquidAI-LFM2-VLM/
+models/Synaptics/LiquidAI-LFM2-VL-450M/
 ```
 
 (~1.6 GB: `vision_encoder_256.vmfb`, `decoder_image_2part_{A,B}.vmfb`,
@@ -23,16 +23,16 @@ models/Synaptics/liquidAI-LFM2-VLM/
 `tokenizer.json`, plus a sample `cats-and-dogs-256.jpg`.)
 
 > [!NOTE]
-> The `Synaptics/liquidAI-LFM2-VLM` repo is private — you need an HF token with read
+> The `Synaptics/LiquidAI-LFM2-VL-450M` repo is private — you need an HF token with read
 > access (`huggingface-cli login`) for the download.
 
 ## Running
 
-Run the demo from the `liquidAI-VLM` directory:
+Run the demo from the `LiquidAI/LiquidAI-LFM2-VL-450M` directory:
 
 ```sh
-cd liquidAI-VLM
-MODELS=../models/Synaptics/liquidAI-LFM2-VLM
+cd LiquidAI/LiquidAI-LFM2-VL-450M
+MODELS=../../models/Synaptics/LiquidAI-LFM2-VL-450M
 python src/infer.py \
   -m              $MODELS/decoder_nolm.vmfb \
   --lm-head       $MODELS/lm_head.vmfb \
