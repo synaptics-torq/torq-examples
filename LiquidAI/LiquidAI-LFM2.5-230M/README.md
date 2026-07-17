@@ -32,6 +32,7 @@ last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
 cd LiquidAI/LiquidAI-LFM2.5-230M
+pip install -r requirements.txt
 python src/infer.py \
   -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/body.vmfb \
   --lm-head ../../models/Synaptics/LiquidAI-LFM2.5-230M/lm_head.vmfb \
