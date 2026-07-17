@@ -22,10 +22,6 @@ models/Synaptics/LiquidAI-LFM2-VL-450M/
 `decoder_nolm.vmfb`, `lm_head.vmfb`, `token_embeddings.npy`, `config.json`,
 `tokenizer.json`, plus a sample `cats-and-dogs-256.jpg`.)
 
-> [!NOTE]
-> The `Synaptics/LiquidAI-LFM2-VL-450M` repo is private — you need an HF token with read
-> access (`huggingface-cli login`) for the download.
-
 ## Running
 
 Run the demo from the `LiquidAI/LiquidAI-LFM2-VL-450M` directory:
