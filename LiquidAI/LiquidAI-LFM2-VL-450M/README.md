@@ -28,6 +28,7 @@ Run the demo from the `LiquidAI/LiquidAI-LFM2-VL-450M` directory:
 
 ```sh
 cd LiquidAI/LiquidAI-LFM2-VL-450M
+pip install -r requirements.txt
 MODELS=../../models/Synaptics/LiquidAI-LFM2-VL-450M
 python src/infer.py \
   -m              $MODELS/decoder_nolm.vmfb \
