@@ -43,30 +43,38 @@ def install():
     logger.info("Added '%s' to Python's import path. To undo, delete '%s'", repo_root, pth_file)
 
 
+def _load_demo_module(*path_parts):
+    """Load a demo's setup_demo.py by file path.
+
+    The Liquid demos live under LiquidAI/ in directories whose names contain
+    dots and hyphens, so they are not importable as packages; load them by file
+    path instead.
+    """
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), *path_parts)
+    modname = "_demo_" + "_".join(path_parts).replace(".", "_").replace("-", "_")
+    spec = importlib.util.spec_from_file_location(modname, path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
 def setup_demo(name: str):
     try:
         if name == "gemma3":
             from gemma3.setup_demo import setup_gemma3
             setup_gemma3(["instruct"])
         elif name == "liquid":
-            from liquid.setup_demo import setup_liquid
             # 230M is the LFM2.5 size with a published runtime HF repo
-            # (Synaptics/liquidAI-LFM2p5-230M-LLM); the 350M runtime repo is
+            # (Synaptics/LiquidAI-LFM2.5-230M); the 350M runtime repo is
             # not published yet.
-            setup_liquid(["230m"])
+            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5-230M", "setup_demo.py")
+            _mod.setup_liquid(["230m"])
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"])
         elif name == "liquidAI-VLM":
-            # The demo dir name has a hyphen, so it is not importable as a package
-            # (`from liquidAI-VLM.setup_demo import ...` is a syntax error); load the
-            # module by file path instead.
-            import importlib.util
-            _path = os.path.join(
-                os.path.dirname(os.path.abspath(__file__)), "liquidAI-VLM", "setup_demo.py")
-            _spec = importlib.util.spec_from_file_location("liquidvl_setup_demo", _path)
-            _mod = importlib.util.module_from_spec(_spec)
-            _spec.loader.exec_module(_mod)
+            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl(["default"])
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection

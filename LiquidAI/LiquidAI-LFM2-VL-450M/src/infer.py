@@ -10,7 +10,7 @@ from runner import LiquidVLStatic, InferenceInterrupted, DEFAULT_PROMPT
 from utils.log import add_logging_args, configure_logging
 from utils.terminal import InferenceStopInput
 
-# The model-refresh helper lives one level up (liquidAI-VLM/setup_demo.py). The demo
+# The model-refresh helper lives one level up (the demo dir's setup_demo.py). The demo
 # dir name has a hyphen, so it is not importable as a package; add it to the path and
 # import the module directly. Guarded so a missing setup_demo never breaks inference.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))

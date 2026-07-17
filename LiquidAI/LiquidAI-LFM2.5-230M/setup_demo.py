@@ -17,8 +17,8 @@ from utils.download import (
 logger = logging.getLogger("Liquid.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/liquidAI-LFM2p5-230M-LLM",
-    "230m": "Synaptics/liquidAI-LFM2p5-230M-LLM",
+    "default": "Synaptics/LiquidAI-LFM2.5-230M",
+    "230m": "Synaptics/LiquidAI-LFM2.5-230M",
 }
 _LIQUID_MODEL_FILENAMES: Final[list[str]] = [
     "body.vmfb",    # decoder minus lm_head

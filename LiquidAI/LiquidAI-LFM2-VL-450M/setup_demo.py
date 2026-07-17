@@ -21,8 +21,8 @@ from utils.download import (
 logger = logging.getLogger("LiquidVL.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/liquidAI-LFM2-VLM",
-    "liquidAI-VLM": "Synaptics/liquidAI-LFM2-VLM",  # accept the demo name as an alias
+    "default": "Synaptics/LiquidAI-LFM2-VL-450M",
+    "liquidAI-VLM": "Synaptics/LiquidAI-LFM2-VL-450M",  # accept the demo name as an alias
 }
 
 # The full LFM2-VL-450M asset set the demo needs for the one-shot image-prefill

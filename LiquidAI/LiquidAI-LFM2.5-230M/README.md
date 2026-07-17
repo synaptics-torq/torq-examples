@@ -11,11 +11,11 @@ python setup_demos.py liquid
 ```
 
 This fetches the artifacts from
-[`Synaptics/liquidAI-LFM2p5-230M-LLM`](https://huggingface.co/Synaptics/liquidAI-LFM2p5-230M-LLM)
-into `models/Synaptics/liquidAI-LFM2p5-230M-LLM/`:
+[`Synaptics/LiquidAI-LFM2.5-230M`](https://huggingface.co/Synaptics/LiquidAI-LFM2.5-230M)
+into `models/Synaptics/LiquidAI-LFM2.5-230M/`:
 
 ```
-models/Synaptics/liquidAI-LFM2p5-230M-LLM/
+models/Synaptics/LiquidAI-LFM2.5-230M/
 ├── body.vmfb             ← decoder minus lm_head (hidden output, bf16, 256-token KV cache)
 ├── lm_head.vmfb          ← standalone lm_head (hidden -> logits; skipped during prefill)
 ├── token_embeddings.npy  ← CPU-side embedding LUT (bf16)
@@ -31,10 +31,10 @@ standalone **lm_head** (hidden → logits). The `[1024, 65536]` lm_head MatMul
 last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
-cd liquid
+cd LiquidAI/LiquidAI-LFM2.5-230M
 python src/infer.py \
-  -m ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/body.vmfb \
-  --lm-head ../models/Synaptics/liquidAI-LFM2p5-230M-LLM/lm_head.vmfb \
+  -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/body.vmfb \
+  --lm-head ../../models/Synaptics/LiquidAI-LFM2.5-230M/lm_head.vmfb \
   --instruct-model
 ```
 
@@ -62,7 +62,7 @@ LFM2.5-230M is a hybrid conv + attention model with **14 layers** (8 depthwise-c
 8 KV heads × 64 head-dim, 256-token window).
 
 The runner (`src/runner.py`) is a thin subclass of the shared
-[`DecoderOnlyLLMRunner`](../utils/llm.py); it only supplies the LFM2.5 ChatML
+[`DecoderOnlyLLMRunner`](../../utils/llm.py); it only supplies the LFM2.5 ChatML
 chat format, system-prompt warm-up, and stop conditions. Its
 `ManagedSelfAttnCacheRunner` cache manager is agnostic to what each cached
 tensor is — it zero-inits every per-layer cache from the model's input-shape

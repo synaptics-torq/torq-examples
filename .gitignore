@@ -17,6 +17,6 @@ test/
 *.whl
 
 # internal usage/benchmark doc — kept local, not part of the committed demo
-liquidAI-VLM/lfm2-vl-450m-usage.md
+LiquidAI/LiquidAI-LFM2-VL-450M/lfm2-vl-450m-usage.md
 # Local board handoff notes — internal IPs/ssh details, do not commit
 RUN_ON_BOARD.md

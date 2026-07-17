@@ -7,9 +7,9 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | Demo | Description |
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
-| [liquid](liquid/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
+| [liquid](LiquidAI/LiquidAI-LFM2.5-230M/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
-| [liquidAI-VLM](liquidAI-VLM/) | Image captioning / VQA with LiquidAI LFM2-VL-450M |
+| [liquidAI-VLM](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VQA with LiquidAI LFM2-VL-450M |
 | [object_detection](object_detection/) | YOLOv8n image and video object detection |
 
 ## Setup
