@@ -74,6 +74,9 @@ bit-coherent against the fp32 reference).
 The token-embedding lookup is done on the CPU from `token_embeddings.npy`; the
 VMFB takes the embedded vector `[1, 1, 1024]` as input 0 (not `input_ids`).
 
+This example is a redistribution of a model created by **Liquid AI, Inc.**,
+licensed under the **LFM Open License v1.0**.
+
 > [!NOTE]
 > The sliding-window KV shift (`--kv-cache-window` / `shift_kv`) is left off for
 > LFM2.5: it slices a KV sequence axis, which is not safe for the rank-3 conv
