@@ -30,6 +30,7 @@ _MOONSHINE_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "decoder_token_embeddings.npy",
     "tokenizer.json",
 )
+_MOONSHINE_REVISION: Final[str] = "torq-v2.0.0"
 
 
 def _has_moonshine_files(model_dir: Path) -> bool:
@@ -39,13 +40,13 @@ def _has_moonshine_files(model_dir: Path) -> bool:
 def _download_moonshine(repo_id: str, base_dir: Path) -> list[str]:
     """Download all required Moonshine files; return the manifest file list."""
     for filename in _MOONSHINE_REQUIRED_FILES:
-        download_from_hf(repo_id, filename, base_dir=base_dir)
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=_MOONSHINE_REVISION)
     return list(_MOONSHINE_REQUIRED_FILES)
 
 
 def _refresh_moonshine(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
     files_present = verify_manifest(model_dir) and _has_moonshine_files(model_dir)
-    revision = get_hf_revision(repo_id)
+    revision = get_hf_revision(repo_id, _MOONSHINE_REVISION)
     return ensure_model(
         model_dir,
         repo_id,

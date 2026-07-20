@@ -27,19 +27,20 @@ _OD_HF_REPO_MAP: Final[dict[str, str]] = {
 _MODEL_FILENAME: Final[str] = "yolo_8n_2.0.0_npu.vmfb"
 _LABELS_FILENAME: Final[str] = "labels.json"
 _SAMPLES_PREFIX: Final[str] = "samples/"
+_OD_REVISION: Final[str] = "torq-v2.0.0"
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
     from huggingface_hub import HfApi
 
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=_OD_REVISION)
 
 
 def _list_sample_files(repo_id: str) -> list[str]:
     from huggingface_hub import HfApi
 
     return [
-        path for path in HfApi().list_repo_files(repo_id=repo_id)
+        path for path in HfApi().list_repo_files(repo_id=repo_id, revision=_OD_REVISION)
         if path.startswith(_SAMPLES_PREFIX) and not path.endswith("/")
     ]
 
@@ -55,11 +56,11 @@ def _download_object_detection(repo_id: str, base_dir: Path) -> list[str]:
     for filename in (_MODEL_FILENAME, _LABELS_FILENAME):
         if not _hf_file_exists(repo_id, filename):
             raise FileNotFoundError(f"Required file '{filename}' not found in {repo_id}")
-        download_from_hf(repo_id, filename, base_dir=base_dir)
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=_OD_REVISION)
         manifest_files.append(filename)
 
     for sample_file in _list_sample_files(repo_id):
-        download_from_hf(repo_id, sample_file, base_dir=base_dir)
+        download_from_hf(repo_id, sample_file, base_dir=base_dir, revision=_OD_REVISION)
         manifest_files.append(sample_file)
 
     return manifest_files
@@ -67,7 +68,7 @@ def _download_object_detection(repo_id: str, base_dir: Path) -> list[str]:
 
 def _refresh_object_detection(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
     files_present = verify_manifest(model_dir) and _has_object_detection_files(model_dir)
-    revision = get_hf_revision(repo_id)
+    revision = get_hf_revision(repo_id, _OD_REVISION)
     return ensure_model(
         model_dir,
         repo_id,
