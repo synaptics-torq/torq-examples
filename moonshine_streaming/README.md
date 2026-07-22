@@ -17,14 +17,11 @@ From the repo root, run:
 python setup_demos.py moonshine_streaming
 ```
 
-This downloads the default model files to:
+This downloads the default model files from our HuggingFace repo to:
 
 ```sh
 models/Synaptics/moonshine-streaming-tiny-torq/
 ```
-
-> The HuggingFace repo is not published yet — until then, copy the model files
-> into that directory manually (see `PLACEHOLDER.md` there for the exact list).
 
 ## Running
 
@@ -95,46 +92,6 @@ python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq --wav /
 utterances — lower it for tightly-paced conversational audio. `--wav` mode doesn't
 need `sounddevice`/PortAudio at all, so it also works on machines without a mic or
 audio drivers set up.
-
-## Running on a board
-
-Target is an aarch64 board running Python 3.12 with the Torq runtime
-(`--hw-type astra_machina` is the default).
-
-Prerequisites — PortAudio (for `sounddevice`) and a working microphone:
-
-```sh
-sudo apt-get update && sudo apt-get install -y libportaudio2
-```
-
-From the repo root:
-
-```sh
-# 1. venv
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 2. Torq runtime wheel (aarch64 / Python 3.12 board build)
-pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v2.0-alpha/torq_runtime-2.0.0a1-cp312-cp312-manylinux_2_28_aarch64.whl
-
-# 3. shared deps + this demo's deps
-pip install -r requirements.txt
-pip install -r moonshine_streaming/requirements.txt
-
-# 4. one-time setup: installs the repo on the Python path (.pth) and verifies the
-#    model files (a manifest is present, so no download is attempted)
-python setup_demos.py moonshine_streaming
-
-# 5. run
-cd moonshine_streaming
-python src/infer.py -m ../models/Synaptics/moonshine-streaming-tiny-torq
-```
-
-> The model files ship in `models/Synaptics/moonshine-streaming-tiny-torq/` (no
-> HuggingFace repo yet). If `models/` is excluded from the copy onto the board,
-> transfer that directory manually — see its `PLACEHOLDER.md` for the file list.
-> Match the wheel in step 2 to your board's CPU architecture and Python version
-> (see the [releases page](https://github.com/synaptics-torq/torq-examples/releases)).
 
 ## How it works
 
@@ -334,10 +291,14 @@ guarantees on-screen committed text never rewrites itself. `--full-decode` bypas
 all of this (re-decode from BOS every time: correct, but O(T²) and it flickers).
 
 **11. Render & lifecycle.** `TerminalListener` overwrites the current line(s) in
-place (ANSI) with the live transcript plus volume/buffer bars. On `speech_end` (or
-buffer-full) the final line is locked with `complete_line()`, the utterance counter
-ticks, `state.reset()` clears the memory + committed prefix, and it returns to
-"Listening…".
+place (ANSI) with the live transcript plus volume/buffer bars. On `speech_end` the
+final line is locked with `complete_line()` and the terminal sits on it; the
+utterance counter only ticks and `state.reset()` only clears the memory +
+committed prefix lazily, on the *next* `speech_start` (see step 3) — there's no
+"Listening…" in between. Buffer-full is the one case that resets immediately: it
+must start a fresh utterance while you're still mid-sentence, so it locks the
+line, resets state, ticks the counter, and redraws "Listening…" all at once
+before continuing.
 
 ## Profiling
 
@@ -376,8 +337,8 @@ Requires `matplotlib` (in `requirements.txt`).
 - `--profile` records per-chunk worker timing and prints a real-time keep-up
   summary on exit (and shows the VAD calibration line); see
   [Profiling](#profiling) to turn the dumps into plots.
-- `--hw-type` selects the Torq hardware target (default `astra_machina`; use `sim`
-  for a software simulation).
+- `--hw-type` selects the Torq hardware target: `astra_machina` (default),
+  `sim` (software simulation), `soc_fpga`, or `aws_fpga`.
 - `--preview-every`, `--commit-agreement`, `--commit-delay` tune the live-preview
   cadence and how eagerly tokens are frozen; `--vad-threshold` / `--vad-silence`
   tune speech detection and utterance splitting.
