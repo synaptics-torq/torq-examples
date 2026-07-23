@@ -10,7 +10,7 @@ import sys
 import time
 
 from object_detection.setup_demo import ensure_object_detection_models
-from utils.npu import enable_npu_clock
+from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
 from torq.runtime import profile_vmfb_resources
 from utils.inference import SimpleVMFBInferenceRunner
 from utils.object_detection import (
@@ -296,6 +296,8 @@ def main():
         return
 
     ok, message = enable_npu_clock()
+    print(f"[NPU] {message}")
+    ok, message = configure_npu_userspace_frequency("max")
     print(f"[NPU] {message}")
 
     if args.display:
