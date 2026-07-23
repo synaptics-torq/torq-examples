@@ -20,7 +20,7 @@ Requires Python 3. Use a virtual environment and install requirements:
 ```sh
 python3 -m venv .venv --system-site-packages
 source .venv/bin/activate
-pip install https://github.com/synaptics-torq/torq-examples/releases/download/torq-runtime-v2.0-alpha/torq_runtime-2.0.0a1-cp312-cp312-manylinux_2_28_aarch64.whl
+pip install https://github.com/synaptics-torq/torq-compiler/releases/download/v2.1.0_beta2/torq_runtime-2.1.0b2-cp312-cp312-manylinux_2_28_aarch64.whl
 pip install -r requirements.txt
 ```
 
