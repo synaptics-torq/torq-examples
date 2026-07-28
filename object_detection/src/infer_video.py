@@ -211,6 +211,8 @@ def run_with_opencv(args, runner, labels):
             assert Gst is not None
             shutdown_display_pipeline(Gst, display_pipeline, display_appsrc)
         json_writer.close()
+        ok, message = configure_npu_userspace_frequency("min")
+        print(f"[NPU] {message}")
         print(f"Done. Processed {frame_count} frames. Output: {args.output if args.output else 'not saved'}")
         print(
             f"Detection results saved to: {args.json_results} "

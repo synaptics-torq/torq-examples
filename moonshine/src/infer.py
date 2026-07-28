@@ -13,6 +13,7 @@ from tokenizers import Tokenizer
 from runner import MoonshineRunner
 from moonshine.setup_demo import ensure_moonshine_models
 from utils.log import add_logging_args, configure_logging
+from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -58,6 +59,11 @@ def main(args: argparse.Namespace):
 
     ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
 
+    ok, message = enable_npu_clock()
+    print(f"[NPU] {message}")
+    ok, message = configure_npu_userspace_frequency("max")
+    print(f"[NPU] {message}")
+
     runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
     runner = MoonshineRunner(
         args.model_dir,
@@ -78,6 +84,9 @@ def main(args: argparse.Namespace):
             _print_result(result, runner)
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
+    finally:
+        ok, message = configure_npu_userspace_frequency("min")
+        print(f"[NPU] {message}")
 
 
 if __name__ == "__main__":
