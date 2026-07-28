@@ -1,7 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+import ctypes.util
 import logging
+import subprocess
 from pathlib import Path
 from typing import Final
 
@@ -26,6 +28,11 @@ _MOONSHINE_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "decoder_token_embeddings.npy",
     "tokenizer.json",
 )
+_INSTALL_PORTAUDIO_SCRIPT: Final[Path] = Path(__file__).resolve().parent.parent / "setup" / "install_portaudio.sh"
+
+
+class PortAudioInstallError(RuntimeError):
+    """Raised when PortAudio is missing and cannot be installed automatically."""
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
@@ -36,6 +43,23 @@ def _hf_file_exists(repo_id: str, filename: str) -> bool:
 
 def _has_moonshine_files(model_dir: Path) -> bool:
     return all((model_dir / filename).exists() for filename in _MOONSHINE_REQUIRED_FILES)
+
+def _portaudio_installed() -> bool:
+    return ctypes.util.find_library("portaudio") is not None
+
+
+def _install_portaudio():
+    if not _INSTALL_PORTAUDIO_SCRIPT.exists():
+        raise PortAudioInstallError(
+            f"PortAudio is not installed and the install script was not found at {_INSTALL_PORTAUDIO_SCRIPT}"
+        )
+    logger.info("PortAudio not found; installing from %s", _INSTALL_PORTAUDIO_SCRIPT)
+    try:
+        subprocess.run([str(_INSTALL_PORTAUDIO_SCRIPT)], check=True)
+    except subprocess.CalledProcessError as e:
+        raise PortAudioInstallError("Failed to install PortAudio") from e
+    if not _portaudio_installed():
+        raise PortAudioInstallError("PortAudio install script ran but libportaudio is still not found")
 
 
 def _download_preprocessor(repo_id: str, base_dir: Path) -> str | None:
@@ -75,6 +99,8 @@ def setup_moonshine(
     models: list[str],
 ):
     logger.info("Setting up moonshine demo with models: [%s]", ", ".join(models))
+    if not _portaudio_installed():
+        _install_portaudio()
     repos = [_HF_REPO_MAP.get(m, m) for m in models]
     base_dir = default_models_dir()
     for repo_id in repos:
@@ -120,7 +146,7 @@ if __name__ == "__main__":
 
     try:
         setup_moonshine(args.models)
-    except (DownloadError, MissingRequirementsError, ValueError) as e:
+    except (DownloadError, MissingRequirementsError, PortAudioInstallError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:
             logger.error("Caused by: %s", e.__cause__)
