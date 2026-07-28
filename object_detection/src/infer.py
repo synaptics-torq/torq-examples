@@ -157,6 +157,9 @@ def main():
 
     maybe_save_and_display(args, results)
 
+    ok, message = configure_npu_userspace_frequency("min")
+    print(f"[NPU] {message}")
+
 
 if __name__ == "__main__":
     main()

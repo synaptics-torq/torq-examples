@@ -7,6 +7,7 @@ import sys
 
 from runner import LiquidStatic, InferenceInterrupted
 from utils.log import add_logging_args, configure_logging
+from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
 from utils.terminal import InferenceStopInput
 
 YELLOW = "\033[33m"
@@ -36,6 +37,12 @@ def main(args: argparse.Namespace):
 
     configure_logging(args.logging)
     logging.getLogger("Liquid").info("Starting assistant...")
+
+    ok, message = enable_npu_clock()
+    print(f"[NPU] {message}")
+    ok, message = configure_npu_userspace_frequency("max")
+    print(f"[NPU] {message}")
+
     liquid = LiquidStatic(
         args.model,
         args.max_seq_len,
@@ -92,6 +99,9 @@ def main(args: argparse.Namespace):
             _print_inference_stats(liquid)
     except KeyboardInterrupt:
         print()
+    finally:
+        ok, message = configure_npu_userspace_frequency("min")
+        print(f"[NPU] {message}")
 
 
 if __name__ == "__main__":
