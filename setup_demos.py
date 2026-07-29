@@ -28,6 +28,7 @@ DEMOS = [
     "LiquidAI-LFM2-VL-450M",
     "object_detection",
     "pose_estimation",
+    "rtmo",
 ]
 
 
@@ -89,6 +90,9 @@ def setup_demo(name: str):
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
             setup_pose_estimation()
+        elif name == "rtmo":
+            from rtmo.setup_demo import setup_rtmo
+            setup_rtmo()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:

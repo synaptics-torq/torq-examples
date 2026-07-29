@@ -1,0 +1,3 @@
+opencv-python-headless  # cv2: image read + draw boxes/keypoints
+ml_dtypes               # bf16 dtype for the transformer seam (backbone P5 -> transformer)
+numpy
