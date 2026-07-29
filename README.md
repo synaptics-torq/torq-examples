@@ -15,38 +15,55 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 
 ## Setup
 
-Requires Python 3. Use a virtual environment and install requirements:
+Requires Python 3. 
 
-```sh
-python3 -m venv .venv --system-site-packages
-source .venv/bin/activate
-pip install https://github.com/synaptics-torq/torq-compiler/releases/download/v2.1.0/torq_runtime-2.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
-pip install -r requirements.txt
-```
+1. Use a virtual environment and install requirements. 
 
-Additionally, install any demo-specific dependencies:
+    From the repo root:
 
-```sh
-# Example: Gemma 3
-cd gemma3
-pip install -r requirements.txt  # if present
-cd ..
+    ```sh
+    python3 -m venv .venv --system-site-packages
+   
+    source .venv/bin/activate
+    pip install https://github.com/synaptics-torq/torq-compiler/releases/download/v2.1.0/torq_runtime-2.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
+   
+   pip install -r requirements.txt
+    ```
 
-# Example: Object Detection
-cd object_detection
-pip install -r requirements.txt
-cd ..
-```
+2. Additionally, install any demo-specific dependencies:
 
-Run the setup script to install the repo on your Python path and download model assets:
+    Enter the demo directory. Install its requirements. Jump back to the repo root.
 
-```sh
-# Set up a specific demo
-python setup_demos.py gemma3
+    ```sh
+    cd <demo app directory>
+    pip install -r requirements.txt  # if present
+    cd ..
+    ```
 
-# Or set up everything
-python setup_demos.py --all
-```
+    Examples: 
+    ```sh
+    # Example: Gemma 3
+    cd gemma3
+    pip install -r requirements.txt
+    cd ..
+
+    # Example: Object Detection
+    cd object_detection
+    pip install -r requirements.txt
+    cd ..
+    ```
+
+3. Run the setup script to install the repo on your Python path and download model assets:
+
+
+    From the repo root: 
+    ```sh
+    # Set up a specific demo
+    python setup_demos.py gemma3
+
+    # Or set up everything
+    python setup_demos.py --all
+    ```
 
 Individual demos also have their own `setup_demo.py` for customizing setup, but the top-level `setup_demos.py` must be run at least once first.
 
