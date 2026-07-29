@@ -4,6 +4,16 @@ Interactive text chat with LiquidAI **LFM2.5-230M** using a Torq VMFB.
 
 ## Setup
 
+See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
+
+Enter the demo directory. Install its dependencies. Jump back to the repo root.
+
+```sh
+cd LiquidAI/LiquidAI-LFM2.5-230M
+pip install -r requirements.txt
+cd ..
+```
+
 From the repo root — downloads the 230M model from HuggingFace:
 
 ```sh
@@ -32,7 +42,6 @@ last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
 cd LiquidAI/LiquidAI-LFM2.5-230M
-pip install -r requirements.txt
 python src/infer.py \
   -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/body.vmfb \
   --lm-head ../../models/Synaptics/LiquidAI-LFM2.5-230M/lm_head.vmfb \

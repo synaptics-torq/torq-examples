@@ -4,17 +4,23 @@ Interactive chat with Gemma 3 270M using Torq VMFB models.
 
 ## Setup
 
+See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
+
+Enter the demo directory. Install its dependencies. Jump back to the repo root.
+
+```sh
+cd gemma3
+pip install -r requirements.txt
+cd ..
+```
+
 From the repo root, run:
 
 ```sh
 python setup_demos.py gemma3
 ```
 
-This downloads the default instruct model files to:
-
-```sh
-models/Synaptics/gemma-3-270m-it-torq/
-```
+This downloads the default instruct model files to: `models/Synaptics/gemma-3-270m-it-torq/`
 
 ## Running
 

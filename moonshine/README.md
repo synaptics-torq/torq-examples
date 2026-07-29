@@ -4,17 +4,24 @@ WAV file transcription with Moonshine-tiny English using Torq VMFB models.
 
 ## Setup
 
+See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
+
+Enter the demo directory. Install its dependencies. Jump back to the repo root.
+
+```sh
+cd moonshine
+pip install -r requirements.txt
+cd ..
+```
+
 From the repo root, run:
 
 ```sh
 python setup_demos.py moonshine
 ```
 
-This downloads the default model files to:
+This downloads the default model files to `models/Synaptics/moonshine-tiny-bf16-torq/`
 
-```sh
-models/Synaptics/moonshine-tiny-bf16-torq/
-```
 
 ## Running
 

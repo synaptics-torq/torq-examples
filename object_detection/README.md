@@ -4,22 +4,25 @@ YOLOv8n object detection using a Torq VMFB model.
 
 ## Setup
 
-From the repo root, run:
+See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
+
+Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
 ```sh
 cd object_detection
 pip install -r requirements.txt
 cd ..
+```
+
+From the repo root, run:
+
+```sh
 python setup_demos.py object_detection
 ```
 
 This verifies Python dependencies for the demo and downloads the object detection assets from Hugging Face.
 
-Downloaded assets are stored at:
-
-```sh
-models/Synaptics/yolov8-od-nano-320-int8-torq/
-```
+Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/`
 
 The setup downloads:
 - `yolo_8n_2.0.0_npu.vmfb`
@@ -29,6 +32,10 @@ The setup downloads:
 ## Running
 
 Run the demo from the `object_detection` directory.
+
+```sh
+cd object_detection
+```
 
 If you want on-device display output, set:
 
@@ -50,7 +57,6 @@ export DISPLAY_WIDTH=480
 ### Image inference
 
 ```sh
-cd object_detection
 python src/infer.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
@@ -62,7 +68,6 @@ python src/infer.py \
 To save or display the annotated image:
 
 ```sh
-cd object_detection
 python src/infer.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
@@ -86,7 +91,6 @@ Image inference options:
 ### Video, USB camera, or RTSP inference
 
 ```sh
-cd object_detection
 python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
@@ -99,7 +103,6 @@ python src/infer_video.py \
 #### USB camera
 
 ```sh
-cd object_detection
 python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --camera-device auto \
@@ -113,7 +116,6 @@ python src/infer_video.py \
 Example with explicit camera controls:
 
 ```sh
-cd object_detection
 python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --camera-device /dev/video0 \
@@ -128,7 +130,6 @@ python src/infer_video.py \
 #### RTSP stream
 
 ```sh
-cd object_detection
 python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --rtsp-url rtsp://user:pass@host:port/stream \
@@ -142,7 +143,6 @@ python src/infer_video.py \
 #### Profiling
 
 ```sh
-cd object_detection
 python src/infer_video.py \
   --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
