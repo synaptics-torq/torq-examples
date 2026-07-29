@@ -1,114 +1,140 @@
 """
-Quantized (int8 / int16) model support for the RTMO demo.
+Quantization support for the RTMO hybrid demo.
 
-The bf16 export and the quantized TFLite-derived exports differ in two ways:
+The three hybrid vmfbs have quantized int8 I/O (NHWC), but a compiled vmfb does
+not expose its quantization at runtime — IREE hands back raw int8 tensors with
+no (scale, zero_point). Those params live only in the source TFLite parts (from
+PTQ), so this module reads them straight from the TFLite files shipped alongside
+the vmfbs (``rtmo_hybrid_{backbone,head}_int8.tflite``):
 
-  * layout  - bf16 is NCHW; the TFLite exports are NHWC, so their heads come
-              back as (1, H, W, C) instead of (1, C, H, W).
-  * scaling - the TFLite exports have quantized I/O, so the input must be
-              quantized and every head dequantized with its own
-              (scale, zero_point).
+  * input : the backbone image-input quantization (int8 NHWC, [0,255] domain).
+  * seams : backbone P3/P4/P5 output scales + head P3/P4/P5 input scales, used
+            to requantize between the chained parts host-side.
+  * heads : the eight int8 head output scales, used to dequantize to float.
 
-This module adapts the quantized models to the float NCHW form the existing
-postprocess already expects, so rtmo.py stays common to all three variants.
-
-Quantization parameters are read straight from the TFLite exports:
-    rtmo_int16x8_i16io.tflite   int16 I/O, zero_point 0 everywhere
-    rtmo_int8.tflite            int8 I/O, non-zero zero_points
+Everything is matched by (unique) NHWC shape, not position — the same approach
+the bf16 path uses in ``utils.unpack_heads``. The transformer part is bf16, so
+it carries no int8 quant params and is not read here.
 """
 
 import numpy as np
 
-# name -> vmfb file, entry function, input quantization.
-#
-# The bf16 export comes from the torch path (entry "torch_jit"); the quantized
-# ones come from TFLite -> TOSA, whose entry point is "main".
-MODELS = {
-    "bf16": {
-        "vmfb": "rtmo_tiny_bf16.vmfb",
-        "function": "torch_jit",
-        "quantized": False,
-    },
-    # Hybrid: int8 conv backbone + bf16 AIFI transformer + int8 head, chained as
-    # three NSS-only vmfbs (no CSS ops). int8 speed with the transformer's higher
-    # precision, which removes the full-int8 false positives. The backbone image
-    # input is int8; heads come back int8 with their own scales.
-    "hybrid": {
-        "vmfb": ("rtmo_hyb_backbone_int8.vmfb",
-                 "rtmo_hyb_transformer_bf16.vmfb",
-                 "rtmo_hyb_head_int8.vmfb"),
-        "function": "main",
-        "quantized": True,
-        "hybrid": True,
-        "in_dtype": np.int8,
-        "in_scale": 1.0,
-        "in_zp": -128,
-        # seam (scale, zero_point): backbone outputs -> {dequant} -> transformer
-        # (bf16) -> {requant} -> head inputs. P3/P4 are skip connections.
-        "seams": {
-            "p3_shape": (1, 40, 40, 96),  "p4_shape": (1, 20, 20, 192), "p5_shape": (1, 10, 10, 256),
-            "bb_p3": (0.026187874376773834, -117), "hd_p3": (0.026187879964709282, -117),
-            "bb_p4": (0.048588335514068604, -122), "hd_p4": (0.048588335514068604, -122),
-            "bb_p5": (0.037300221621990204,   -7), "hd_p5": (0.06488647311925888,     2),
-        },
-    },
+# The hybrid TFLite parts (source of the quant params, downloaded next to the
+# vmfbs) and the vmfbs themselves.
+BACKBONE_TFLITE = "rtmo_hybrid_backbone_int8.tflite"
+TRANSFORMER_TFLITE = "rtmo_hybrid_transformer_bf16.tflite"
+HEAD_TFLITE = "rtmo_hybrid_head_int8.tflite"
+
+# NHWC head-output shape -> canonical head name (shapes are unique per head).
+HEAD_NAMES = {
+    (1, 20, 20, 1): "cls_scores_s16",   (1, 10, 10, 1): "cls_scores_s32",
+    (1, 20, 20, 4): "bbox_preds_s16",   (1, 10, 10, 4): "bbox_preds_s32",
+    (1, 20, 20, 17): "kpt_vis_s16",     (1, 10, 10, 17): "kpt_vis_s32",
+    (1, 20, 20, 192): "pose_feats_s16", (1, 10, 10, 192): "pose_feats_s32",
 }
-
-# NHWC output shape -> (head name, scale, zero_point).
-# Shapes are unique per head, so outputs are matched by shape rather than by
-# position - the same approach the bf16 path uses in utils.unpack_heads.
-HEAD_QUANT = {
-    # int8 head part of the hybrid (its own PTQ calibration -> own scales).
-    "hybrid": {
-        (1, 20, 20, 1):   ("cls_scores_s16", 0.102855027, 95),
-        (1, 10, 10, 1):   ("cls_scores_s32", 0.152402967, 100),
-        (1, 20, 20, 4):   ("bbox_preds_s16", 0.0596383289, 3),
-        (1, 10, 10, 4):   ("bbox_preds_s32", 0.0294422898, 0),
-        (1, 20, 20, 17):  ("kpt_vis_s16",    0.0980607048, 21),
-        (1, 10, 10, 17):  ("kpt_vis_s32",    0.103052862, 22),
-        (1, 20, 20, 192): ("pose_feats_s16", 0.01536687,  -5),
-        (1, 10, 10, 192): ("pose_feats_s32", 0.0186605658, 10),
-    },
-}
+# FPN seam feature-map shapes (NHWC): the P3/P4 skip connections and the
+# transformer-carried P5.
+P3_SHAPE = (1, 40, 40, 96)
+P4_SHAPE = (1, 20, 20, 192)
+P5_SHAPE = (1, 10, 10, 256)
 
 
-def quantize_input(tensor_nchw, model):
-    """float32 NCHW [0,255] tensor -> quantized NHWC tensor for the vmfb."""
-    spec = MODELS[model]
+def _tflite_io_quant(tflite_path):
+    """Return (inputs, outputs), each a list of (shape, dtype, scale, zp)."""
+    try:
+        import ai_edge_litert.interpreter as lite
+    except ImportError:  # pragma: no cover - fallback, same order as runners.py
+        import tensorflow.lite as lite
+
+    interp = lite.Interpreter(model_path=str(tflite_path))
+    interp.allocate_tensors()
+
+    def rows(details):
+        out = []
+        for d in details:
+            scale, zero_point = d["quantization"]
+            shape = tuple(int(x) for x in d["shape"])
+            out.append((shape, d["dtype"], float(scale), int(zero_point)))
+        return out
+
+    return rows(interp.get_input_details()), rows(interp.get_output_details())
+
+
+def read_hybrid_quant(backbone_tflite, head_tflite):
+    """Read the hybrid quant params from the backbone + head TFLite parts.
+
+    Returns ``{in_scale, in_zp, in_dtype, seams, head_quant}`` where ``seams`` is
+    the dict :class:`~rtmo.rtmo_core.hybrid.HybridRunner` expects and
+    ``head_quant`` maps ``nhwc_shape -> (name, scale, zero_point)``.
+    """
+    bb_in, bb_out = _tflite_io_quant(backbone_tflite)
+    hd_in, hd_out = _tflite_io_quant(head_tflite)
+
+    _, in_dtype, in_scale, in_zp = bb_in[0]  # single image input
+
+    def sz(rows, shape):
+        for sh, _dtype, scale, zp in rows:
+            if sh == shape:
+                return (scale, zp)
+        raise ValueError(f"shape {shape} not in TFLite I/O {[r[0] for r in rows]}")
+
+    seams = {
+        "p3_shape": P3_SHAPE, "p4_shape": P4_SHAPE, "p5_shape": P5_SHAPE,
+        "bb_p3": sz(bb_out, P3_SHAPE), "hd_p3": sz(hd_in, P3_SHAPE),
+        "bb_p4": sz(bb_out, P4_SHAPE), "hd_p4": sz(hd_in, P4_SHAPE),
+        "bb_p5": sz(bb_out, P5_SHAPE), "hd_p5": sz(hd_in, P5_SHAPE),
+    }
+
+    head_quant = {}
+    for shape, _dtype, scale, zp in hd_out:
+        name = HEAD_NAMES.get(shape)
+        if name is None:
+            raise ValueError(f"unexpected head output shape {shape}")
+        head_quant[shape] = (name, scale, zp)
+    missing = set(HEAD_NAMES.values()) - {n for n, _, _ in head_quant.values()}
+    if missing:
+        raise ValueError(f"missing head outputs in TFLite: {sorted(missing)}")
+
+    return {
+        "in_scale": in_scale,
+        "in_zp": in_zp,
+        "in_dtype": in_dtype,
+        "seams": seams,
+        "head_quant": head_quant,
+    }
+
+
+def quantize_input(tensor_nchw, in_scale, in_zp, in_dtype=np.int8):
+    """float32 NCHW [0,255] tensor -> quantized NHWC tensor for the backbone."""
     nhwc = np.transpose(tensor_nchw, (0, 2, 3, 1))
-    q = np.rint(nhwc / spec["in_scale"]) + spec["in_zp"]
-    info = np.iinfo(spec["in_dtype"])
-    return np.clip(q, info.min, info.max).astype(spec["in_dtype"])
+    q = np.rint(nhwc / in_scale) + in_zp
+    info = np.iinfo(in_dtype)
+    return np.clip(q, info.min, info.max).astype(in_dtype)
 
 
-def dequantize_heads(outputs, model):
+def dequantize_heads(outputs, head_quant):
+    """Quantized NHWC vmfb outputs -> {head name: float32 NCHW array}.
+
+    ``head_quant`` is the ``{nhwc_shape: (name, scale, zero_point)}`` table from
+    :func:`read_hybrid_quant`. Produces the same dict shape as
+    ``utils.unpack_heads`` does for bf16, so the postprocess is identical.
     """
-    Quantized NHWC vmfb outputs -> {head name: float32 NCHW array}.
-
-    Produces exactly the same dict shape as utils.unpack_heads does for bf16,
-    so the postprocess is identical for all three model variants.
-    """
-    table = HEAD_QUANT[model]
     heads = {}
-
     for o in outputs:
         arr = np.asarray(o)
         key = tuple(arr.shape)
-        entry = table.get(key)
+        entry = head_quant.get(key)
         if entry is None:
             raise ValueError(
-                f"unexpected output shape {key} for model {model!r}; "
-                f"expected one of {sorted(table)}"
+                f"unexpected output shape {key}; expected one of {sorted(head_quant)}"
             )
         name, scale, zero_point = entry
         if name in heads:
             raise ValueError(f"duplicate output for {name}")
-
         real = (arr.astype(np.float32) - zero_point) * scale
         heads[name] = np.transpose(real, (0, 3, 1, 2))  # NHWC -> NCHW
 
-    missing = {n for n, _, _ in table.values()} - set(heads)
+    missing = {n for n, _, _ in head_quant.values()} - set(heads)
     if missing:
         raise ValueError(f"missing outputs: {sorted(missing)}")
-
     return heads

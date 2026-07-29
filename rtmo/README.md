@@ -25,15 +25,18 @@ Downloaded assets are stored at:
 
 ```sh
 models/Synaptics/RTMO_pose/
-├── vmfb/rtmo_hyb_backbone_int8.vmfb
-├── vmfb/rtmo_hyb_transformer_bf16.vmfb
-├── vmfb/rtmo_hyb_head_int8.vmfb
+├── vmfb/rtmo_hyb_{backbone_int8,transformer_bf16,head_int8}.vmfb
+├── tflite/rtmo_hybrid_{backbone_int8,transformer_bf16,head_int8}.tflite
 └── calib/{person,people}.jpg
 ```
 
-The host-side DCC pose-decode weights ship with the demo
-(`rtmo_core/postprocess_weights.npz`), so only the VMFBs and sample images
-download.
+The TFLite parts are downloaded alongside the VMFBs because the demo reads the
+int8 quantization params (input scale, chain seam scales, head scales) from them
+at runtime — a compiled VMFB doesn't expose its quantization, so those numbers
+live only in the source TFLite (see [`rtmo_core/quant.py`](./rtmo_core/quant.py)
+`read_hybrid_quant`). This means no scales are hardcoded, so a rebuilt/recalibrated
+model just works. The host-side DCC pose-decode weights ship with the demo
+(`rtmo_core/postprocess_weights.npz`).
 
 ## Running
 

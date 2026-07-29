@@ -4,10 +4,11 @@
 """Download the RTMO pose demo assets from Hugging Face.
 
 Pulls the three NSS-only hybrid vmfbs (int8 conv backbone + bf16 AIFI
-transformer + int8 detection head) and two sample images from
-``Synaptics/RTMO_pose`` into the shared ``models/`` dir. The host-side DCC
-pose-decode weights ship with the demo (``rtmo_core/postprocess_weights.npz``),
-so only the vmfbs and images download.
+transformer + int8 detection head), the matching TFLite parts (the source of the
+int8 quant params, since a compiled vmfb does not expose them), and two sample
+images from ``Synaptics/RTMO_pose`` into the shared ``models/`` dir. The
+host-side DCC pose-decode weights ship with the demo
+(``rtmo_core/postprocess_weights.npz``).
 """
 
 import logging
@@ -26,6 +27,13 @@ VMFB_FILES: Final[tuple[str, ...]] = (
     "vmfb/rtmo_hyb_transformer_bf16.vmfb",
     "vmfb/rtmo_hyb_head_int8.vmfb",
 )
+# The source TFLite parts — read at runtime for the int8 quant params (input
+# scale, chain seams, head scales) that the compiled vmfbs don't expose.
+TFLITE_FILES: Final[tuple[str, ...]] = (
+    "tflite/rtmo_hybrid_backbone_int8.tflite",
+    "tflite/rtmo_hybrid_transformer_bf16.tflite",
+    "tflite/rtmo_hybrid_head_int8.tflite",
+)
 SAMPLE_FILES: Final[tuple[str, ...]] = (
     "calib/person.jpg",
     "calib/people.jpg",
@@ -39,7 +47,7 @@ def download_rtmo(base_dir: str | Path | None = None) -> Path:
     :func:`utils.download.download_from_hf`).
     """
     base_dir = Path(base_dir) if base_dir is not None else default_models_dir()
-    for filename in (*VMFB_FILES, *SAMPLE_FILES):
+    for filename in (*VMFB_FILES, *TFLITE_FILES, *SAMPLE_FILES):
         download_from_hf(RTMO_REPO_ID, filename, base_dir=base_dir)
     return base_dir / RTMO_REPO_ID
 
