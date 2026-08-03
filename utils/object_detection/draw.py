@@ -3,52 +3,15 @@
 
 from __future__ import annotations
 
-import os
+from utils.draw import letterbox_frame, draw_ui, load_font, letterbox_pil_image
 
-import numpy as np
-from PIL import Image, ImageDraw, ImageFont
-
-
-def letterbox_frame(frame, target_size):
-    import cv2
-
-    height, width = frame.shape[:2]
-    target_width, target_height = target_size
-    scale = min(target_width / width, target_height / height)
-    new_width, new_height = int(width * scale), int(height * scale)
-
-    resized = cv2.resize(frame, (new_width, new_height), interpolation=cv2.INTER_LINEAR)
-    canvas = np.zeros((target_height, target_width, 3), dtype=frame.dtype)
-    top = (target_height - new_height) // 2
-    left = (target_width - new_width) // 2
-    canvas[top:top + new_height, left:left + new_width] = resized
-    return canvas, (top, left, new_width, new_height)
-
-
-def draw_ui(canvas, title, stats, video_rect):
-    import cv2
-
-    target_height, target_width = canvas.shape[:2]
-    top, _left, _video_width, video_height = video_rect
-    font = cv2.FONT_HERSHEY_SIMPLEX
-
-    if top > 40:
-        (text_width, text_height), _ = cv2.getTextSize(title, font, 1.1, 2)
-        text_x = (target_width - text_width) // 2
-        text_y = (top // 2) + (text_height // 2)
-        cv2.putText(canvas, title, (text_x + 1, text_y + 1), font, 1.1, (0, 0, 0), 2, cv2.LINE_AA)
-        cv2.putText(canvas, title, (text_x, text_y), font, 1.1, (255, 255, 255), 2, cv2.LINE_AA)
-
-    bottom_y_start = top + video_height
-    if target_height - bottom_y_start > 60:
-        y_cursor = bottom_y_start + 40
-        cv2.putText(canvas, f"FPS: {stats['fps']:.1f}", (30, y_cursor), font, 0.7, (180, 180, 180), 1, cv2.LINE_AA)
-        cv2.putText(canvas, f"NPU: {stats['npu']:.1f} ms", (30, y_cursor + 35), font, 0.7, (180, 180, 180), 1, cv2.LINE_AA)
-
-        count_text = f"DETECTIONS: {stats['count']}"
-        (count_width, _), _ = cv2.getTextSize(count_text, font, 0.7, 2)
-        cv2.putText(canvas, count_text, (target_width - count_width - 30, y_cursor + 15), font, 0.7, (0, 255, 100), 2, cv2.LINE_AA)
-
+# Re-export shared draw utilities so existing OD imports keep working
+__all__ = [
+    "annotate_frame",
+    "draw_ui",
+    "letterbox_frame",
+    "render_annotated_image",
+]
 
 def annotate_frame(frame, detections):
     import cv2
@@ -74,27 +37,11 @@ def annotate_frame(frame, detections):
 
 
 def render_annotated_image(image_path, results, display_size):
-    try:
-        image = Image.open(image_path)
-    except Exception as exc:
-        raise RuntimeError(f"Error opening image {image_path}: {exc}") from exc
+    from PIL import ImageDraw
 
-    if image.mode != "RGB":
-        image = image.convert("RGB")
-
-    target_width, target_height = display_size
-    width, height = image.size
-    scale = min(target_width / width, target_height / height)
-    new_width, new_height = int(width * scale), int(height * scale)
-
-    resized = image.resize((new_width, new_height), Image.BILINEAR)
-    canvas = Image.new("RGB", (target_width, target_height), (0, 0, 0))
-    offset_x = (target_width - new_width) // 2
-    offset_y = (target_height - new_height) // 2
-    canvas.paste(resized, (offset_x, offset_y))
-
+    canvas, scale, offset_x, offset_y = letterbox_pil_image(image_path, display_size)
     draw = ImageDraw.Draw(canvas)
-    font = _load_font()
+    font = load_font()
 
     for label, _confidence, box in results:
         x1 = box[0] * scale + offset_x
@@ -119,19 +66,3 @@ def render_annotated_image(image_path, results, display_size):
         draw.text((text_pos[0], text_pos[1]), text, fill="white", font=font)
 
     return canvas
-
-
-def _load_font():
-    font_path = "/usr/share/fonts/ttf/LiberationSans-Regular.ttf"
-    fallback_paths = ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
-
-    try:
-        if os.path.exists(font_path):
-            return ImageFont.truetype(font_path, 35)
-        for path in fallback_paths:
-            if os.path.exists(path):
-                return ImageFont.truetype(path, 40)
-    except Exception:
-        pass
-
-    return ImageFont.load_default()
