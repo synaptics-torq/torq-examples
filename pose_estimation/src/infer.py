@@ -2,31 +2,19 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import argparse
-import json
 import os
 import sys
 from pathlib import Path
 
-from object_detection.setup_demo import ensure_object_detection_models
-from utils.vision import dequantize_out
+from pose_estimation.setup_demo import ensure_pose_estimation_models
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
-from utils.object_detection import (
-    postprocess,
-    render_annotated_image,
+from utils.pose_estimation import (
+    dequantize_out,
+    postprocess_pose,
+    render_annotated_pose_image,
 )
 from utils.draw import display_image_gst
-
-
-def load_labels(labels_path):
-    if not labels_path:
-        return {}
-
-    with open(labels_path, encoding="utf-8") as handle:
-        data = json.load(handle)
-    if "names" in data:
-        return {str(key): value for key, value in data["names"].items()}
-    return data
 
 
 def maybe_save_and_display(args, results):
@@ -39,10 +27,10 @@ def maybe_save_and_display(args, results):
 
     print("\n[5/5] Saving result image...")
     try:
-        img = render_annotated_image(args.image, results, (disp_w, disp_h))
+        img = render_annotated_pose_image(args.image, results, (disp_w, disp_h))
         print(f"Resized image to {disp_w}x{disp_h} (letterboxed).")
 
-        out_img = "output_yolo.jpg"
+        out_img = "output_pose.jpg"
         img.save(out_img)
         print(f"Result image saved to: {out_img}")
 
@@ -53,16 +41,15 @@ def maybe_save_and_display(args, results):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run YOLOv8 object detection on an image.")
+    parser = argparse.ArgumentParser(description="Run YOLOv8 Pose estimation on an image.")
     parser.add_argument("--model", required=True)
     parser.add_argument("--image", required=True)
-    parser.add_argument("--labels")
     parser.add_argument("--device", default="torq")
     parser.add_argument(
         "--no-refresh",
         action="store_true",
         default=False,
-        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
+        help="Skip the model freshness check (offline/airgapped runs)",
     )
     parser.add_argument(
         "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
@@ -76,7 +63,7 @@ def main():
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
     args = parser.parse_args()
 
-    ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
+    ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
 
     runtime_flags = build_runtime_flags(args.tda)
     runner = setup_npu_and_runner(args, runtime_flags)
@@ -97,22 +84,21 @@ def main():
         print(f"Time: {runner.infer_time_ms:.3f}ms")
 
         print("\n[3/4] Processing...")
-        if raw_out.shape != (1, 84, 2100):
-            print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 84, 2100). Metadata might be needed.")
+        if raw_out.shape != (1, 56, 2100):
+            print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 56, 2100).")
 
-        out_scale = 0.004194467328488827
-        out_zp = -128
+        out_scale = 0.0056150914169847965
+        out_zp = -117
         outputs = dequantize_out(raw_out, out_scale, out_zp, int8=True)
 
-        labels = load_labels(args.labels)
-        results = postprocess(outputs, orig_shape, pad_info, labels)
+        results = postprocess_pose(outputs, orig_shape, pad_info)
 
         print("\n[4/4] Detections:")
         if not results:
-            print("No objects detected.")
+            print("No poses detected.")
 
-        for label, conf, box in results:
-            print(f"  {label:<15} Conf: {conf:.4f}  Box: {box.astype(int)}")
+        for i, (bbox, conf, keypoints) in enumerate(results):
+            print(f"  Person {i + 1:<3} Conf: {conf:.4f}  Box: {bbox.astype(int)}")
 
         maybe_save_and_display(args, results)
     finally:
