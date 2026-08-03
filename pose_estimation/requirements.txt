@@ -1,0 +1,2 @@
+Pillow
+opencv-python-headless  # cv2: video/camera/RTSP capture and frame processing (infer_video.py)

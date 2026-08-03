@@ -8,7 +8,7 @@ from pathlib import Path
 
 from runner import LiquidVLStatic, InferenceInterrupted, DEFAULT_PROMPT
 from utils.log import add_logging_args, configure_logging
-from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
+from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 from utils.terminal import InferenceStopInput
 
 # The model-refresh helper lives one level up (the demo dir's setup_demo.py). The demo
@@ -113,10 +113,7 @@ def main(args: argparse.Namespace):
         # by --no-refresh; failures are logged, not raised, so offline runs proceed).
         ensure_lfm2vl_models(Path(args.model).parent, refresh=not args.no_refresh)
 
-    ok, message = enable_npu_clock()
-    print(f"[NPU] {message}")
-    ok, message = configure_npu_userspace_frequency("max")
-    print(f"[NPU] {message}")
+    setup_npu_for_inference()
 
     logging.getLogger("LiquidVL").info("Loading models...")
     vl = LiquidVLStatic(
@@ -189,8 +186,7 @@ def main(args: argparse.Namespace):
     except KeyboardInterrupt:
         print()
     finally:
-        ok, message = configure_npu_userspace_frequency("min")
-        print(f"[NPU] {message}")
+        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":
