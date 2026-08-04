@@ -3,7 +3,14 @@
 
 import json
 
-from utils.download import read_manifest, verify_manifest, write_manifest
+from pathlib import Path
+
+from utils.download import (
+    base_dir_for,
+    read_manifest,
+    verify_manifest,
+    write_manifest,
+)
 
 
 def test_write_read_and_verify_manifest(tmp_path):
@@ -48,3 +55,17 @@ def test_verify_manifest_rejects_empty_or_missing_files(tmp_path):
         json.dumps({"repo_id": "org/repo", "files": ["missing.vmfb"]})
     )
     assert not verify_manifest(tmp_path)
+
+
+def test_base_dir_for_strips_the_repo_id():
+    assert base_dir_for(Path("/models/org/repo"), "org/repo") == Path("/models")
+    assert base_dir_for(Path("/models/repo"), "repo") == Path("/models")
+
+
+def test_base_dir_for_rejects_a_layout_that_does_not_end_in_the_repo_id():
+    # A bare clone keeps only the repo name, so the org component is missing.
+    assert base_dir_for(Path("/models/repo"), "org/repo") is None
+    # A renamed directory cannot be mapped back to the repo either.
+    assert base_dir_for(Path("/models/org/other"), "org/repo") is None
+    # Shorter than the repo id: nothing to strip.
+    assert base_dir_for(Path("/repo"), "org/repo") is None

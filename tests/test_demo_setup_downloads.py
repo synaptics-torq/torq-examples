@@ -340,3 +340,98 @@ def test_moonshine_offline_uses_local_files(tmp_path):
         moonshine_setup.setup_moonshine(["tiny-en"])
 
     download.assert_not_called()
+
+
+def _make_gemma_split_copy(model_dir: Path, lm_head_name: str, manifest_head: str):
+    """A complete split-model copy whose manifest recorded *manifest_head*."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+    files = [
+        "transformer.vmfb",
+        lm_head_name,
+        *gemma_setup._GEMMA3_REQUIRED_FILES,
+        gemma_setup._GEMMA3_TRIM_LUT_FILENAME,
+    ]
+    for filename in files:
+        (model_dir / filename).write_text(filename)
+    write_manifest(
+        model_dir,
+        gemma_setup.GEMMA3_HF_REPO_MAP["instruct"],
+        [
+            "transformer.vmfb",
+            manifest_head,
+            *gemma_setup._GEMMA3_REQUIRED_FILES,
+            gemma_setup._GEMMA3_TRIM_LUT_FILENAME,
+        ],
+        revision=_REVISION,
+    )
+    return model_dir
+
+
+def test_inference_accepts_alternate_lm_head_name_without_downloading(tmp_path):
+    """A supported LM head name the manifest didn't record is still complete.
+
+    ``lm_head.vmfb`` in place of the recorded ``lm_head.vmfb.trim`` used to read
+    as an incomplete copy, so every launch re-entered the download path.
+    """
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    model_dir = _make_gemma_split_copy(
+        tmp_path / repo_id, "lm_head.vmfb", "lm_head.vmfb.trim"
+    )
+
+    with (
+        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "_hf_file_exists") as exists,
+        mock.patch.object(gemma_setup, "download_from_hf") as download,
+    ):
+        gemma_setup.ensure_gemma3_models(model_dir)
+
+    exists.assert_not_called()
+    download.assert_not_called()
+    assert (model_dir / "lm_head.vmfb").exists()
+
+
+def test_inference_still_repairs_a_genuinely_incomplete_copy(tmp_path):
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    model_dir = _make_gemma_split_copy(
+        tmp_path / repo_id, "lm_head.vmfb", "lm_head.vmfb.trim"
+    )
+    (model_dir / gemma_setup._GEMMA3_TRIM_LUT_FILENAME).unlink()
+
+    with (
+        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "_hf_file_exists", return_value=True),
+        mock.patch.object(
+            gemma_setup, "download_from_hf", side_effect=_fake_download(tmp_path)
+        ) as download,
+    ):
+        gemma_setup.ensure_gemma3_models(model_dir)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert gemma_setup._GEMMA3_TRIM_LUT_FILENAME in downloaded
+
+
+def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
+    """A model dir that isn't ``<base>/<repo id>`` must not be refreshed.
+
+    ``base_dir_for`` cannot recover a base dir from such a layout (e.g. a bare
+    Hugging Face clone in ``models/gemma-3-270m-it-torq``), and downloading with
+    a guessed one fetches a second full copy into an unrelated directory.
+    """
+    model_dir = _make_gemma_split_copy(
+        tmp_path / "models" / "gemma-3-270m-it-torq",
+        "lm_head.vmfb",
+        "lm_head.vmfb.trim",
+    )
+
+    with (
+        mock.patch.object(gemma_setup, "get_hf_revision", return_value="new-revision"),
+        mock.patch.object(gemma_setup, "_hf_file_exists") as exists,
+        mock.patch.object(gemma_setup, "download_from_hf") as download,
+    ):
+        gemma_setup.ensure_gemma3_models(model_dir)
+
+    exists.assert_not_called()
+    download.assert_not_called()
+    # The stale-refresh path must not have cleared the dir it cannot replace.
+    assert (model_dir / "transformer.vmfb").exists()
+    assert not (tmp_path / "models" / "Synaptics").exists()

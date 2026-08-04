@@ -226,10 +226,22 @@ def clear_model_dir(model_dir: Path) -> None:
         logger.debug("Cleared model directory %s", model_dir)
 
 
-def base_dir_for(model_dir: Path, repo_id: str) -> Path:
-    """Return the models base dir given a model dir laid out as ``base/repo_id``."""
-    base = Path(model_dir)
-    for _ in Path(repo_id).parts:
+def base_dir_for(model_dir: Path, repo_id: str) -> Path | None:
+    """Return the models base dir given a model dir laid out as ``base/repo_id``.
+
+    Returns ``None`` when *model_dir* does not end in *repo_id*, e.g. a bare
+    Hugging Face clone in ``models/<repo name>``. That layout is what maps a
+    repo id onto a local path, so without it there is no base dir to download
+    into: stripping the parts blindly points at an unrelated directory, where a
+    refresh would fetch a second full copy of the model instead of updating the
+    one being used.
+    """
+    model_dir = Path(model_dir)
+    repo_parts = Path(repo_id).parts
+    if model_dir.parts[-len(repo_parts):] != repo_parts:
+        return None
+    base = model_dir
+    for _ in repo_parts:
         base = base.parent
     return base
 

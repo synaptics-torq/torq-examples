@@ -128,8 +128,19 @@ def ensure_object_detection_models(model_dir: str | Path, *, refresh: bool = Tru
         )
         return
 
+    base_dir = base_dir_for(model_dir, repo_id)
+    if base_dir is None:
+        logger.warning(
+            "%s is not laid out as <models dir>/%s; skipping the freshness check "
+            "so a refresh cannot fetch a second copy elsewhere. "
+            "Run `python setup_demos.py object_detection` to manage assets.",
+            model_dir,
+            repo_id,
+        )
+        return
+
     try:
-        _refresh_object_detection(repo_id, model_dir, base_dir_for(model_dir, repo_id))
+        _refresh_object_detection(repo_id, model_dir, base_dir)
     except Exception as e:
         logger.warning(
             "Could not refresh object detection assets from %s (%s); using local files.",
