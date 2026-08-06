@@ -37,12 +37,13 @@ _GEMMA3_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "config.json",
     "tokenizer.json",
 )
+_GEMMA3_REVISION: Final[str] = "torq-v2.0.0"
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
     from huggingface_hub import HfApi
 
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=_GEMMA3_REVISION)
 
 
 def _has_gemma3_files(model_dir: Path) -> bool:
@@ -89,7 +90,7 @@ def _download_gemma3_model(repo_id: str, base_dir: Path) -> list[str]:
         for filename in filenames:
             if (local_dir / filename).exists():
                 continue
-            download_from_hf(repo_id, filename, base_dir=base_dir)
+            download_from_hf(repo_id, filename, base_dir=base_dir, revision=_GEMMA3_REVISION)
             logger.info("Downloaded %s from %s", filename, repo_id)
         return list(filenames)
 
@@ -102,7 +103,7 @@ def _download_gemma3_model(repo_id: str, base_dir: Path) -> list[str]:
 def _download_optional_if_exists(repo_id: str, filename: str, base_dir: Path) -> str | None:
     if not _hf_file_exists(repo_id, filename):
         return None
-    download_from_hf(repo_id, filename, base_dir=base_dir)
+    download_from_hf(repo_id, filename, base_dir=base_dir, revision=_GEMMA3_REVISION)
     return filename
 
 
@@ -110,7 +111,7 @@ def _download_gemma3(repo_id: str, base_dir: Path) -> list[str]:
     """Download all Gemma3 files; return the manifest file list."""
     manifest_files = _download_gemma3_model(repo_id, base_dir)
     for filename in _GEMMA3_REQUIRED_FILES:
-        download_from_hf(repo_id, filename, base_dir=base_dir)
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=_GEMMA3_REVISION)
         manifest_files.append(filename)
 
     lut_file = _download_optional_if_exists(repo_id, _GEMMA3_TRIM_LUT_FILENAME, base_dir)
@@ -121,7 +122,7 @@ def _download_gemma3(repo_id: str, base_dir: Path) -> list[str]:
 
 def _refresh_gemma3(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
     files_present = verify_manifest(model_dir) and _has_gemma3_files(model_dir)
-    revision = get_hf_revision(repo_id)
+    revision = get_hf_revision(repo_id, _GEMMA3_REVISION)
     return ensure_model(
         model_dir,
         repo_id,

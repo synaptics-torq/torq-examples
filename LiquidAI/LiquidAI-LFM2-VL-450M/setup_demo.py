@@ -38,6 +38,7 @@ _LFM2VL_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "tokenizer.json",
     "cats-and-dogs-256.jpg",       # sample 256-res image for the demo command
 )
+_LFM2VL_REVISION: Final[str] = "torq-v2.0.0"
 
 
 def _has_lfm2vl_files(model_dir: Path) -> bool:
@@ -47,14 +48,14 @@ def _has_lfm2vl_files(model_dir: Path) -> bool:
 def _download_lfm2vl(repo_id: str, base_dir: Path) -> list[str]:
     """Download every required LFM2-VL file; return the manifest file list."""
     for filename in _LFM2VL_REQUIRED_FILES:
-        download_from_hf(repo_id, filename, base_dir=base_dir)
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=_LFM2VL_REVISION)
         logger.info("Downloaded %s from %s", filename, repo_id)
     return list(_LFM2VL_REQUIRED_FILES)
 
 
 def _refresh_lfm2vl(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
     files_present = verify_manifest(model_dir) and _has_lfm2vl_files(model_dir)
-    revision = get_hf_revision(repo_id)
+    revision = get_hf_revision(repo_id, _LFM2VL_REVISION)
     return ensure_model(
         model_dir,
         repo_id,

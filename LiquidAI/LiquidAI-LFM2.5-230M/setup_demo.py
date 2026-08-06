@@ -29,12 +29,13 @@ _LIQUID_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "config.json",
     "tokenizer.json",
 )
+_LIQUID_REVISION: Final[str] = "torq-v2.0.0"
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
     from huggingface_hub import HfApi
 
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=_LIQUID_REVISION)
 
 
 def _has_liquid_files(model_dir: Path) -> bool:
@@ -58,7 +59,7 @@ def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
             present.append(filename)
             continue
         if _hf_file_exists(repo_id, filename):
-            download_from_hf(repo_id, filename, base_dir=base_dir)
+            download_from_hf(repo_id, filename, base_dir=base_dir, revision=_LIQUID_REVISION)
             logger.info("Downloaded %s from %s", filename, repo_id)
             present.append(filename)
 
@@ -80,10 +81,10 @@ def setup_liquid(models: list[str]):
         try:
             manifest_files = _download_liquid_model(repo_id, base_dir)
             for filename in _LIQUID_REQUIRED_FILES:
-                download_from_hf(repo_id, filename, base_dir=base_dir)
+                download_from_hf(repo_id, filename, base_dir=base_dir, revision=_LIQUID_REVISION)
                 manifest_files.append(filename)
 
-            write_manifest(model_dir, repo_id, manifest_files)
+            write_manifest(model_dir, repo_id, manifest_files, revision=_LIQUID_REVISION)
             logger.info("Downloaded liquid model files from %s", repo_id)
         except Exception as e:
             raise DownloadError(f"Unable to download model files from {repo_id}") from e
