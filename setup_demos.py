@@ -31,6 +31,7 @@ DEMOS = [
     "object_detection",
     "pose_estimation",
     "face_id",
+    "piper_tts",
 ]
 
 # Demos whose setup supports the --with-prefill flag (their models have a batched
@@ -121,6 +122,9 @@ def setup_demo(
         elif name == "face_id":
             from Face_ID.setup_demo import setup_face_id
             setup_face_id()
+        elif name == "piper_tts":
+            from piper_tts.setup_demo import setup_piper
+            setup_piper()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
