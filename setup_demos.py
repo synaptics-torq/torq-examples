@@ -29,6 +29,7 @@ DEMOS = [
     "LiquidAI-LFM2-VL-450M",
     "object_detection",
     "pose_estimation",
+    "piper_tts",
 ]
 
 
@@ -93,6 +94,9 @@ def setup_demo(name: str):
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
             setup_pose_estimation()
+        elif name == "piper_tts":
+            from piper_tts.setup_demo import setup_piper
+            setup_piper()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
