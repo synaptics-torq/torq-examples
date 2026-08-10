@@ -21,7 +21,7 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = ["gemma3", "LiquidAI-LFM2.5-230M", "moonshine", "LiquidAI-LFM2-VL-450M", "object_detection"]
+DEMOS = ["gemma3", "LiquidAI-LFM2.5-230M", "moonshine", "LiquidAI-LFM2-VL-450M", "object_detection", "piper_tts"]
 
 
 def _site_packages_dir() -> str:
@@ -79,6 +79,9 @@ def setup_demo(name: str):
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
             setup_object_detection()
+        elif name == "piper_tts":
+            from piper_tts.setup_demo import setup_piper
+            setup_piper()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:

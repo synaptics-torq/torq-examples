@@ -1,0 +1,3 @@
+onnxruntime  # partA (text encoder + duration predictor) on the CPU
+ml_dtypes    # bf16 dtype for the partA -> partB vocoder seam on the NPU
+numpy
