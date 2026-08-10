@@ -61,22 +61,22 @@ python src/infer.py --text "Hello from the Synaptics board." --output hello.wav
 # a file, a built-in sample, or a menu
 echo "The bakery on the corner opens at six." > article.txt
 python src/infer.py --file article.txt
-python src/infer.py --sample 3
 python src/infer.py --interactive
 
 # write the wav without playing it (e.g. over SSH with no speaker)
 python src/infer.py --text "Silent run." --no-play
 ```
 
-Each run prints the audio duration, which vocoder windows were used, the time
-until the first sound reached the speaker, and the synthesis speed:
+The text is printed in full before synthesis starts, so it is on screen while it
+plays; the timing line follows — audio duration, which vocoder windows were used,
+the time until the first sound reached the speaker, and the synthesis speed:
 
 ```
 [NPU] NPU clock enabled
 Loading (partA on CPU, partB windows on NPU, espeak resident)...
   partA 6.1 s | partB 5 windows (1s, 2s, 4s, 6s, 8s) 0.8 s | speaker plughw:CARD=C1,DEV=0
 
-  "The morning train was late again. Nobody on the platform seemed ..."
+  "The morning train was late again. Nobody on the platform seemed surprised."
   audio 3.05 s | windows 2s+2s | first sound 0.91 s | compute 1.41 s (2.16x real time) | saved tts_out.wav
 ```
 

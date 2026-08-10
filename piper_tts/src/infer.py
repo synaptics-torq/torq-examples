@@ -12,7 +12,9 @@ Face (``Synaptics/Piper-TTS``) on first run.
 """
 
 import argparse
+import shutil
 import sys
+import textwrap
 from pathlib import Path
 
 from piper_tts.piper_core.phonemize import Phonemizer
@@ -33,14 +35,24 @@ SAMPLES = [
 ]
 
 
-def report(text, stats, quiet=False):
-    """Print one line of timing per utterance."""
+def wrapped(text, prefix="  ", hang=None):
+    """Fill text to the terminal width so it is shown in full, never truncated.
+
+    Continuation lines are indented to ``hang`` (defaults to the prefix width),
+    which keeps numbered menu entries aligned under their first line.
+    """
+    width = min(shutil.get_terminal_size((100, 24)).columns, 100)
+    return textwrap.fill(text, width=width, initial_indent=prefix,
+                         subsequent_indent=" " * (len(prefix) if hang is None else hang))
+
+
+def report(stats, quiet=False):
+    """Print the timing line for one utterance."""
     if quiet:
         return
     windows = "+".join(f"{w:.0f}s" for w in stats["windows"]) or "-"
     played = stats["first_sound_s"] is not None
     first = stats["first_sound_s"] if played else (stats["first_audio_s"] or 0.0)
-    print(f'  "{text[:64]}{"..." if len(text) > 64 else ""}"')
     print(f"  audio {stats['audio_s']:.2f} s | windows {windows} | "
           f"{'first sound' if played else 'first audio'} {first:.2f} s | "
           f"compute {stats['compute_s']:.2f} s ({stats['rtf']:.2f}x real time)"
@@ -76,10 +88,13 @@ def run_once(tts, phon, text, out_path, play, quiet):
     if not sentences:
         print("  nothing to synthesize", file=sys.stderr)
         return False
+    if not quiet:
+        # Printed before synthesis starts, so the text is on screen while it plays.
+        print(wrapped(f'"{text}"'), flush=True)
     on_skip = lambda i, secs: print(f"  !! sentence {i + 1} is {secs:.1f} s of speech, longer than the "
                                     f"{tts.max_seconds:.0f} s window — skipped; try shorter sentences.")
     _, stats = tts.synthesize(sentences, out_path, play=play, on_skip=on_skip)
-    report(text, stats, quiet)
+    report(stats, quiet)
     return True
 
 
@@ -88,7 +103,7 @@ def interactive(tts, phon, out_dir, play, quiet):
     while True:
         print("\n=== Piper TTS (CPU partA || NPU partB) ===\n   0) type your own text")
         for i, s in enumerate(SAMPLES):
-            print(f"  {i + 1:2d}) {s[:66]}...")
+            print(wrapped(s, prefix=f"  {i + 1:2d}) ", hang=6))
         try:
             choice = input(f"Select 0-{len(SAMPLES)}, q to quit: ").strip().lower()
         except EOFError:
