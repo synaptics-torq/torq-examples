@@ -18,5 +18,9 @@ test/
 
 # internal usage/benchmark doc — kept local, not part of the committed demo
 LiquidAI/LiquidAI-LFM2-VL-450M/lfm2-vl-450m-usage.md
+
+# piper_tts demo output audio
+piper_tts/*.wav
+piper_tts/out/
 # Local board handoff notes — internal IPs/ssh details, do not commit
 RUN_ON_BOARD.md
