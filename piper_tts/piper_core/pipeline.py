@@ -141,26 +141,38 @@ class PiperTTS:
     def synthesize(self, sentences, wav_path=None, *, play=True, on_skip=None):
         """Run the pipeline over per-sentence id arrays; return audio + timings."""
         n = len(sentences)
-        audio, used, marks = [None] * n, [None] * n, {}
+        audio, used, marks, errors = [None] * n, [None] * n, {}, []
         latents, play_q = queue.Queue(maxsize=2), queue.Queue()
         t0 = time.perf_counter()
 
+        # Both workers always post their sentinel, so a failure in one surfaces
+        # as an exception here instead of deadlocking the other on an empty queue.
         def encode_all():
-            for i, ids in enumerate(sentences):
-                latents.put((i, *self._encode(ids)))
-            latents.put(None)
+            try:
+                for i, ids in enumerate(sentences):
+                    latents.put((i, *self._encode(ids)))
+            except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
+                errors.append(e)
+            finally:
+                latents.put(None)
 
         def vocode_all():
-            while (item := latents.get()) is not None:
-                i, z, g = item
-                audio[i], used[i] = self._vocode(z, g)
-                if audio[i] is None:                    # longer than the widest window
-                    audio[i] = np.zeros(0, dtype=np.float32)
-                    on_skip(i, z.shape[2] * HOP / SR) if on_skip else None
-                    continue
-                marks.setdefault("first_audio", time.perf_counter() - t0)
-                play_q.put(audio[i]) if play else None
-            play_q.put(None)
+            try:
+                while (item := latents.get()) is not None:
+                    i, z, g = item
+                    audio[i], used[i] = self._vocode(z, g)
+                    if audio[i] is None:                # longer than the widest window
+                        audio[i] = np.zeros(0, dtype=np.float32)
+                        on_skip(i, z.shape[2] * HOP / SR) if on_skip else None
+                        continue
+                    marks.setdefault("first_audio", time.perf_counter() - t0)
+                    play_q.put(audio[i]) if play else None
+            except Exception as e:  # noqa: BLE001 - re-raised on the calling thread
+                errors.append(e)
+                while latents.get() is not None:        # unblock a waiting encoder
+                    pass
+            finally:
+                play_q.put(None)
 
         workers = [threading.Thread(target=f, daemon=True) for f in (encode_all, vocode_all)]
         if play:
@@ -171,6 +183,8 @@ class PiperTTS:
         compute_s = time.perf_counter() - t0     # compute done; the speaker may still be draining
         for w in workers[2:]:
             w.join()
+        if errors:
+            raise errors[0]
 
         full = np.concatenate(audio) if n else np.zeros(0, dtype=np.float32)
         stats = {"audio_s": full.size / SR, "compute_s": compute_s,
