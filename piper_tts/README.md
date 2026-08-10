@@ -59,6 +59,7 @@ python src/infer.py
 python src/infer.py --text "Hello from the Synaptics board." --output hello.wav
 
 # a file, a built-in sample, or a menu
+echo "The bakery on the corner opens at six." > article.txt
 python src/infer.py --file article.txt
 python src/infer.py --sample 3
 python src/infer.py --interactive

@@ -47,6 +47,30 @@ def report(text, stats, quiet=False):
           + (f" | saved {stats['wav']}" if stats.get("wav") else ""))
 
 
+def resolve_text(parser, args):
+    """Validate the input selection and return the text to speak.
+
+    Called before any model loads, so a bad path or sample number fails in
+    milliseconds with a one-line message instead of after a 7 s load.
+    """
+    if args.interactive:
+        return None
+    if args.file:
+        path = Path(args.file)
+        if not path.is_file():
+            parser.error(f"no such file: {args.file}")
+        text = path.read_text(errors="replace").strip()
+    elif args.sample is not None:
+        if not 1 <= args.sample <= len(SAMPLES):
+            parser.error(f"--sample must be 1-{len(SAMPLES)} (see --list-samples)")
+        text = SAMPLES[args.sample - 1]
+    else:
+        text = SAMPLES[0] if args.text is None else args.text.strip()
+    if not text:
+        parser.error(f"nothing to speak: {args.file or '--text'} is empty")
+    return text
+
+
 def run_once(tts, phon, text, out_path, play, quiet):
     sentences = phon(text)
     if not sentences:
@@ -117,6 +141,7 @@ def main():
             print(f"{i + 1:2d}) {s}")
         return
 
+    text = resolve_text(p, args)   # validate input before the slow model load
     model_dir = ensure_piper_models(args.model_dir, refresh=not args.no_refresh)
     ok, message = enable_npu_clock()
     print(f"[NPU] {message}")
@@ -135,10 +160,6 @@ def main():
             Path(out_dir).mkdir(parents=True, exist_ok=True)
             interactive(tts, phon, out_dir, not args.no_play, args.quiet)
         else:
-            text = (Path(args.file).read_text().strip() if args.file
-                    else SAMPLES[args.sample - 1] if args.sample else args.text or SAMPLES[0])
-            if args.sample and not 1 <= args.sample <= len(SAMPLES):
-                p.error(f"--sample must be 1-{len(SAMPLES)}")
             print()
             if not run_once(tts, phon, text, args.output or "tts_out.wav", not args.no_play, args.quiet):
                 sys.exit(1)
