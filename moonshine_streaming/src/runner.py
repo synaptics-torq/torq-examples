@@ -367,47 +367,15 @@ class MoonshineStaticStreamingModel:
     def encode(self, state: MoonshineStaticStreamingState, is_final: bool):
         """
         No-op during streaming (logic fully embedded in process_audio_chunk).
-        On final flush: feeds silent chunks to push out remaining lookahead frames.
+        On final flush: feeds silent chunks through process_audio_chunk to push
+        out the remaining lookahead frames (chunk_idx is already past warmup by
+        this point, so each zero chunk takes the same "active" path as real audio).
         """
         if not is_final:
             return
-
-        # Flush final lookahead frames by feeding zero chunks
-        F = self.feature_stride
+        zero_chunk = np.zeros(self.chunk_len, dtype=np.float32)
         for _ in range(self.warmup_chunks):
-            zero_chunk = np.zeros((1, self.chunk_len), dtype=np.float32)
-            pos_emb = self.pos_emb_weights[state.pos_offset[0]:state.pos_offset[0] + F].reshape(1, F, -1)
-
-            feed = {
-                "audio_chunk":          zero_chunk,
-                "conv1_buffer":         state.conv1_buffer,
-                "conv2_buffer":         state.conv2_buffer,
-                "features_buffer":      state.features_buffer,
-                "position_embeddings":  pos_emb,
-            }
-            for i, buf in enumerate(state.enc_bufs):
-                feed[f"buf_{i}"] = buf
-
-            res = _to_host_f32(self.fused_encoder.infer(
-                _ordered_feed(feed, ENCODER_INPUT_ORDER, self._enc_info)
-            ))
-
-            new_k, new_v = res[0], res[1]
-            state.conv1_buffer = res[2]
-            state.conv2_buffer = res[3]
-            state.features_buffer = res[4]
-
-            # Since chunk_idx >= warmup_chunks during final flush, always update caches and save cross-KV
-            for i in range(self.enc_num_bufs):
-                state.enc_bufs[i] = res[5 + i]
-
-            end = min(state.cross_kv_fill + F, self.max_memory_len)
-            take = end - state.cross_kv_fill
-            state.k_cross[:, :, :, state.cross_kv_fill:end, :] = new_k[:, :, :, :take, :]
-            state.v_cross[:, :, :, state.cross_kv_fill:end, :] = new_v[:, :, :, :take, :]
-            state.cross_kv_fill = end
-
-            state.pos_offset[0] += F
+            self.process_audio_chunk(state, zero_chunk)
 
     def _upload_cross_kv(self, state: MoonshineStaticStreamingState):
         """P1: upload the currently-valid cross-KV to resident device buffers once
@@ -489,6 +457,40 @@ class MoonshineStaticStreamingModel:
 
         return int(np.argmax(logits[0, 0, :]))
 
+    def _decode_loop(self, state, start_step, start_token, max_tokens,
+                      cross_attn_bias, k_cross_dev, v_cross_dev, use_dev):
+        """Greedy-decode one token at a time from ``start_step``/``start_token``
+        until EOS (token=2) or max_tokens. Returns (new_tokens, steps_run); shared
+        by decode() (start_step=0, start_token=BOS) and decode_incremental()
+        (resuming after the committed prefix)."""
+        tokens        = []
+        current_token = start_token
+        step          = start_step
+        steps_run     = 0
+
+        while step < max_tokens:
+            current_len = np.array([[step]], dtype=np.int64)
+
+            if self.extract_embeddings:
+                first_feed = {"inputs_embeds": self.token_embeddings[current_token].reshape(1, 1, -1)}
+            else:
+                first_feed = {"token": np.array([[current_token]], dtype=np.int64)}
+
+            next_token = self._decoder_step(
+                state, first_feed, cross_attn_bias, current_len,
+                k_cross_dev, v_cross_dev, use_dev,
+            )
+            step      += 1
+            steps_run += 1
+
+            if next_token == 2 or step >= max_tokens:
+                break
+
+            tokens.append(next_token)
+            current_token = next_token
+
+        return tokens, steps_run
+
     def decode(self, state: MoonshineStaticStreamingState):
         """
         Autoregressive token generation using pre-allocated static KV buffers.
@@ -510,32 +512,11 @@ class MoonshineStaticStreamingModel:
         # P2: ensure self-KV resides on device (allocated once, then reused).
         use_dev = self._ensure_self_kv_device(state)
 
-        result_tokens = []
-        current_token = 1  # BOS
-        step = 0
-
-        while True:
-            current_len = np.array([[step]], dtype=np.int64)
-
-            if self.extract_embeddings:
-                first_feed = {"inputs_embeds": self.token_embeddings[current_token].reshape(1, 1, -1)}
-            else:
-                first_feed = {"token": np.array([[current_token]], dtype=np.int64)}
-
-            next_token = self._decoder_step(
-                state, first_feed, cross_attn_bias, current_len,
-                k_cross_dev, v_cross_dev, use_dev,
-            )
-            step += 1
-
-            if next_token == 2 or step >= max_tokens:
-                break
-
-            result_tokens.append(next_token)
-            current_token = next_token
-
-        state.last_decode_steps = step
-        return result_tokens
+        tokens, steps = self._decode_loop(
+            state, 0, 1, max_tokens, cross_attn_bias, k_cross_dev, v_cross_dev, use_dev
+        )
+        state.last_decode_steps = steps
+        return tokens
 
     def decode_incremental(self, state: MoonshineStaticStreamingState,
                            commit_delay_sec: float = 3.0, agreement: int = 2):
@@ -569,36 +550,12 @@ class MoonshineStaticStreamingModel:
         # Resume from the committed prefix (self-KV positions 0..C-1 are valid).
         committed     = state.committed_tokens
         C             = len(committed)
-        result_tokens = committed[:]
-        if C == 0:
-            current_token = 1   # BOS
-            step          = 0
-        else:
-            current_token = committed[-1]  # last committed token, re-fed at position C
-            step          = C
+        start_token   = committed[-1] if C else 1  # last committed token, re-fed at position C (or BOS)
 
-        steps_run = 0
-        while step < max_tokens:
-            current_len = np.array([[step]], dtype=np.int64)
-
-            if self.extract_embeddings:
-                first_feed = {"inputs_embeds": self.token_embeddings[current_token].reshape(1, 1, -1)}
-            else:
-                first_feed = {"token": np.array([[current_token]], dtype=np.int64)}
-
-            next_token = self._decoder_step(
-                state, first_feed, cross_attn_bias, current_len,
-                k_cross_dev, v_cross_dev, use_dev,
-            )
-            step      += 1
-            steps_run += 1
-
-            if next_token == 2 or step >= max_tokens:
-                break
-
-            result_tokens.append(next_token)
-            current_token = next_token
-
+        tail_tokens, steps_run = self._decode_loop(
+            state, C, start_token, max_tokens, cross_attn_bias, k_cross_dev, v_cross_dev, use_dev
+        )
+        result_tokens = committed + tail_tokens
         state.last_decode_steps = steps_run
 
         # ── Commit rule: LocalAgreement-N  AND  ≥ commit_delay_sec behind frontier ──
