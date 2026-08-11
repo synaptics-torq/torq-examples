@@ -128,7 +128,9 @@ live in `streaming_config.json` alongside the VMFBs in the model directory.
 
 This demo's streaming architecture and portions of its code are adapted from
 [moonshine-ai/moonshine](https://github.com/moonshine-ai/moonshine), used
-under the MIT License.
+under the MIT License — specifically the C++ streaming VAD/STT implementation
+in [moonshine-ai/moonshine's `micro`](https://github.com/moonshine-ai/moonshine/tree/main/micro)
+directory.
 
 Note: only the MIT-licensed code and English-language models from that repo
 apply here — moonshine-ai's non-English models ship under a separate, more
