@@ -197,7 +197,6 @@ def main(args: argparse.Namespace):
         logger.error("Model directory %s not found.", model_dir)
         sys.exit(1)
 
-    logger.info("Using model dir:  %s", model_dir)
     if args.full_decode:
         logger.info("Decode mode:      full re-decode from BOS (baseline)")
     else:
@@ -360,9 +359,6 @@ def main(args: argparse.Namespace):
                     text = tokenizer.decode(tokens, skip_special_tokens=True) if tokens else ""
                     dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
                     indicator = f"{dot} Utterance #{utterance_count}"
-                    if vad.silence_remaining_sec > 0:
-                        # Constant label, only the trailing seconds count changes.
-                        indicator += f"  \033[33mfinalizing {vad.silence_remaining_sec:.1f}s\033[0m"
                     terminal.draw_live(f"{indicator}\n{text if text else '...'}")
 
                 elif vad_status == "speech_end":
@@ -421,7 +417,7 @@ def main(args: argparse.Namespace):
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
     try:
-        print(f">>> Transcribing {args.wav} (Static 2-Split VMFB)... <<<\n", file=sys.stderr)
+        print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
         try:
             feed_wav_to_queue()
             worker_thread.join()
