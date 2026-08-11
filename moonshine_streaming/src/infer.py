@@ -12,7 +12,6 @@ import argparse
 import logging
 import os
 import queue
-import re
 import sys
 import threading
 import time
@@ -123,41 +122,31 @@ class EnergyVAD(_HangoverVAD):
 
 # ── Terminal renderer ─────────────────────────────────────────────────────────
 
-_ANSI_RE = re.compile(r'\033\[[0-9;]*m')
-
-
 class TerminalListener:
-    """ANSI terminal renderer supporting clean wrapped multi-line overwriting."""
+    """Minimal ANSI redraw: moves the cursor back up over the last drawn block
+    and overwrites it in place, so the live preview updates on the same lines
+    instead of scrolling. Assumes each line fits on one terminal row, which
+    holds for the short status/preview text this demo prints."""
     def __init__(self):
-        self.prev_rows = 1
+        self.prev_lines = 0
         self._last_live_draw = 0.0
 
     def draw(self, text):
-        try:
-            cols = os.get_terminal_size().columns
-        except OSError:
-            cols = 80
-        if self.prev_rows > 1:
-            sys.stdout.write(f"\033[{self.prev_rows - 1}A")
+        if self.prev_lines:
+            sys.stdout.write(f"\033[{self.prev_lines}A")
         sys.stdout.write("\r")
-        # Paint the new frame over the old one in place (unchanged characters
-        # are simply overwritten, never blanked), then trim whatever trails
-        # off past the new content. Erasing *before* writing (the previous
-        # order) blanks the whole block on every redraw, which is what
-        # produced the visible flicker at the ~12.5 Hz this is called during
-        # speech.
+        # Paint the new frame over the old one (erasing first is what causes
+        # visible flicker at the ~12.5 Hz this is called during speech).
         sys.stdout.write(text)
         sys.stdout.write("\033[J")
         sys.stdout.flush()
-        visible = _ANSI_RE.sub('', text)
-        rows = sum(max(1, (len(line) + cols - 1) // cols) for line in visible.split('\n'))
-        self.prev_rows = max(1, rows)
+        self.prev_lines = text.count("\n")
 
     def draw_live(self, text, min_interval=0.1):
-        """Throttled variant of draw() for the high-frequency, mostly-cosmetic
-        live indicator (vol/buffer bars), which is otherwise redrawn on every
-        80 ms audio chunk (~12.5 Hz) even when nothing meaningful changed.
-        Skips the redraw if the previous one was less than min_interval ago."""
+        """Throttled variant of draw() for the high-frequency live indicator,
+        which is otherwise redrawn on every 80 ms audio chunk (~12.5 Hz) even
+        when nothing meaningful changed. Skips the redraw if the previous one
+        was less than min_interval ago."""
         now = time.monotonic()
         if now - self._last_live_draw < min_interval:
             return
@@ -167,7 +156,7 @@ class TerminalListener:
     def complete_line(self):
         sys.stdout.write("\n")
         sys.stdout.flush()
-        self.prev_rows = 1
+        self.prev_lines = 0
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -179,23 +168,6 @@ def resample(audio, orig_sr, target_sr=16000):
     num_target_samples = int(duration * target_sr)
     indices            = np.linspace(0, len(audio) - 1, num_target_samples)
     return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-
-
-def _vol_bar(rms, threshold, width=10):
-    fill = min(int(rms / max(threshold * 2, 1e-9) * width), width)
-    bar  = '=' * fill + ' ' * (width - fill)
-    col  = '\033[32m' if rms > threshold else '\033[2m'
-    return f"[{col}{bar}\033[0m]"
-
-
-def _buf_bar(fill_frames, max_frames, width=10):
-    pct      = fill_frames / max(max_frames, 1)
-    fill     = min(int(pct * width), width)
-    bar      = '=' * fill + ' ' * (width - fill)
-    col      = '\033[31m' if pct > 0.8 else '\033[33m' if pct > 0.5 else '\033[32m'
-    secs     = fill_frames * 0.020
-    max_secs = int(max_frames * 0.020)
-    return f"[{col}{bar}\033[0m] {secs:.1f}/{max_secs}s"
 
 
 # ── Verbose stats ────────────────────────────────────────────────────────────
@@ -267,13 +239,9 @@ def main(args: argparse.Namespace):
 
     audio_queue = queue.Queue()
     running     = True
-   
-    vad_threshold = args.vad_threshold
-    if vad_threshold is None:
-        vad_threshold = 0.010
 
-    logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", vad_threshold)
-    vad = EnergyVAD(threshold=vad_threshold, silence_duration=args.vad_silence,
+    logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", args.vad_threshold)
+    vad = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
                         report_calibration=args.verbose)
     terminal = TerminalListener()
     state    = model.create_state()
@@ -295,10 +263,33 @@ def main(args: argparse.Namespace):
         lookback_chunks = args.vad_lookback if args.vad_lookback is not None else model.warmup_chunks
         lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
 
+        def _encode(chunk):
+            if stats is not None:
+                t0 = time.perf_counter()
+            model.process_audio_chunk(state, chunk)
+            model.encode(state, is_final=False)
+            if stats is not None:
+                stats.encode_ms += (time.perf_counter() - t0) * 1000
+
         def _decode():
+            if stats is not None:
+                t0 = time.perf_counter()
             if args.full_decode:
-                return model.decode(state)
-            return model.decode_incremental(state, args.commit_delay, args.commit_agreement)
+                tokens = model.decode(state)
+            else:
+                tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
+            if stats is not None:
+                stats.decode_ms    += (time.perf_counter() - t0) * 1000
+                stats.decode_steps += state.last_decode_steps
+            return tokens
+
+        def _finalize(count):
+            """Flush the encoder's remaining lookahead, decode the utterance in
+            full, and lock the finalized line in place."""
+            model.encode(state, is_final=True)
+            text = tokenizer.decode(_decode(), skip_special_tokens=True)
+            terminal.draw(f"\033[32m✓\033[0m Utterance #{count}: {text if text else '(empty)'}")
+            terminal.complete_line()
 
         while running:
             try:
@@ -310,16 +301,7 @@ def main(args: argparse.Namespace):
                 # Input exhausted. Finalize whatever utterance is still in flight.
                 if state.cross_kv_fill > 0:
                     terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
-                    model.encode(state, is_final=True)
-                    if stats is not None:
-                        _t_dec = time.perf_counter()
-                    tokens = _decode()
-                    if stats is not None:
-                        stats.decode_ms    += (time.perf_counter() - _t_dec) * 1000
-                        stats.decode_steps += state.last_decode_steps
-                    text = tokenizer.decode(tokens, skip_special_tokens=True)
-                    terminal.draw(f"\033[32m✓\033[0m Utterance #{utterance_count}: {text if text else '(empty)'}")
-                    terminal.complete_line()
+                    _finalize(utterance_count)
                 audio_queue.task_done()
                 break
 
@@ -348,21 +330,11 @@ def main(args: argparse.Namespace):
                     # discarded window on real pre-onset audio instead of on the
                     # first spoken syllables.
                     for lb_chunk in lookback_buffer:
-                        if stats is not None:
-                            _t_lb = time.perf_counter()
-                        model.process_audio_chunk(state, lb_chunk)
-                        model.encode(state, is_final=False)
-                        if stats is not None:
-                            stats.encode_ms += (time.perf_counter() - _t_lb) * 1000
+                        _encode(lb_chunk)
                     lookback_buffer.clear()
 
                 if vad_status in ("speech", "speech_start"):
-                    if stats is not None:
-                        _t_enc = time.perf_counter()
-                    model.process_audio_chunk(state, audio_chunk_1280)
-                    model.encode(state, is_final=False)
-                    if stats is not None:
-                        stats.encode_ms += (time.perf_counter() - _t_enc) * 1000
+                    _encode(audio_chunk_1280)
                     chunks_since_decode += 1
 
                     # Auto-finalize when cross-KV buffer is full
@@ -372,16 +344,7 @@ def main(args: argparse.Namespace):
                             f"\033[31m⚠\033[0m Utterance #{utterance_count}:"
                             f" buffer full ({buf_secs}s limit) — finalizing..."
                         )
-                        model.encode(state, is_final=True)
-                        if stats is not None:
-                            _t_dec = time.perf_counter()
-                        tokens = _decode()
-                        if stats is not None:
-                            stats.decode_ms    += (time.perf_counter() - _t_dec) * 1000
-                            stats.decode_steps += state.last_decode_steps
-                        text   = tokenizer.decode(tokens, skip_special_tokens=True)
-                        terminal.draw(f"\033[32m✓\033[0m Utterance #{utterance_count}: {text if text else '(empty)'}")
-                        terminal.complete_line()
+                        _finalize(utterance_count)
                         state.reset()
                         tokens = []
                         chunks_since_decode = 0
@@ -391,21 +354,12 @@ def main(args: argparse.Namespace):
 
                     # Periodic live preview decode
                     if chunks_since_decode >= args.preview_every and state.cross_kv_fill > 0:
-                        if stats is not None:
-                            _t_dec = time.perf_counter()
                         tokens = _decode()
-                        if stats is not None:
-                            stats.decode_ms    += (time.perf_counter() - _t_dec) * 1000
-                            stats.decode_steps += state.last_decode_steps
                         chunks_since_decode = 0
 
                     text = tokenizer.decode(tokens, skip_special_tokens=True) if tokens else ""
                     dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
-                    indicator = (
-                        f"{dot} Utterance #{utterance_count}"
-                        f"  vol {_vol_bar(vad.last_score, vad.threshold)}"
-                        f"  buf {_buf_bar(state.cross_kv_fill, model.max_memory_len)}"
-                    )
+                    indicator = f"{dot} Utterance #{utterance_count}"
                     if vad.silence_remaining_sec > 0:
                         # Constant label, only the trailing seconds count changes.
                         indicator += f"  \033[33mfinalizing {vad.silence_remaining_sec:.1f}s\033[0m"
@@ -414,16 +368,7 @@ def main(args: argparse.Namespace):
                 elif vad_status == "speech_end":
                     terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
                     model.process_audio_chunk(state, audio_chunk_1280)
-                    model.encode(state, is_final=True)
-                    if stats is not None:
-                        _t_dec = time.perf_counter()
-                    tokens = _decode()
-                    if stats is not None:
-                        stats.decode_ms    += (time.perf_counter() - _t_dec) * 1000
-                        stats.decode_steps += state.last_decode_steps
-                    text   = tokenizer.decode(tokens, skip_special_tokens=True)
-                    terminal.draw(f"\033[32m✓\033[0m Utterance #{utterance_count}: {text if text else '(empty)'}")
-                    terminal.complete_line()
+                    _finalize(utterance_count)
                     chunks_since_decode = 0
 
                 elif vad_status == "silence":
@@ -499,7 +444,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
     parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
-    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (required)")
+    parser.add_argument("-m", "--model-dir", type=str, required=True, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir")
     parser.add_argument("--vad-threshold", type=float, default=0.01,           help="VAD trigger threshold: RMS floor for the energy VAD (default: 0.010)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
@@ -521,7 +466,4 @@ if __name__ == "__main__":
             "Must be specified last; all remaining arguments are forwarded."
         ),
     )
-    args = parser.parse_args()
-    if args.model_dir is None:
-        parser.error("-m/--model-dir is required")
-    main(args)
+    main(parser.parse_args())

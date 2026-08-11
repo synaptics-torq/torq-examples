@@ -277,7 +277,7 @@ guarantees on-screen committed text never rewrites itself. `--full-decode` bypas
 all of this (re-decode from BOS every time: correct, but O(T²) and it flickers).
 
 **11. Render & lifecycle.** `TerminalListener` overwrites the current line(s) in
-place (ANSI) with the live transcript plus volume/buffer bars. On `speech_end` the
+place (ANSI) with the status indicator and live transcript. On `speech_end` the
 final line is locked with `complete_line()` and the terminal sits on it; the
 utterance counter only ticks and `state.reset()` only clears the memory +
 committed prefix lazily, on the *next* `speech_start` (see step 3) — there's no
