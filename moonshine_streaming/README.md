@@ -97,7 +97,7 @@ tensors pinned on the NPU, so each preview is cheap.
 
 | File | Role |
 |------|------|
-| `src/runner.py` | the **engine**: the model, its pre-allocated state, and the thin VMFB session wrapper. No audio, no UI — "give me audio chunks, I return tokens". |
+| `src/runner.py` | the **engine**: the model, its pre-allocated state, and the inference logic. |
 | `src/infer.py` | the **app**: WAV file feeding, VAD, the worker thread, decode triggering, terminal rendering, and the CLI. |
 | `setup_demo.py` | downloads/verifies the model files (reuses `utils/`). |
 
@@ -120,8 +120,8 @@ A VMFB exposes its inputs *positionally* — it has no argument names. The dict-
 feed interface needs names, so they are **hardcoded** as `ENCODER_INPUT_ORDER` /
 `DECODER_INPUT_ORDER` in `runner.py` (input shapes + dtypes come from the runner's
 `inputs_info`). This is why the demo needs neither `onnx` nor any sidecar files at
-runtime; `_Session` validates the hardcoded arity against `inputs_info` at load and
-errors loudly if the model is re-exported with a different number of inputs.
+runtime; `_named_inputs_info` validates the hardcoded arity against `inputs_info` at
+load and errors loudly if the model is re-exported with a different number of inputs.
 
 The streaming knobs (`streaming_config.json`) drive everything downstream:
 
@@ -252,7 +252,8 @@ passes, not 16 — that is the O(tail) speedup vs. O(T²) re-decode-from-BOS.
   values per token).
 - **P2** (`_ensure_self_kv_device`): self-KV stays resident — each step's self-KV
   *output* handle becomes the next step's *input*, no host round-trip. Only the
-  (tiny) logits are copied back, for the argmax. `_Session.run_raw` returns the raw
+  (tiny) logits are copied back, for the argmax. The decoder's `VMFBInferenceRunner`
+  is constructed with `device_outputs=True`, so `infer()` returns the raw
   `DeviceArray`s that make this possible.
 
 **10. Commit decision** (what gets frozen on screen). After decoding `result_tokens`
