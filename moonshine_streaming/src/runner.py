@@ -28,7 +28,6 @@ import json
 import logging
 import math
 import os
-from types import SimpleNamespace
 
 import numpy as np
 
@@ -45,8 +44,8 @@ DECODER_NAME = "decoder"
 # feed interface needs to know each model's input order. These lists are the
 # canonical order baked into the compiled VMFBs, pinned to the
 # moonshine-streaming-tiny export (6 decoder layers, 6 encoder buffers). A
-# re-export with a different arity trips the arity check in ``_Session``; a pure
-# reordering would not, so keep these in sync with the model if it is rebuilt.
+# re-export with a different arity trips the arity check in ``_named_inputs_info``;
+# a pure reordering would not, so keep these in sync with the model if it is rebuilt.
 ENCODER_INPUT_ORDER = [
     "audio_chunk", "conv1_buffer", "conv2_buffer", "features_buffer",
     "position_embeddings",
@@ -92,96 +91,58 @@ def find_asset(model_dir: str, filename: str) -> str:
     )
 
 
-# ── Thin VMFB session wrapper ─────────────────────────────────────────────────
+# ── VMFB input/output helpers ─────────────────────────────────────────────────
+#
+# A VMFBInferenceRunner exposes its model's inputs positionally (no argument
+# names); these helpers pair that positional interface with the hardcoded
+# *_INPUT_ORDER name lists so the rest of this module can feed/read VMFBs by
+# name instead of by position.
 
-class _Session:
-    """
-    Wraps VMFBInferenceRunner with a dict-based run() interface similar to ORT.
-
-    Input names come from the hardcoded ``input_order`` (the VMFB exposes inputs
-    positionally, with no names); their shapes and dtypes come from
-    ``VMFBInferenceRunner.inputs_info``.  Outputs are always returned as float32
-    numpy arrays (all Moonshine model outputs are floating-point).
-    """
-
-    def __init__(self, vmfb_path: str, input_order: list, runtime_flags: list,
-                 device_outputs: bool = False):
-        self._runner = VMFBInferenceRunner(
-            vmfb_path,
-            device_uri="torq://",
-            runtime_flags=runtime_flags,
-            device_outputs=device_outputs,
+def _named_inputs_info(runner: VMFBInferenceRunner, input_order: list, vmfb_path: str) -> dict:
+    """Pair ``runner.inputs_info`` (positional, no names) with the hardcoded
+    input order. A length mismatch means the model was re-exported with a
+    different arity — fail loudly rather than silently feed tensors into the
+    wrong argument slots."""
+    info = runner.inputs_info  # list[TensorInfo] or None
+    if info is None:
+        return {}
+    if len(info) != len(input_order):
+        raise ValueError(
+            f"Hardcoded input order ({len(input_order)}) does not match the "
+            f"VMFB input count ({len(info)}) for {os.path.basename(vmfb_path)}; the "
+            f"model may have been re-exported — update the *_INPUT_ORDER constant in "
+            f"runner.py."
         )
-        self._input_names = list(input_order)
-        # The VMFB reports shapes + dtypes positionally (no names) via inputs_info;
-        # pair them with the hardcoded input order. A length mismatch means the
-        # model was re-exported with a different arity — fail loudly rather than
-        # silently feed tensors into the wrong argument slots.
-        info = self._runner.inputs_info  # list[TensorInfo] or None
-        if info is not None and len(info) != len(self._input_names):
-            raise ValueError(
-                f"Hardcoded input order ({len(self._input_names)}) does not match the "
-                f"VMFB input count ({len(info)}) for {os.path.basename(vmfb_path)}; the "
-                f"model may have been re-exported — update the *_INPUT_ORDER constant in "
-                f"runner.py."
-            )
-        self._dtypes       = info
-        self._input_shapes = (
-            [list(t.shape) for t in info] if info is not None
-            else [None] * len(self._input_names)
-        )
-        # name -> model input dtype, for pre-uploading resident device buffers (P1)
-        self.input_dtype = (
-            {n: t.dtype for n, t in zip(self._input_names, info)}
-            if info else {}
-        )
+    return dict(zip(input_order, info))
 
-    def get_inputs(self) -> list:
-        """Return ordered list of SimpleNamespace(name, shape) — mirrors ORT API."""
-        return [
-            SimpleNamespace(name=n, shape=s)
-            for n, s in zip(self._input_names, self._input_shapes)
-        ]
 
-    def allocate_device_array(self, arr) -> DeviceArray:
-        """Upload a host array to a resident device buffer (caller must cast to
-        the model's input dtype first). The returned DeviceArray can be fed to
-        run() repeatedly without re-uploading (P1)."""
-        return self._runner.allocate_device_array(arr)
+def _ordered_feed(feed_dict: dict, input_order: list, input_info: dict) -> list:
+    """Build the positional input list a VMFB expects from a name-keyed feed
+    dict: cast host arrays to each input's declared dtype, and pass resident
+    DeviceArray inputs straight through (no host round-trip, P1/P2)."""
+    ordered = []
+    for name in input_order:
+        val = feed_dict[name]
+        if isinstance(val, DeviceArray):
+            ordered.append(val)            # resident input (e.g. cross-KV, P1)
+            continue
+        arr = np.asarray(val).astype(input_info[name].dtype, copy=False)
+        ordered.append(arr)
+    return ordered
 
-    def _ordered_inputs(self, feed_dict: dict) -> list:
-        """Build the ordered input list: cast host arrays to the model dtype, and
-        pass resident DeviceArray inputs straight through (no host round-trip)."""
-        ordered = []
-        for i, name in enumerate(self._input_names):
-            val = feed_dict[name]
-            if isinstance(val, DeviceArray):
-                ordered.append(val)            # resident input (e.g. cross-KV, P1)
-                continue
-            arr = np.asarray(val)
-            if self._dtypes and i < len(self._dtypes):
-                arr = arr.astype(self._dtypes[i].dtype, copy=False)
-            ordered.append(arr)
-        return ordered
 
-    def run(self, feed_dict: dict) -> list:
-        """Run inference; return all outputs as float32 numpy arrays."""
-        raw = self._runner.infer(self._ordered_inputs(feed_dict))
-        result = []
-        for o in raw:
-            if hasattr(o, "to_host"):
-                o = o.to_host()
-            arr = np.asarray(o)
-            if arr.dtype != np.float32:
-                arr = arr.astype(np.float32, copy=False)
-            result.append(arr)
-        return result
-
-    def run_raw(self, feed_dict: dict) -> list:
-        """Run inference; return the runner's raw outputs WITHOUT copying to host.
-        With device_outputs=True these are DeviceArrays, letting the caller keep
-        self-KV resident and to_host only the logits (P2)."""
-        return self._runner.infer(self._ordered_inputs(feed_dict))
+def _to_host_f32(outputs) -> list:
+    """Copy VMFB outputs to host as float32 numpy arrays (all Moonshine model
+    outputs are floating-point)."""
+    result = []
+    for o in outputs:
+        if hasattr(o, "to_host"):
+            o = o.to_host()
+        arr = np.asarray(o)
+        if arr.dtype != np.float32:
+            arr = arr.astype(np.float32, copy=False)
+        result.append(arr)
+    return result
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -267,16 +228,23 @@ class MoonshineStaticStreamingModel:
         # model_dir. Input names are hardcoded (see *_INPUT_ORDER above).
         self.model_dir = model_dir
 
-        def session(name, input_order, device_outputs=False):
+        def load_runner(name, input_order, device_outputs=False):
             vmfb = os.path.join(model_dir, name + ".vmfb")
-            return _Session(vmfb, input_order, runtime_flags,
-                            device_outputs=device_outputs)
+            runner = VMFBInferenceRunner(
+                vmfb,
+                device_uri="torq://",
+                runtime_flags=runtime_flags,
+                device_outputs=device_outputs,
+            )
+            return runner, _named_inputs_info(runner, input_order, vmfb)
 
         logger.info("Loading VMFB sessions from %s", model_dir)
-        self.fused_encoder = session(ENCODER_NAME, ENCODER_INPUT_ORDER)
+        self.fused_encoder, self._enc_info = load_runner(ENCODER_NAME, ENCODER_INPUT_ORDER)
         # P2: device_outputs=True keeps self-KV (and the unread cross-KV/cross_attn)
         # outputs on device; the decode loop copies only logits back to host.
-        self.decoder = session(DECODER_NAME, DECODER_INPUT_ORDER, device_outputs=True)
+        self.decoder, self._dec_info = load_runner(
+            DECODER_NAME, DECODER_INPUT_ORDER, device_outputs=True
+        )
 
         # Load streaming configuration
         cfg_path = find_asset(model_dir, "streaming_config.json")
@@ -291,21 +259,19 @@ class MoonshineStaticStreamingModel:
         self.extract_embeddings = cfg.get("extract_embeddings", False)
 
         # Derive model dimensions from fused_encoder inputs
-        fe_inputs = self.fused_encoder.get_inputs()
-        self.conv1_channels = fe_inputs[1].shape[1]  # conv1_buffer: [1, conv1_channels, 4]
-        self.conv2_channels = fe_inputs[2].shape[1]  # conv2_buffer: [1, conv2_channels, 4]
-        self.features_dim = fe_inputs[3].shape[2]   # features_buffer: [1, total_lookahead, features_dim]
+        self.conv1_channels = self._enc_info["conv1_buffer"].shape[1]  # [1, conv1_channels, 4]
+        self.conv2_channels = self._enc_info["conv2_buffer"].shape[1]  # [1, conv2_channels, 4]
+        self.features_dim   = self._enc_info["features_buffer"].shape[2]  # [1, total_lookahead, features_dim]
 
-        buf_inputs = sorted(
-            [i for i in fe_inputs if i.name.startswith("buf_")],
-            key=lambda x: int(x.name.split("_")[1])
+        buf_names = sorted(
+            (n for n in self._enc_info if n.startswith("buf_")),
+            key=lambda n: int(n.split("_")[1])
         )
-        self.enc_num_bufs  = len(buf_inputs)
-        self.enc_buf_shape = tuple(buf_inputs[0].shape)
+        self.enc_num_bufs  = len(buf_names)
+        self.enc_buf_shape = tuple(self._enc_info[buf_names[0]].shape)
 
-        dec_inputs = self.decoder.get_inputs()
-        k_self_0_shape  = next(i for i in dec_inputs if i.name == "k_self_0").shape
-        self.depth    = len([i for i in dec_inputs if i.name.startswith("k_self_")])
+        k_self_0_shape = self._dec_info["k_self_0"].shape
+        self.depth    = len([n for n in self._dec_info if n.startswith("k_self_")])
         self.heads    = k_self_0_shape[1]
         self.head_dim = k_self_0_shape[3]
 
@@ -367,7 +333,9 @@ class MoonshineStaticStreamingModel:
         for i, buf in enumerate(state.enc_bufs):
             feed[f"buf_{i}"] = buf
 
-        res = self.fused_encoder.run(feed)
+        res = _to_host_f32(self.fused_encoder.infer(
+            _ordered_feed(feed, ENCODER_INPUT_ORDER, self._enc_info)
+        ))
 
         # Unpack outputs:
         # k_cross, v_cross, conv1_buffer_out, conv2_buffer_out, features_buffer_out, *buf_out
@@ -420,7 +388,9 @@ class MoonshineStaticStreamingModel:
             for i, buf in enumerate(state.enc_bufs):
                 feed[f"buf_{i}"] = buf
 
-            res = self.fused_encoder.run(feed)
+            res = _to_host_f32(self.fused_encoder.infer(
+                _ordered_feed(feed, ENCODER_INPUT_ORDER, self._enc_info)
+            ))
 
             new_k, new_v = res[0], res[1]
             state.conv1_buffer = res[2]
@@ -448,12 +418,10 @@ class MoonshineStaticStreamingModel:
         if not hasattr(self.decoder, "allocate_device_array"):
             return ([state.k_cross[i] for i in range(self.depth)],
                     [state.v_cross[i] for i in range(self.depth)])
-        dt = self.decoder.input_dtype.get("k_cross_0")
+        dt = self._dec_info["k_cross_0"].dtype
 
         def up(x):
-            if dt is not None:
-                x = x.astype(dt, copy=False)
-            return self.decoder.allocate_device_array(x)
+            return self.decoder.allocate_device_array(x.astype(dt, copy=False))
 
         return ([up(state.k_cross[i]) for i in range(self.depth)],
                 [up(state.v_cross[i]) for i in range(self.depth)])
@@ -467,12 +435,10 @@ class MoonshineStaticStreamingModel:
             return False
         if state.k_self_dev is not None:
             return True
-        dt = self.decoder.input_dtype.get("k_self_0")
+        dt = self._dec_info["k_self_0"].dtype
 
         def up(x):
-            if dt is not None:
-                x = x.astype(dt, copy=False)
-            return self.decoder.allocate_device_array(x)
+            return self.decoder.allocate_device_array(x.astype(dt, copy=False))
 
         state.k_self_dev = [up(state.k_self[i]) for i in range(self.depth)]
         state.v_self_dev = [up(state.v_self[i]) for i in range(self.depth)]
@@ -500,7 +466,9 @@ class MoonshineStaticStreamingModel:
             dec_feed[f"k_cross_{_i}"] = k_cross_dev[_i]
             dec_feed[f"v_cross_{_i}"] = v_cross_dev[_i]
 
-        dec_out = self.decoder.run_raw(dec_feed)
+        dec_out = self.decoder.infer(
+            _ordered_feed(dec_feed, DECODER_INPUT_ORDER, self._dec_info)
+        )
 
         # Only logits cross back to host (for argmax); match the original f32 path.
         logits = dec_out[0]
