@@ -22,6 +22,15 @@ python setup_demos.py moonshine
 
 This downloads the default model files to `models/Synaptics/moonshine-tiny-bf16-torq/`
 
+By default the demo downloads the current `latest` model revision from the HF repo. To pin a specific release tag instead, use:
+
+```sh
+cd moonshine
+python setup_demo.py --model-version v2.1.0
+```
+
+The `--model-version` flag accepts a Hugging Face revision or tag name, such as `latest` or a release like `v2.1.0`.
+
 
 ## Running
 
