@@ -75,6 +75,8 @@ def download_from_hf(
     repo_id: str,
     filename: str | os.PathLike,
     base_dir: str | os.PathLike | None = None,
+    *,
+    revision: str | None = None,
 ) -> Path:
     if base_dir is None:
         base_dir = default_models_dir()
@@ -88,18 +90,19 @@ def download_from_hf(
 
     from huggingface_hub import hf_hub_download
 
-    logger.debug("Attempting to download %s from %s...", filename, repo_id)
+    logger.debug("Attempting to download %s from %s (revision=%s)...", filename, repo_id, revision)
     hf_hub_download(
         repo_id=repo_id,
         filename=filename,
         local_dir=str(base_dir / repo_id),
+        revision=revision,
     )
     logger.debug("Download from HuggingFace completed.")
     return local_file
 
 
-def get_hf_revision(repo_id: str) -> str | None:
-    """Return the current commit SHA of a Hugging Face repo.
+def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
+    """Return the commit SHA for a Hugging Face repo or a specific revision/tag.
 
     Returns ``None`` when the Hub cannot be reached (e.g. offline) so callers
     can fall back to local files with a staleness warning instead of failing.
@@ -107,9 +110,9 @@ def get_hf_revision(repo_id: str) -> str | None:
     try:
         from huggingface_hub import HfApi
 
-        return HfApi().model_info(repo_id).sha
+        return HfApi().model_info(repo_id, revision=revision).sha
     except Exception as exc:  # offline, auth failure, missing repo, ...
-        logger.debug("Could not resolve revision for %s: %s", repo_id, exc)
+        logger.debug("Could not resolve revision for %s (%s): %s", repo_id, revision, exc)
         return None
 
 
