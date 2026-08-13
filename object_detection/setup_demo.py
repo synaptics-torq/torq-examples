@@ -86,6 +86,7 @@ def _refresh_object_detection(
         files_present=files_present,
         revision=revision,
         download=lambda: _download_object_detection(repo_id, base_dir, revision=revision_name),
+        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
     )
 
 
@@ -145,6 +146,9 @@ def ensure_object_detection_models(
             "Run `python setup_demos.py object_detection` if inference fails.",
             model_dir,
         )
+        return
+    if not manifest.get("auto_update", True):
+        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
         return
 
     base_dir = base_dir_for(model_dir, repo_id)

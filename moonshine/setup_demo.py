@@ -64,6 +64,7 @@ def _refresh_moonshine(
         files_present=files_present,
         revision=revision,
         download=lambda: _download_moonshine(repo_id, base_dir, revision=revision_name),
+        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
     )
 
 
@@ -122,6 +123,9 @@ def ensure_moonshine_models(
             "Run `python setup_demos.py moonshine` if inference fails.",
             model_dir,
         )
+        return
+    if not manifest.get("auto_update", True):
+        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
         return
     base_dir = base_dir_for(model_dir, repo_id)
     if base_dir is None:

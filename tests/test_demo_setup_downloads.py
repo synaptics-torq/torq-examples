@@ -7,13 +7,15 @@ from unittest import mock
 
 from gemma3 import setup_demo as gemma_setup
 from moonshine import setup_demo as moonshine_setup
+from object_detection import setup_demo as object_detection_setup
+from pose_estimation import setup_demo as pose_setup
 from utils.download import write_manifest
 
 _REVISION = "abc123"
 
 
 def _fake_download(default_base_dir: Path):
-    def download(repo_id: str, filename: str, *, base_dir: Path | None = None):
+    def download(repo_id: str, filename: str, *, base_dir: Path | None = None, revision: str | None = None):
         root = Path(base_dir) if base_dir is not None else default_base_dir
         path = root / repo_id / filename
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -73,7 +75,7 @@ def test_gemma_repairs_incomplete_download_and_records_lut(tmp_path):
     # so this is an "incomplete" (resumable) state, not a stale one.
     write_manifest(model_dir, repo_id, ["model.vmfb.trim"], revision=_REVISION)
 
-    def exists(_repo_id, filename):
+    def exists(_repo_id, filename, revision=None):
         assert _repo_id == repo_id
         return filename == gemma_setup._GEMMA3_TRIM_LUT_FILENAME
 
@@ -113,7 +115,7 @@ def test_gemma_downloads_split_lm_head_pair(tmp_path):
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
     model_dir = base_dir / repo_id
 
-    def exists(_repo_id, filename):
+    def exists(_repo_id, filename, revision=None):
         assert _repo_id == repo_id
         return filename in {"transformer.vmfb", "lm_head.vmfb.trim"}
 
@@ -150,7 +152,7 @@ def test_gemma_repairs_existing_split_body_by_fetching_lm_head(tmp_path):
     (model_dir / "transformer.vmfb").write_text("model")
     write_manifest(model_dir, repo_id, ["transformer.vmfb"], revision=_REVISION)
 
-    def exists(_repo_id, filename):
+    def exists(_repo_id, filename, revision=None):
         assert _repo_id == repo_id
         return filename in {"transformer.vmfb", "lm_head.vmfb"}
 
@@ -299,6 +301,83 @@ def test_inference_no_refresh_skips_network(tmp_path):
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir, refresh=False)
+
+    revision.assert_not_called()
+    download.assert_not_called()
+
+
+def test_inference_does_not_refresh_a_pinned_model(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(base_dir, repo_id, "pinned-revision")
+    write_manifest(
+        model_dir,
+        repo_id,
+        list(moonshine_setup._MOONSHINE_REQUIRED_FILES),
+        revision="pinned-revision",
+        auto_update=False,
+    )
+
+    with (
+        mock.patch.object(moonshine_setup, "get_hf_revision") as revision,
+        mock.patch.object(moonshine_setup, "download_from_hf") as download,
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    revision.assert_not_called()
+    download.assert_not_called()
+
+
+def test_yolo_inference_does_not_refresh_a_pinned_model(tmp_path):
+    repo_id = object_detection_setup._OD_HF_REPO_MAP["nano"]
+    model_dir = tmp_path / repo_id
+    for filename in (
+        object_detection_setup._MODEL_FILENAME,
+        object_detection_setup._LABELS_FILENAME,
+    ):
+        path = model_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(filename)
+    write_manifest(
+        model_dir,
+        repo_id,
+        [
+            object_detection_setup._MODEL_FILENAME,
+            object_detection_setup._LABELS_FILENAME,
+        ],
+        revision="pinned-revision",
+        auto_update=False,
+    )
+
+    with (
+        mock.patch.object(object_detection_setup, "get_hf_revision") as revision,
+        mock.patch.object(object_detection_setup, "download_from_hf") as download,
+    ):
+        object_detection_setup.ensure_object_detection_models(model_dir)
+
+    revision.assert_not_called()
+    download.assert_not_called()
+
+
+def test_pose_inference_does_not_refresh_a_pinned_model(tmp_path):
+    repo_id = pose_setup._POSE_HF_REPO
+    model_dir = tmp_path / repo_id
+    model_path = model_dir / pose_setup._MODEL_FILENAME
+    model_path.parent.mkdir(parents=True)
+    model_path.write_text(pose_setup._MODEL_FILENAME)
+    write_manifest(
+        model_dir,
+        repo_id,
+        [pose_setup._MODEL_FILENAME],
+        revision="pinned-revision",
+        auto_update=False,
+    )
+
+    with (
+        mock.patch.object(pose_setup, "get_hf_revision") as revision,
+        mock.patch.object(pose_setup, "download_from_hf") as download,
+    ):
+        pose_setup.ensure_pose_estimation_models(model_dir)
 
     revision.assert_not_called()
     download.assert_not_called()

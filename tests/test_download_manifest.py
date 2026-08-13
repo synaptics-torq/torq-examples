@@ -29,6 +29,7 @@ def test_write_read_and_verify_manifest(tmp_path):
     manifest = read_manifest(model_dir)
     assert manifest is not None
     assert manifest["repo_id"] == "org/repo"
+    assert manifest["auto_update"] is True
     assert manifest["files"] == ["a.vmfb", "nested/b.json"]
     assert verify_manifest(model_dir)
 
