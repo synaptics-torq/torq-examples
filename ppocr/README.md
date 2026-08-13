@@ -31,8 +31,7 @@ The setup downloads:
 - `ppocr_det_800x608.vmfb` — detection, static 800×608 input
 - `rec_buckets/rec_w{320,640,1280,2432}.vmfb` — recognition, one per width bucket
 - `ppocr_rec.yml` — recognizer character dictionary
-- everything under `samples/`: `sample.jpg`, a 10-line café menu card, and
-  `sample.png`, a dense 99-line paper page for a heavier run
+- `samples/sample.jpg` — a 10-line café menu card to run the demo against
 
 ## Running
 
@@ -85,7 +84,7 @@ Time: detection 519.8ms, recognition 1181.8ms (10 boxes detected)
 ```
 
 Recognition time scales with the number of detected lines, since each line is a
-separate invocation — the dense `sample.png` takes ~22 s for its 99 lines.
+separate invocation — a dense page of 99 lines takes roughly 22 s.
 
 `--tda` selects the allocator backing Torq device buffers — it does not change
 where the model runs; both stages execute on the NPU either way.
