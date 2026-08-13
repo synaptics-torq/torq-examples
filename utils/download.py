@@ -121,17 +121,20 @@ def write_manifest(
     repo_id: str,
     files: list[str],
     revision: str | None = None,
+    auto_update: bool = True,
 ) -> Path:
     """Write a manifest after a successful model setup.
 
     ``revision`` records the upstream commit the files were downloaded from,
-    so later runs can detect when the local copy is out of date.
+    so later runs can detect when the local copy is out of date. ``auto_update``
+    controls whether inference may automatically refresh the copy.
     """
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "repo_id": repo_id,
         "revision": revision,
+        "auto_update": auto_update,
         "files": sorted(files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -240,13 +243,13 @@ def base_dir_for(model_dir: Path, repo_id: str) -> Path | None:
     one being used.
     """
     model_dir = Path(model_dir)
-    repo_parts = Path(repo_id).parts
+    repo_parts = tuple(repo_id.split("/"))
+    if len(model_dir.parts) < len(repo_parts):
+        return None
     if model_dir.parts[-len(repo_parts):] != repo_parts:
         return None
-    base = model_dir
-    for _ in repo_parts:
-        base = base.parent
-    return base
+    base_parts = model_dir.parts[:-len(repo_parts)]
+    return Path(*base_parts) if base_parts else None
 
 
 def resolve_repo_id(model: str, repo_map: dict[str, str]) -> str:
@@ -281,6 +284,7 @@ def ensure_model(
     files_present: bool,
     revision: str | None,
     download: Callable[[], list[str]],
+    auto_update: bool = True,
 ) -> ModelStatus:
     """Refresh ``model_dir`` to ``revision`` when it is stale or incomplete.
 
@@ -299,5 +303,5 @@ def ensure_model(
     if status is ModelStatus.STALE:
         clear_model_dir(model_dir)
     files = download()
-    write_manifest(model_dir, repo_id, files, revision=revision)
+    write_manifest(model_dir, repo_id, files, revision=revision, auto_update=auto_update)
     return status

@@ -26,17 +26,17 @@ _MODEL_FILENAME: Final[str] = "yolo_pose.vmfb"
 _SAMPLES_PREFIX: Final[str] = "samples/"
 
 
-def _hf_file_exists(repo_id: str, filename: str) -> bool:
+def _hf_file_exists(repo_id: str, filename: str, *, revision: str | None = None) -> bool:
     from huggingface_hub import HfApi
 
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=revision)
 
 
-def _list_sample_files(repo_id: str) -> list[str]:
+def _list_sample_files(repo_id: str, *, revision: str | None = None) -> list[str]:
     from huggingface_hub import HfApi
 
     return [
-        path for path in HfApi().list_repo_files(repo_id=repo_id)
+        path for path in HfApi().list_repo_files(repo_id=repo_id, revision=revision)
         if path.startswith(_SAMPLES_PREFIX) and not path.endswith("/")
     ]
 
@@ -55,13 +55,13 @@ def _download_pose_estimation(
     """Download pose assets; return the manifest file list."""
     manifest_files = []
 
-    if not _hf_file_exists(repo_id, _MODEL_FILENAME):
+    if not _hf_file_exists(repo_id, _MODEL_FILENAME, revision=revision):
         raise FileNotFoundError(f"Required file '{_MODEL_FILENAME}' not found in {repo_id}")
 
     download_from_hf(repo_id, _MODEL_FILENAME, base_dir=base_dir, revision=revision)
     manifest_files.append(_MODEL_FILENAME)
 
-    for sample_file in _list_sample_files(repo_id):
+    for sample_file in _list_sample_files(repo_id, revision=revision):
         download_from_hf(repo_id, sample_file, base_dir=base_dir, revision=revision)
         manifest_files.append(sample_file)
 
@@ -83,6 +83,7 @@ def _refresh_pose_estimation(
         files_present=files_present,
         revision=revision,
         download=lambda: _download_pose_estimation(repo_id, base_dir, revision=revision_name),
+        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
     )
 
 
@@ -113,12 +114,25 @@ def ensure_pose_estimation_models(
             model_dir,
         )
         return
+    if not manifest.get("auto_update", True):
+        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
+        return
+    base_dir = base_dir_for(model_dir, repo_id)
+    if base_dir is None:
+        logger.warning(
+            "%s is not laid out as <models dir>/%s; skipping the freshness check "
+            "so a refresh cannot fetch a second copy elsewhere. "
+            "Run `python setup_demos.py pose_estimation` to manage assets.",
+            model_dir,
+            repo_id,
+        )
+        return
 
     try:
         _refresh_pose_estimation(
             repo_id,
             model_dir,
-            base_dir_for(model_dir, repo_id),
+            base_dir,
             revision_name=model_version,
         )
     except Exception as exc:

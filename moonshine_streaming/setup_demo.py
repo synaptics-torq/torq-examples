@@ -111,8 +111,18 @@ def ensure_moonshine_streaming_models(
             model_dir,
         )
         return
+    base_dir = base_dir_for(model_dir, repo_id)
+    if base_dir is None:
+        logger.warning(
+            "%s is not laid out as <models dir>/%s; skipping the freshness check "
+            "so a refresh cannot fetch a second copy elsewhere. "
+            "Run `python setup_demos.py moonshine_streaming` to manage models.",
+            model_dir,
+            repo_id,
+        )
+        return
     try:
-        _refresh(repo_id, model_dir, base_dir_for(model_dir, repo_id))
+        _refresh(repo_id, model_dir, base_dir)
     except Exception as e:
         logger.warning(
             "Could not refresh models from %s (%s); using local files.", repo_id, e
