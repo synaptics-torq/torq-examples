@@ -31,7 +31,8 @@ The setup downloads:
 - `ppocr_det_800x608.vmfb` — detection, static 800×608 input
 - `rec_buckets/rec_w{320,640,1280,2432}.vmfb` — recognition, one per width bucket
 - `ppocr_rec.yml` — recognizer character dictionary
-- any files present under `samples/` in the Hugging Face repo
+- everything under `samples/`: `sample.jpg`, a 10-line café menu card, and
+  `sample.png`, a dense 99-line paper page for a heavier run
 
 ## Running
 
@@ -49,7 +50,7 @@ export WAYLAND_DISPLAY=wayland-1
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
   --models ../models/Synaptics/paddle-paddle-tiny \
   --device torq
 ```
@@ -63,7 +64,7 @@ To save or display the annotated image:
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
   --models ../models/Synaptics/paddle-paddle-tiny \
   --device torq \
   --save-image \
@@ -73,11 +74,18 @@ python src/infer.py \
 Output lists one line per recognized text box with its confidence:
 
 ```
+Time: detection 519.8ms, recognition 1181.8ms (10 boxes detected)
+
 [4/5] Text:
-  1   [0.997] Markov Entropy Decomposition: a variational
-  2   [0.995] dual of quantum negativity
+  1   [0.991] BLUE DOOR CAFE
+  2   [0.996] all day breakfast
+  3   [0.999] BREAKFAST
+  4   [0.996] Avocado Toast  6.50
   ...
 ```
+
+Recognition time scales with the number of detected lines, since each line is a
+separate invocation — the dense `sample.png` takes ~22 s for its 99 lines.
 
 `--tda` selects the allocator backing Torq device buffers — it does not change
 where the model runs; both stages execute on the NPU either way.
@@ -103,7 +111,7 @@ checking NPU accuracy against a CPU reference:
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
   --models ../models/Synaptics/paddle-paddle-tiny \
   --rec-backend ort --rec-onnx ppocr_rec_dynamic.onnx
 ```
