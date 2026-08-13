@@ -8,12 +8,10 @@ line is padded to the narrowest width that fits it.
 """
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
 from ppocr.setup_demo import ensure_ppocr_models
-from utils.draw import display_image_gst
 from utils.ppocr import (BucketTextRecognizer, NPUBackend, ORTBackend, TextDetector, TextRecognizer, load_char_dict,
                          render_annotated_ocr_image, run_ocr)
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_for_inference
@@ -59,21 +57,19 @@ def build_recognizer(args, char_dict, runtime_flags):
     return BucketTextRecognizer(char_dict, backends)
 
 
-def maybe_save_and_display(args, results):
-    if not (args.save_image or args.display) or not results:
+def save_annotated_image(args, results):
+    """Write the source image with the detected boxes and their text, at source resolution."""
+    if not args.save_image or not results:
         return
-
-    orientation = os.environ.get("ORIENTATION", "landscape")
-    disp_w = int(os.environ.get("DISPLAY_WIDTH", 800 if orientation == "landscape" else 480))
-    disp_h = int(os.environ.get("DISPLAY_HEIGHT", 480 if orientation == "landscape" else 800))
 
     print("\n[5/5] Saving result image...")
     try:
-        img = render_annotated_ocr_image(args.image, results, (disp_w, disp_h))
-        img.save("output_ocr.jpg")
+        from PIL import Image
+
+        with Image.open(args.image) as src:
+            size = src.size
+        render_annotated_ocr_image(args.image, results, size).save("output_ocr.jpg")
         print("Result image saved to: output_ocr.jpg")
-        if args.display:
-            display_image_gst("output_ocr.jpg", disp_w, disp_h)
     except Exception as exc:
         print(f"Failed to save result image: {exc}")
 
@@ -101,8 +97,7 @@ def parse_args():
     parser.add_argument("--rec-backend", choices=["npu", "ort"], default="npu")
     # Output
     parser.add_argument("--drop-score", type=float, default=0.5, help="Minimum recognition confidence to keep a line")
-    parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
-    parser.add_argument("--display", action="store_true", help="Display annotated frame")
+    parser.add_argument("--save-image", action="store_true", help="Save the annotated image as output_ocr.jpg")
     return parser.parse_args()
 
 
@@ -142,7 +137,7 @@ def main():
         for i, (_box, text, score) in enumerate(results, 1):
             print(f"  {i:<3} [{score:.3f}] {text}")
 
-        maybe_save_and_display(args, results)
+        save_annotated_image(args, results)
     finally:
         if uses_npu:
             cleanup_npu_after_inference()

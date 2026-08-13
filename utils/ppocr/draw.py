@@ -3,8 +3,6 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 from utils.draw import letterbox_pil_image, load_font
 
 _BOX_COLOR = (0, 220, 0)
@@ -19,23 +17,6 @@ _MIN_LABEL_FONT_PX, _MAX_LABEL_FONT_PX = 13, 34
 _LABEL_PAD_PX = 2
 
 _font_cache: dict[int, object] = {}
-
-
-def annotate_ocr_frame(bgr_frame: np.ndarray, results) -> np.ndarray:
-    """Draw detected quads and their recognized text onto a BGR frame."""
-    import cv2
-
-    frame = bgr_frame.copy()
-    for box, text, _score in results:
-        cv2.polylines(frame, [box.astype(np.int32).reshape(-1, 1, 2)], isClosed=True, color=_BOX_COLOR, thickness=2)
-        if not text:
-            continue
-        x, y = int(box[:, 0].min()), int(box[:, 1].min())
-        (tw, th), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, 0.5, 1)
-        ty = y - 4 if y - th - 6 >= 0 else int(box[:, 1].max()) + th + 4  # above the box, else below
-        cv2.rectangle(frame, (x - 2, ty - th - 4), (x + tw + 4, ty + 2), _TEXT_BG, -1)
-        cv2.putText(frame, text, (x, ty), cv2.FONT_HERSHEY_SIMPLEX, 0.5, _TEXT_COLOR, 1, cv2.LINE_AA)
-    return frame
 
 
 def _label_font(line_height: float):

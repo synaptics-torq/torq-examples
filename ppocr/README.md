@@ -37,13 +37,6 @@ The setup downloads:
 
 Run the demo from the `ppocr` directory.
 
-If you want on-device display output, set:
-
-```sh
-export XDG_RUNTIME_DIR=/var/run/user/0
-export WAYLAND_DISPLAY=wayland-1
-```
-
 ### Image inference
 
 ```sh
@@ -51,24 +44,16 @@ cd ppocr
 python src/infer.py \
   --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
   --models ../models/Synaptics/paddle-paddle-tiny \
-  --device torq
+  --device torq \
+  --save-image
 ```
 
 `--models` points at the directory holding the assets; the detection vmfb,
 bucket directory and character dictionary are found inside it by name. Override
 any of them individually with `--det-vmfb`, `--rec-bucket-dir` and `--rec-yml`.
 
-To save or display the annotated image:
-
-```sh
-cd ppocr
-python src/infer.py \
-  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
-  --models ../models/Synaptics/paddle-paddle-tiny \
-  --device torq \
-  --save-image \
-  --display
-```
+`--save-image` writes `output_ocr.jpg`: the source image with every detected
+box outlined and its recognized text labelled, at the source resolution.
 
 Output lists one line per recognized text box with its confidence:
 
@@ -99,7 +84,6 @@ Image inference options:
 - `--device-io`: preallocate input buffers and keep outputs as device arrays
 - `--drop-score`: minimum recognition confidence to keep a line, defaults to `0.5`
 - `--save-image`: save the annotated output image as `output_ocr.jpg`
-- `--display`: show the annotated image with GStreamer/Wayland
 - `--no-refresh`: skip the Hugging Face freshness check (offline/airgapped runs)
 
 ### Comparing against the CPU
