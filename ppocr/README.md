@@ -24,7 +24,7 @@ This verifies Python dependencies for the demo and downloads the PP-OCR assets f
 Downloaded assets are stored at:
 
 ```sh
-models/Synaptics/ppocrv6-tiny-torq/
+models/Synaptics/paddle-paddle-tiny/
 ```
 
 The setup downloads:
@@ -49,8 +49,8 @@ export WAYLAND_DISPLAY=wayland-1
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/ppocrv6-tiny-torq/samples/sample.png \
-  --models ../models/Synaptics/ppocrv6-tiny-torq \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --models ../models/Synaptics/paddle-paddle-tiny \
   --device torq \
   --tda cpu
 ```
@@ -64,8 +64,8 @@ To save or display the annotated image:
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/ppocrv6-tiny-torq/samples/sample.png \
-  --models ../models/Synaptics/ppocrv6-tiny-torq \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --models ../models/Synaptics/paddle-paddle-tiny \
   --device torq \
   --tda cpu \
   --save-image \
@@ -104,8 +104,8 @@ checking NPU accuracy against a CPU reference:
 ```sh
 cd ppocr
 python src/infer.py \
-  --image ../models/Synaptics/ppocrv6-tiny-torq/samples/sample.png \
-  --models ../models/Synaptics/ppocrv6-tiny-torq \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
+  --models ../models/Synaptics/paddle-paddle-tiny \
   --rec-backend ort --rec-onnx ppocr_rec_dynamic.onnx
 ```
 

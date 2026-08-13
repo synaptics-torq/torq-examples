@@ -20,7 +20,7 @@ from utils.download import (
 
 logger = logging.getLogger("ppocr.setup")
 
-_PPOCR_HF_REPO: Final[str] = "Synaptics/ppocrv6-tiny-torq"
+_PPOCR_HF_REPO: Final[str] = "Synaptics/paddle-paddle-tiny"
 
 # Detection runs at one static shape; recognition uses one vmfb per width bucket
 # so each text line is padded to the narrowest width that fits it.
