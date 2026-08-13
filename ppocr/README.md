@@ -51,8 +51,7 @@ cd ppocr
 python src/infer.py \
   --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
   --models ../models/Synaptics/paddle-paddle-tiny \
-  --device torq \
-  --tda cpu
+  --device torq
 ```
 
 `--models` points at the directory holding the assets; the detection vmfb,
@@ -67,7 +66,6 @@ python src/infer.py \
   --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.png \
   --models ../models/Synaptics/paddle-paddle-tiny \
   --device torq \
-  --tda cpu \
   --save-image \
   --display
 ```
@@ -81,15 +79,16 @@ Output lists one line per recognized text box with its confidence:
   ...
 ```
 
-`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
+`--tda` selects the allocator backing Torq device buffers — it does not change
+where the model runs; both stages execute on the NPU either way.
 
-> **Note:** on current firmware the detection model may fail with
-> `INTERNAL; failed to writeXram()` under the default `dmabuf` allocator. Pass
-> `--tda cpu` if you hit this.
+> **Note:** this demo defaults to `--tda cpu`, which is also the Torq runtime's
+> own default; the other demos override it to `dmabuf`. On current firmware the
+> detection model fails under `dmabuf` with `INTERNAL; failed to writeXram()`.
 
 Image inference options:
 - `--device`: Torq device URI, defaults to `torq`
-- `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
+- `--tda {cpu,dmabuf}`: allocator backing Torq device buffers, defaults to `cpu`
 - `--device-io`: preallocate input buffers and keep outputs as device arrays
 - `--drop-score`: minimum recognition confidence to keep a line, defaults to `0.5`
 - `--save-image`: save the annotated output image as `output_ocr.jpg`

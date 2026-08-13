@@ -104,8 +104,10 @@ def main():
         help="Skip the model freshness check (offline/airgapped runs)",
     )
     parser.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
+        "--tda", type=str, choices=["cpu", "dmabuf"], default="cpu",
+        help="Allocator backing Torq device buffers (default: %(default)s, matching the "
+             "runtime's own default). The detection model currently fails on 'dmabuf' "
+             "with 'failed to writeXram()'.",
     )
     parser.add_argument(
         "--device-io", action="store_true",
