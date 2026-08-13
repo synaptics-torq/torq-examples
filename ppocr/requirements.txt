@@ -1,0 +1,6 @@
+opencv-python-headless  # cv2: image decode, DB post-processing, crop warping
+Pillow                  # annotated output image
+PyYAML                  # recognizer character dictionary (inference.yml)
+pyclipper               # DB box unclipping
+shapely                 # DB box polygon geometry
+onnxruntime             # optional: --det-backend/--rec-backend ort (CPU reference)
