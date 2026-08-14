@@ -212,7 +212,6 @@ class MoonshineStaticStreamingState:
         self.pos_offset[0]  = 0
         self.cross_kv_fill  = 0
         self.chunk_idx      = 0
-        self.last_decode_steps = 0   # decoder forward passes in the most recent decode()
 
         # Committed-prefix incremental decode state.  self.k_self / self.v_self
         # positions 0..len(committed_tokens)-1 stay valid across previews; only
@@ -470,13 +469,12 @@ class MoonshineStaticStreamingModel:
     def _decode_loop(self, state, start_step, start_token, max_tokens,
                       cross_attn_bias, k_cross_dev, v_cross_dev, use_dev):
         """Greedy-decode one token at a time from ``start_step``/``start_token``
-        until EOS (token=2) or max_tokens. Returns (new_tokens, steps_run); shared
+        until EOS (token=2) or max_tokens. Returns new tokens; shared
         by decode() (start_step=0, start_token=BOS) and decode_incremental()
         (resuming after the committed prefix)."""
         tokens        = []
         current_token = start_token
         step          = start_step
-        steps_run     = 0
 
         while step < max_tokens:
             current_len = np.array([[step]], dtype=np.int64)
@@ -491,7 +489,6 @@ class MoonshineStaticStreamingModel:
                 k_cross_dev, v_cross_dev, use_dev,
             )
             step      += 1
-            steps_run += 1
 
             if next_token == 2 or step >= max_tokens:
                 break
@@ -499,7 +496,7 @@ class MoonshineStaticStreamingModel:
             tokens.append(next_token)
             current_token = next_token
 
-        return tokens, steps_run
+        return tokens
 
     def decode(self, state: MoonshineStaticStreamingState):
         """
@@ -508,7 +505,6 @@ class MoonshineStaticStreamingModel:
         Returns the list of generated token IDs (excluding BOS/EOS).
         """
         if state.cross_kv_fill == 0:
-            state.last_decode_steps = 0
             return []
 
         duration_sec = state.cross_kv_fill * 0.020
@@ -522,10 +518,9 @@ class MoonshineStaticStreamingModel:
         # P2: ensure self-KV resides on device (allocated once, then reused).
         use_dev = self._ensure_self_kv_device(state)
 
-        tokens, steps = self._decode_loop(
+        tokens = self._decode_loop(
             state, 0, 1, max_tokens, cross_attn_bias, k_cross_dev, v_cross_dev, use_dev
         )
-        state.last_decode_steps = steps
         return tokens
 
     def decode_incremental(self, state: MoonshineStaticStreamingState,
@@ -542,7 +537,6 @@ class MoonshineStaticStreamingModel:
         Returns the full hypothesis (committed prefix + freshly decoded tail).
         """
         if state.cross_kv_fill == 0:
-            state.last_decode_steps = 0
             return state.committed_tokens[:]
 
         duration_sec = state.cross_kv_fill * 0.020
@@ -562,11 +556,10 @@ class MoonshineStaticStreamingModel:
         C             = len(committed)
         start_token   = committed[-1] if C else 1  # last committed token, re-fed at position C (or BOS)
 
-        tail_tokens, steps_run = self._decode_loop(
+        tail_tokens = self._decode_loop(
             state, C, start_token, max_tokens, cross_attn_bias, k_cross_dev, v_cross_dev, use_dev
         )
         result_tokens = committed + tail_tokens
-        state.last_decode_steps = steps_run
 
         # ── Commit rule: LocalAgreement-N  AND  ≥ commit_delay_sec behind frontier ──
         state.recent_hyps.append(result_tokens[:])

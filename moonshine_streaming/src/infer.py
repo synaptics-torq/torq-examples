@@ -173,13 +173,10 @@ def resample(audio, orig_sr, target_sr=16000):
 # ── Verbose stats ────────────────────────────────────────────────────────────
 
 class _Stats:
-    """Accumulates just enough timing to report RTF and decoder throughput
-    for --verbose; attribute mutation (not rebinding) so it needs no
-    `nonlocal` from the nested worker closure."""
+    """Accumulates RTF timing; mutation avoids a `nonlocal` worker binding."""
     def __init__(self):
         self.encode_ms    = 0.0
         self.decode_ms    = 0.0
-        self.decode_steps = 0
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -279,7 +276,6 @@ def main(args: argparse.Namespace):
                 tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
             if stats is not None:
                 stats.decode_ms    += (time.perf_counter() - t0) * 1000
-                stats.decode_steps += state.last_decode_steps
             return tokens
 
         def _finalize(count):
@@ -378,14 +374,8 @@ def main(args: argparse.Namespace):
         audio_s = len(wav_audio) / input_sample_rate
         work_s  = (stats.encode_ms + stats.decode_ms) / 1000
         rtf     = work_s / audio_s if audio_s else 0.0
-        tok_s   = stats.decode_steps / (stats.decode_ms / 1000) if stats.decode_ms else 0.0
         print(
             f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
-            file=sys.stderr,
-        )
-        print(
-            f"[verbose] Decoder: {stats.decode_steps} tokens in {stats.decode_ms / 1000:.1f}s "
-            f"→ {tok_s:.1f} tok/s",
             file=sys.stderr,
         )
 
@@ -448,7 +438,7 @@ if __name__ == "__main__":
     parser.add_argument("--commit-agreement", type=int, default=2,             help="LocalAgreement-N: commit a token only if stable across the last N hypotheses (default: 2)")
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
-    parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) and decoder tok/s summary on exit")
+    parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
     parser.add_argument("--no-refresh",    action="store_true", default=False, help="Skip the Hugging Face check for updated models (offline/airgapped runs)")
     add_logging_args(parser)
     runtime_group = parser.add_argument_group("runtime")
