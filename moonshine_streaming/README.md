@@ -41,7 +41,7 @@ since a recording often starts talking immediately.
   cadence and how eagerly tokens are frozen 
 -  `--vad-threshold` / `--vad-silence` / `--vad-lookback` tune speech detection and utterance splitting.
 - `--no-refresh` skips the Hugging Face check for updated models
-- `--verbose` prints a real-time factor (RTF) and decoder tok/s summary on exit
+- `--verbose` prints a real-time factor (RTF) summary on exit
 - `--runtime-flags` forwards flags straight to the Torq runtime and must come
 last, since every remaining argument is passed through
 
@@ -136,5 +136,4 @@ Note: only the MIT-licensed code and English-language models from that repo
 apply here — moonshine-ai's non-English models ship under a separate, more
 restrictive Community License (revenue-capped, registration required) that
 this demo does not use.
-
 
