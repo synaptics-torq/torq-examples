@@ -29,10 +29,10 @@ import logging
 import math
 import os
 
+import ml_dtypes
 import numpy as np
 
 from torq.runtime import VMFBInferenceRunner
-from iree.runtime import DeviceArray
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -95,8 +95,6 @@ def _load_bfloat16_table(path: str) -> np.ndarray:
     """Load a bf16 NumPy table stored using NumPy's two-byte void dtype."""
     arr = np.load(path)
     if arr.dtype == np.dtype("V2"):
-        import ml_dtypes
-
         arr = arr.view(ml_dtypes.bfloat16)
     return arr
 
@@ -126,32 +124,13 @@ def _named_inputs_info(runner: VMFBInferenceRunner, input_order: list, vmfb_path
     return dict(zip(input_order, info))
 
 
-def _ordered_feed(feed_dict: dict, input_order: list, input_info: dict) -> list:
-    """Build the positional input list a VMFB expects from a name-keyed feed
-    dict: cast host arrays to each input's declared dtype, and pass resident
-    DeviceArray inputs straight through (no host round-trip, P1/P2)."""
-    ordered = []
-    for name in input_order:
-        val = feed_dict[name]
-        if isinstance(val, DeviceArray):
-            ordered.append(val)            # resident input (e.g. cross-KV, P1)
-            continue
-        arr = np.asarray(val).astype(input_info[name].dtype, copy=False)
-        ordered.append(arr)
-    return ordered
-
-
-def _to_host_f32(outputs) -> list:
-    """Copy VMFB outputs to host as float32 numpy arrays (all Moonshine model
-    outputs are floating-point)."""
+def _to_host(outputs) -> list:
+    """Copy VMFB outputs to host without changing their model-native dtypes."""
     result = []
     for o in outputs:
         if hasattr(o, "to_host"):
             o = o.to_host()
-        arr = np.asarray(o)
-        if arr.dtype != np.float32:
-            arr = arr.astype(np.float32, copy=False)
-        result.append(arr)
+        result.append(np.asarray(o))
     return result
 
 
@@ -180,18 +159,18 @@ class MoonshineStaticStreamingState:
 
         # Allocate large fixed buffers once — never reallocated across utterances
         self.k_cross = np.zeros(
-            (self.depth, 1, self.heads, self.max_memory_len, self.head_dim), dtype=np.float32
+            (self.depth, 1, self.heads, self.max_memory_len, self.head_dim), dtype=ml_dtypes.bfloat16
         )
         self.v_cross = np.zeros(
-            (self.depth, 1, self.heads, self.max_memory_len, self.head_dim), dtype=np.float32
+            (self.depth, 1, self.heads, self.max_memory_len, self.head_dim), dtype=ml_dtypes.bfloat16
         )
         self.k_self = np.zeros(
-            (self.depth, 1, self.heads, self.max_tokens, self.head_dim), dtype=np.float32
+            (self.depth, 1, self.heads, self.max_tokens, self.head_dim), dtype=ml_dtypes.bfloat16
         )
         self.v_self = np.zeros(
-            (self.depth, 1, self.heads, self.max_tokens, self.head_dim), dtype=np.float32
+            (self.depth, 1, self.heads, self.max_tokens, self.head_dim), dtype=ml_dtypes.bfloat16
         )
-        self.pos_offset = np.array([0], dtype=np.int64)
+        self.pos_offset = np.array([0], dtype=np.int32)
 
         # P2: resident self-KV device buffers, lazily allocated once by the model
         # and reused thereafter. Deliberately NOT reset between utterances — the
@@ -204,10 +183,12 @@ class MoonshineStaticStreamingState:
         self.reset()
 
     def reset(self):
-        self.conv1_buffer = np.zeros((1, self.conv1_channels, 4), dtype=np.float32)
-        self.conv2_buffer = np.zeros((1, self.conv2_channels, 4), dtype=np.float32)
-        self.features_buffer = np.zeros((1, self.total_lookahead, self.features_dim), dtype=np.float32)
-        self.enc_bufs     = [np.zeros(self.enc_buf_shape, dtype=np.float32)
+        self.conv1_buffer = np.zeros((1, self.conv1_channels, 4), dtype=ml_dtypes.bfloat16)
+        self.conv2_buffer = np.zeros((1, self.conv2_channels, 4), dtype=ml_dtypes.bfloat16)
+        self.features_buffer = np.zeros(
+            (1, self.total_lookahead, self.features_dim), dtype=ml_dtypes.bfloat16
+        )
+        self.enc_bufs     = [np.zeros(self.enc_buf_shape, dtype=ml_dtypes.bfloat16)
                              for _ in range(self.enc_num_bufs)]
         self.pos_offset[0]  = 0
         self.cross_kv_fill  = 0
@@ -265,7 +246,6 @@ class MoonshineStaticStreamingModel:
         self.warmup_chunks   = cfg["warmup_chunks"]
         self.max_tokens      = cfg["max_tokens"]
         self.max_memory_len  = cfg["max_memory_len"]
-        self.extract_embeddings = cfg.get("extract_embeddings", False)
 
         # Derive model dimensions from fused_encoder inputs
         self.conv1_channels = self._enc_info["conv1_buffer"].shape[1]  # [1, conv1_channels, 4]
@@ -284,12 +264,9 @@ class MoonshineStaticStreamingModel:
         self.heads    = k_self_0_shape[1]
         self.head_dim = k_self_0_shape[3]
 
-        # Load embedding table when the decoder takes inputs_embeds instead of token ids
-        if self.extract_embeddings:
-            emb_path = find_asset(model_dir, "decoder_token_embeddings.npy")
-            self.token_embeddings = _load_bfloat16_table(emb_path)
-        else:
-            self.token_embeddings = None
+        # The decoder accepts bf16 token embeddings, not token IDs.
+        emb_path = find_asset(model_dir, "decoder_token_embeddings.npy")
+        self.token_embeddings = _load_bfloat16_table(emb_path)
 
         # Position embedding table for host-side lookup before each adapter call
         pos_emb_path = find_asset(model_dir, "adapter_pos_emb.npy")
@@ -309,7 +286,6 @@ class MoonshineStaticStreamingModel:
         logger.debug("  - Warmup Chunks:         %d", self.warmup_chunks)
         logger.debug("  - Max Tokens:            %d", self.max_tokens)
         logger.debug("  - Max Memory Len:        %d", self.max_memory_len)
-        logger.debug("  - Extract Embeddings:    %s", self.extract_embeddings)
 
     def create_state(self) -> MoonshineStaticStreamingState:
         return MoonshineStaticStreamingState(
@@ -331,20 +307,18 @@ class MoonshineStaticStreamingModel:
         F = self.feature_stride
         pos_emb = self.pos_emb_weights[state.pos_offset[0]:state.pos_offset[0] + F].reshape(1, F, -1)
 
-        # Build feed dict
-        feed = {
-            "audio_chunk":          audio_chunk.reshape(1, -1).astype(np.float32),
-            "conv1_buffer":         state.conv1_buffer,
-            "conv2_buffer":         state.conv2_buffer,
-            "features_buffer":      state.features_buffer,
-            "position_embeddings":  pos_emb,
-        }
-        for i, buf in enumerate(state.enc_bufs):
-            feed[f"buf_{i}"] = buf
+        encoder_inputs = [
+            # Audio arrives from the application in float32; this is the sole
+            # floating-point conversion at the encoder boundary.
+            audio_chunk.reshape(1, -1).astype(ml_dtypes.bfloat16, copy=False),
+            state.conv1_buffer,
+            state.conv2_buffer,
+            state.features_buffer,
+            pos_emb,
+            *state.enc_bufs,
+        ]
 
-        res = _to_host_f32(self.fused_encoder.infer(
-            _ordered_feed(feed, ENCODER_INPUT_ORDER, self._enc_info)
-        ))
+        res = _to_host(self.fused_encoder.infer(encoder_inputs))
 
         # Unpack outputs:
         # k_cross, v_cross, conv1_buffer_out, conv2_buffer_out, features_buffer_out, *buf_out
@@ -382,23 +356,22 @@ class MoonshineStaticStreamingModel:
         """
         if not is_final:
             return
-        zero_chunk = np.zeros(self.chunk_len, dtype=np.float32)
+        zero_chunk = np.zeros(self.chunk_len, dtype=ml_dtypes.bfloat16)
         for _ in range(self.warmup_chunks):
             self.process_audio_chunk(state, zero_chunk)
 
     def _upload_cross_kv(self, state: MoonshineStaticStreamingState):
         """P1: upload the currently-valid cross-KV to resident device buffers once
-        per decode call (cast to the decoder's input dtype), so the per-token loop
+        per decode call, so the per-token loop
         reuses the same handles instead of re-uploading the full cross-KV
         (~88 % of per-token H2D) every step. Cross-KV is constant within a single
         decode call. Falls back to host arrays if the session lacks device support."""
         if not hasattr(self.decoder, "allocate_device_array"):
             return ([state.k_cross[i] for i in range(self.depth)],
                     [state.v_cross[i] for i in range(self.depth)])
-        dt = self._dec_info["k_cross_0"].dtype
 
         def up(x):
-            return self.decoder.allocate_device_array(x.astype(dt, copy=False))
+            return self.decoder.allocate_device_array(x)
 
         return ([up(state.k_cross[i]) for i in range(self.depth)],
                 [up(state.v_cross[i]) for i in range(self.depth)])
@@ -412,46 +385,38 @@ class MoonshineStaticStreamingModel:
             return False
         if state.k_self_dev is not None:
             return True
-        dt = self._dec_info["k_self_0"].dtype
 
         def up(x):
-            return self.decoder.allocate_device_array(x.astype(dt, copy=False))
+            return self.decoder.allocate_device_array(x)
 
         state.k_self_dev = [up(state.k_self[i]) for i in range(self.depth)]
         state.v_self_dev = [up(state.v_self[i]) for i in range(self.depth)]
         return True
 
-    def _decoder_step(self, state, first_feed, cross_attn_bias, current_len,
+    def _decoder_step(self, state, inputs_embeds, cross_attn_bias, current_len,
                       k_cross_dev, v_cross_dev, use_dev) -> int:
         """One decoder forward pass. Self-KV and cross-KV are fed as resident
         device buffers (P1/P2); only logits are copied to host (for argmax). When
         use_dev, the self-KV outputs stay on device and become the next step's
         inputs — no per-token self-KV round-trip."""
-        dec_feed = {
-            **first_feed,
-            "cross_attn_bias": cross_attn_bias,
-            "current_len":     current_len,   # ignored by VMFB (not in model inputs)
-            "position_ids":    current_len,
-        }
+        decoder_inputs = [inputs_embeds]
         for _i in range(self.depth):
             if use_dev:
-                dec_feed[f"k_self_{_i}"] = state.k_self_dev[_i]
-                dec_feed[f"v_self_{_i}"] = state.v_self_dev[_i]
+                decoder_inputs.extend((state.k_self_dev[_i], state.v_self_dev[_i]))
             else:
-                dec_feed[f"k_self_{_i}"] = state.k_self[_i]
-                dec_feed[f"v_self_{_i}"] = state.v_self[_i]
-            dec_feed[f"k_cross_{_i}"] = k_cross_dev[_i]
-            dec_feed[f"v_cross_{_i}"] = v_cross_dev[_i]
+                decoder_inputs.extend((state.k_self[_i], state.v_self[_i]))
+        for _i in range(self.depth):
+            decoder_inputs.extend((k_cross_dev[_i], v_cross_dev[_i]))
+        position_ids = current_len
+        decoder_inputs.extend((cross_attn_bias, position_ids, current_len))
 
-        dec_out = self.decoder.infer(
-            _ordered_feed(dec_feed, DECODER_INPUT_ORDER, self._dec_info)
-        )
+        dec_out = self.decoder.infer(decoder_inputs)
 
-        # Only logits cross back to host (for argmax); match the original f32 path.
+        # Only logits cross back to host for argmax.
         logits = dec_out[0]
         if hasattr(logits, "to_host"):
             logits = logits.to_host()
-        logits = np.asarray(logits).astype(np.float32, copy=False)
+        logits = np.asarray(logits)
 
         # Self-KV outputs: keep resident (next-step inputs) or write back to host.
         if use_dev:
@@ -477,15 +442,12 @@ class MoonshineStaticStreamingModel:
         step          = start_step
 
         while step < max_tokens:
-            current_len = np.array([[step]], dtype=np.int64)
+            current_len = np.array([[step]], dtype=np.int32)
 
-            if self.extract_embeddings:
-                first_feed = {"inputs_embeds": self.token_embeddings[current_token].reshape(1, 1, -1)}
-            else:
-                first_feed = {"token": np.array([[current_token]], dtype=np.int64)}
+            inputs_embeds = self.token_embeddings[current_token].reshape(1, 1, -1)
 
             next_token = self._decoder_step(
-                state, first_feed, cross_attn_bias, current_len,
+                state, inputs_embeds, cross_attn_bias, current_len,
                 k_cross_dev, v_cross_dev, use_dev,
             )
             step      += 1
@@ -510,7 +472,9 @@ class MoonshineStaticStreamingModel:
         duration_sec = state.cross_kv_fill * 0.020
         max_tokens   = min(int(math.ceil(duration_sec * 6.5)), self.max_tokens)
 
-        cross_attn_bias = np.zeros((1, self.heads, 1, self.max_memory_len), dtype=np.float32)
+        cross_attn_bias = np.zeros(
+            (1, self.heads, 1, self.max_memory_len), dtype=ml_dtypes.bfloat16
+        )
         cross_attn_bias[:, :, :, state.cross_kv_fill:] = -1e9
 
         # P1: cross-KV is constant for this whole decode call — upload once.
@@ -542,7 +506,9 @@ class MoonshineStaticStreamingModel:
         duration_sec = state.cross_kv_fill * 0.020
         max_tokens   = min(int(math.ceil(duration_sec * 6.5)), self.max_tokens)
 
-        cross_attn_bias = np.zeros((1, self.heads, 1, self.max_memory_len), dtype=np.float32)
+        cross_attn_bias = np.zeros(
+            (1, self.heads, 1, self.max_memory_len), dtype=ml_dtypes.bfloat16
+        )
         cross_attn_bias[:, :, :, state.cross_kv_fill:] = -1e9
 
         # P1: cross-KV is constant for this whole decode call — upload once.
