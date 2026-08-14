@@ -91,6 +91,16 @@ def find_asset(model_dir: str, filename: str) -> str:
     )
 
 
+def _load_bfloat16_table(path: str) -> np.ndarray:
+    """Load a bf16 NumPy table stored using NumPy's two-byte void dtype."""
+    arr = np.load(path)
+    if arr.dtype == np.dtype("V2"):
+        import ml_dtypes
+
+        arr = arr.view(ml_dtypes.bfloat16)
+    return arr
+
+
 # ── VMFB input/output helpers ─────────────────────────────────────────────────
 #
 # A VMFBInferenceRunner exposes its model's inputs positionally (no argument
@@ -278,13 +288,13 @@ class MoonshineStaticStreamingModel:
         # Load embedding table when the decoder takes inputs_embeds instead of token ids
         if self.extract_embeddings:
             emb_path = find_asset(model_dir, "decoder_token_embeddings.npy")
-            self.token_embeddings = np.load(emb_path).astype(np.float32)
+            self.token_embeddings = _load_bfloat16_table(emb_path)
         else:
             self.token_embeddings = None
 
         # Position embedding table for host-side lookup before each adapter call
         pos_emb_path = find_asset(model_dir, "adapter_pos_emb.npy")
-        self.pos_emb_weights = np.load(pos_emb_path).astype(np.float32)
+        self.pos_emb_weights = _load_bfloat16_table(pos_emb_path)
 
         logger.debug("Static streaming model specifications (2-Split):")
         logger.debug("  - Depth (Layers):        %d", self.depth)
