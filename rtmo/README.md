@@ -57,8 +57,8 @@ python src/infer.py --image /path/to/photo.jpg --output out.jpg
 ```
 
 Each run prints the per-part timing (backbone / transformer / head), the number
-of people drawn, and the annotated output image path. Boxes are drawn in green
-with a `person <score>` label; the 17-keypoint COCO skeleton is overlaid in blue.
+of people drawn, and the annotated output image path. Rendering (green boxes +
+17-keypoint COCO skeletons) uses the shared `utils.pose_estimation` annotator.
 
 Options:
 
