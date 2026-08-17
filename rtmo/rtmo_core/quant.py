@@ -1,26 +1,15 @@
-"""
-Quantization support for the RTMO hybrid demo.
+"""Quantization support for the RTMO hybrid demo.
 
-The three hybrid vmfbs have quantized int8 I/O (NHWC), but a compiled vmfb does
-not expose its quantization at runtime — IREE hands back raw int8 tensors with
-no (scale, zero_point). Those params live only in the source TFLite parts (from
-PTQ), so this module reads them straight from the TFLite files shipped alongside
-the vmfbs (``rtmo_hybrid_{backbone,head}_int8.tflite``):
-
-  * input : the backbone image-input quantization (int8 NHWC, [0,255] domain).
-  * seams : backbone P3/P4/P5 output scales + head P3/P4/P5 input scales, used
-            to requantize between the chained parts host-side.
-  * heads : the eight int8 head output scales, used to dequantize to float.
-
-Everything is matched by (unique) NHWC shape, not position — the same approach
-the bf16 path uses in ``utils.unpack_heads``. The transformer part is bf16, so
-it carries no int8 quant params and is not read here.
+A compiled vmfb does not expose its quantization — IREE returns raw int8
+tensors. The (scale, zero_point) params live only in the source TFLite parts,
+so they are read from the files shipped alongside the vmfbs: the backbone
+image-input quant, the P3/P4/P5 seam scales (backbone outputs / head inputs,
+for host-side requant between the chained parts), and the eight head output
+scales. Everything is matched by (unique) NHWC shape, not position.
 """
 
 import numpy as np
 
-# The hybrid TFLite parts (source of the quant params, downloaded next to the
-# vmfbs) and the vmfbs themselves.
 BACKBONE_TFLITE = "rtmo_hybrid_backbone_int8.tflite"
 TRANSFORMER_TFLITE = "rtmo_hybrid_transformer_bf16.tflite"
 HEAD_TFLITE = "rtmo_hybrid_head_int8.tflite"
@@ -32,8 +21,7 @@ HEAD_NAMES = {
     (1, 20, 20, 17): "kpt_vis_s16",     (1, 10, 10, 17): "kpt_vis_s32",
     (1, 20, 20, 192): "pose_feats_s16", (1, 10, 10, 192): "pose_feats_s32",
 }
-# FPN seam feature-map shapes (NHWC): the P3/P4 skip connections and the
-# transformer-carried P5.
+# FPN seam feature-map shapes (NHWC): P3/P4 skips + transformer-carried P5.
 P3_SHAPE = (1, 40, 40, 96)
 P4_SHAPE = (1, 20, 20, 192)
 P5_SHAPE = (1, 10, 10, 256)
@@ -43,33 +31,27 @@ def _tflite_io_quant(tflite_path):
     """Return (inputs, outputs), each a list of (shape, dtype, scale, zp)."""
     try:
         import ai_edge_litert.interpreter as lite
-    except ImportError:  # pragma: no cover - fallback, same order as runners.py
+    except ImportError:  # same fallback order as runners.py
         import tensorflow.lite as lite
 
     interp = lite.Interpreter(model_path=str(tflite_path))
     interp.allocate_tensors()
 
     def rows(details):
-        out = []
-        for d in details:
-            scale, zero_point = d["quantization"]
-            shape = tuple(int(x) for x in d["shape"])
-            out.append((shape, d["dtype"], float(scale), int(zero_point)))
-        return out
+        return [(tuple(int(x) for x in d["shape"]), d["dtype"], float(d["quantization"][0]), int(d["quantization"][1])) for d in details]
 
     return rows(interp.get_input_details()), rows(interp.get_output_details())
 
 
 def read_hybrid_quant(backbone_tflite, head_tflite):
-    """Read the hybrid quant params from the backbone + head TFLite parts.
+    """Read quant params from the backbone + head TFLite parts.
 
-    Returns ``{in_scale, in_zp, in_dtype, seams, head_quant}`` where ``seams`` is
-    the dict :class:`~rtmo.rtmo_core.hybrid.HybridRunner` expects and
-    ``head_quant`` maps ``nhwc_shape -> (name, scale, zero_point)``.
+    Returns ``{in_scale, in_zp, in_dtype, seams, head_quant}``; ``seams`` is the
+    dict :class:`.hybrid.HybridRunner` expects, ``head_quant`` maps
+    ``nhwc_shape -> (name, scale, zero_point)``.
     """
     bb_in, bb_out = _tflite_io_quant(backbone_tflite)
     hd_in, hd_out = _tflite_io_quant(head_tflite)
-
     _, in_dtype, in_scale, in_zp = bb_in[0]  # single image input
 
     def sz(rows, shape):
@@ -95,44 +77,28 @@ def read_hybrid_quant(backbone_tflite, head_tflite):
     if missing:
         raise ValueError(f"missing head outputs in TFLite: {sorted(missing)}")
 
-    return {
-        "in_scale": in_scale,
-        "in_zp": in_zp,
-        "in_dtype": in_dtype,
-        "seams": seams,
-        "head_quant": head_quant,
-    }
+    return {"in_scale": in_scale, "in_zp": in_zp, "in_dtype": in_dtype, "seams": seams, "head_quant": head_quant}
 
 
 def quantize_input(tensor_nchw, in_scale, in_zp, in_dtype=np.int8):
     """float32 NCHW [0,255] tensor -> quantized NHWC tensor for the backbone."""
-    nhwc = np.transpose(tensor_nchw, (0, 2, 3, 1))
-    q = np.rint(nhwc / in_scale) + in_zp
+    q = np.rint(np.transpose(tensor_nchw, (0, 2, 3, 1)) / in_scale) + in_zp
     info = np.iinfo(in_dtype)
     return np.clip(q, info.min, info.max).astype(in_dtype)
 
 
 def dequantize_heads(outputs, head_quant):
-    """Quantized NHWC vmfb outputs -> {head name: float32 NCHW array}.
-
-    ``head_quant`` is the ``{nhwc_shape: (name, scale, zero_point)}`` table from
-    :func:`read_hybrid_quant`. Produces the same dict shape as
-    ``utils.unpack_heads`` does for bf16, so the postprocess is identical.
-    """
+    """Quantized NHWC vmfb outputs -> {head name: float32 NCHW array}, matched by shape."""
     heads = {}
     for o in outputs:
         arr = np.asarray(o)
-        key = tuple(arr.shape)
-        entry = head_quant.get(key)
+        entry = head_quant.get(tuple(arr.shape))
         if entry is None:
-            raise ValueError(
-                f"unexpected output shape {key}; expected one of {sorted(head_quant)}"
-            )
+            raise ValueError(f"unexpected output shape {arr.shape}; expected one of {sorted(head_quant)}")
         name, scale, zero_point = entry
         if name in heads:
             raise ValueError(f"duplicate output for {name}")
-        real = (arr.astype(np.float32) - zero_point) * scale
-        heads[name] = np.transpose(real, (0, 3, 1, 2))  # NHWC -> NCHW
+        heads[name] = np.transpose((arr.astype(np.float32) - zero_point) * scale, (0, 3, 1, 2))
 
     missing = {n for n, _, _ in head_quant.values()} - set(heads)
     if missing:
