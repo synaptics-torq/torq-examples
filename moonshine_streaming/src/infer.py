@@ -186,6 +186,8 @@ class _Stats:
 
 def main(args: argparse.Namespace):
     configure_logging(args.logging)
+    if args.txt:
+        open("transcription.txt", "w").close()
 
     model_dir = args.model_dir
 
@@ -292,6 +294,9 @@ def main(args: argparse.Namespace):
             full, and lock the finalized line in place."""
             model.encode(state, is_final=True)
             text = tokenizer.decode(_decode(), skip_special_tokens=True)
+            if args.txt and text:
+                with open("transcription.txt", "a") as f:
+                    f.write(text + "\n")
             terminal.draw(f"\033[32m✓\033[0m Utterance #{count}: {text if text else '(empty)'}")
             terminal.complete_line()
 
@@ -380,6 +385,9 @@ def main(args: argparse.Namespace):
     def print_verbose_summary():
         if stats is None:
             return
+        if wav_audio is None: 
+            print("\n[verbose] (mic mode — no RTF summary)", file=sys.stderr)
+            return
         audio_s = len(wav_audio) / input_sample_rate
         work_s  = (stats.encode_ms + stats.decode_ms) / 1000
         rtf     = work_s / audio_s if audio_s else 0.0
@@ -451,9 +459,13 @@ def main(args: argparse.Namespace):
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
     try:
-        print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
         try:
-            feed_wav_to_queue()
+            if args.mic:
+                print(">>> Transcribing from microphone ... <<<\n", file=sys.stderr)
+                feed_mic_to_queue()
+            else:
+                print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
+                feed_wav_to_queue()
             worker_thread.join()
         except KeyboardInterrupt:
             print("\n\nInterrupted...", file=sys.stderr)
@@ -472,7 +484,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Moonshine Static Streaming WAV File Transcription Demo (2-Split VMFB)"
     )
-    parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
+    parser.add_argument("--wav",           type=str,   required=False,          help="WAV file to transcribe")
+    parser.add_argument("--mic",           action="store_true",               help="Use microphone to transcribe")
+    parser.add_argument("--txt",           action="store_true",               help="Export a text transcription file")
     parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
     parser.add_argument("-m", "--model-dir", type=str, required=True, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir")
     parser.add_argument("--vad-threshold", type=float, default=0.01,           help="VAD trigger threshold: RMS floor for the energy VAD (default: 0.010)")
