@@ -10,6 +10,7 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Iterator, Sized
 from pathlib import Path
+from typing import Final
 
 import ml_dtypes
 import numpy as np
@@ -29,12 +30,26 @@ def _raise_if_stopped(should_stop: StopCheck | None) -> None:
         raise InferenceInterrupted
 
 
+_SIDECAR_SUFFIXES: Final[frozenset[str]] = frozenset(
+    {".incomplete", ".part", ".tmp", ".swp", ".lock", ".metadata", ".md5", ".sha256"}
+)
+
+
 def discover_lm_head_path(model_path: str | os.PathLike) -> Path | None:
-    """Find a sibling LM head VMFB for *model_path*, when unambiguous."""
+    """Find a sibling LM head VMFB for *model_path*, when unambiguous.
+
+    Model file names carry build suffixes after ``.vmfb`` (``lm_head.vmfb.trim``,
+    ``lm_head.vmfb.w4a16``), so candidates are matched on the whole name rather
+    than a fixed extension. Interrupted-download and editor leftovers share that
+    shape, so they are excluded: they are not loadable modules, and handing one
+    to the runtime is far worse than not finding a head at all.
+    """
     model_path = Path(model_path).resolve()
     candidates = []
     for path in sorted(model_path.parent.glob("*.vmfb*")):
         if path.resolve() == model_path:
+            continue
+        if path.suffix.lower() in _SIDECAR_SUFFIXES:
             continue
         normalized_stem = path.stem.lower().replace("-", "_")
         if "lm_head" in normalized_stem:

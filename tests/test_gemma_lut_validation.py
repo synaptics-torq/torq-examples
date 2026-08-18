@@ -58,6 +58,16 @@ class TestGemmaLMHeadDiscovery:
 
         assert discover_lm_head_path(model) == lm_head
 
+    def test_discovery_ignores_download_leftovers(self, tmp_path):
+        model = tmp_path / "transformer.vmfb"
+        lm_head = tmp_path / "lm_head.vmfb.trim"
+        model.touch()
+        lm_head.touch()
+        # A partial download shares the "*.vmfb*" shape but is not loadable.
+        (tmp_path / "lm_head.vmfb.incomplete").touch()
+
+        assert discover_lm_head_path(model) == lm_head
+
     def test_discovery_ignores_model_path_itself(self, tmp_path):
         model = tmp_path / "lm_head_model.vmfb"
         model.touch()

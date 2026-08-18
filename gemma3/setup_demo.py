@@ -16,7 +16,6 @@ from utils.download import (
     get_hf_revision,
     read_manifest,
     resolve_repo_id,
-    verify_manifest,
 )
 
 logger = logging.getLogger("Gemma3.setup")
@@ -119,8 +118,34 @@ def _download_gemma3(repo_id: str, base_dir: Path) -> list[str]:
     return manifest_files
 
 
+def _gemma3_files_present(model_dir: Path) -> bool:
+    """Whether everything needed to run is present in ``model_dir``.
+
+    The manifest records the model files that were downloaded, but any set in
+    :data:`_GEMMA3_MODEL_FILENAMES` is a valid local set: a run using
+    ``lm_head.vmfb`` is complete even when the manifest recorded
+    ``lm_head.vmfb.trim``. So the model files are checked against those sets
+    (via :func:`_has_gemma3_files`) rather than against the recorded names,
+    which are only verified for the non-model files.
+    """
+    if not _has_gemma3_files(model_dir):
+        return False
+    manifest = read_manifest(model_dir)
+    if manifest is None:
+        return False
+    files = manifest.get("files", [])
+    if not files:
+        return False
+    model_filenames = {name for names in _GEMMA3_MODEL_FILENAMES for name in names}
+    return all(
+        (model_dir / filename).exists()
+        for filename in files
+        if filename not in model_filenames
+    )
+
+
 def _refresh_gemma3(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
-    files_present = verify_manifest(model_dir) and _has_gemma3_files(model_dir)
+    files_present = _gemma3_files_present(model_dir)
     revision = get_hf_revision(repo_id)
     return ensure_model(
         model_dir,
@@ -194,8 +219,18 @@ def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None
             model_dir,
         )
         return
+    base_dir = base_dir_for(model_dir, repo_id)
+    if base_dir is None:
+        logger.warning(
+            "%s is not laid out as <models dir>/%s; skipping the freshness check "
+            "so a refresh cannot fetch a second copy elsewhere. "
+            "Run `python setup_demos.py gemma3` to manage models.",
+            model_dir,
+            repo_id,
+        )
+        return
     try:
-        _refresh_gemma3(repo_id, model_dir, base_dir_for(model_dir, repo_id))
+        _refresh_gemma3(repo_id, model_dir, base_dir)
     except Exception as e:
         logger.warning(
             "Could not refresh models from %s (%s); using local files.", repo_id, e
