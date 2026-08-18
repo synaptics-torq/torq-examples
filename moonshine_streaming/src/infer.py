@@ -224,17 +224,22 @@ def main(args: argparse.Namespace):
     except ImportError:
         logger.error("soundfile is required. Install it with: pip install soundfile")
         sys.exit(1)
-    if not os.path.isfile(args.wav):
-        logger.error("WAV file %s not found.", args.wav)
-        sys.exit(1)
-    data, input_sample_rate = sf.read(args.wav, dtype="float32")
-    if data.ndim > 1:
-        data = data.mean(axis=1)
-    wav_audio = data.astype(np.float32)
-    logger.info(
-        "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
-        args.wav, len(wav_audio) / input_sample_rate, input_sample_rate,
-    )
+    if args.mic:
+            input_sample_rate = 48000     # AS33980 (SR80) sample rate is 48kHz
+            wav_audio = None
+            logger.info("Transcribing from AS33980 microphone (live @ 48000 Hz)")
+    else:
+        if not os.path.isfile(args.wav):
+            logger.error("WAV file %s not found.", args.wav)
+            sys.exit(1)
+        data, input_sample_rate = sf.read(args.wav, dtype="float32")
+        if data.ndim > 1:
+            data = data.mean(axis=1)
+        wav_audio = data.astype(np.float32)
+        logger.info(
+            "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
+            args.wav, len(wav_audio) / input_sample_rate, input_sample_rate,
+        )
 
     audio_queue = queue.Queue()
     running     = True
@@ -405,6 +410,35 @@ def main(args: argparse.Namespace):
                 time.sleep((end - pos) / input_sample_rate)
             pos = end
         audio_queue.put(_END_OF_STREAM)
+
+    def feed_mic_to_queue():
+        """AS33980 capture via arecord and push chunks to audio_queue"""
+        import subprocess
+
+        capture_rate = 48000
+        capture_channels = 2
+        block_frames = 4096                      # samples per block
+        sample_width = 2                         # S16_LE
+        block_bytes = block_frames * sample_width * capture_channels
+
+        cmd = ["arecord", "-D", "plughw:1,0", "-f", "S16_LE",
+            "-r", str(capture_rate), "-c", str(capture_channels),
+            "-t", "raw", "-q"]
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+
+        try:
+            while running:
+                raw = proc.stdout.read(block_bytes)
+                if not raw:
+                    break
+                # int16 stereo → right channel → float32
+                audio = np.frombuffer(raw, dtype="<i2").reshape(-1, 2)
+                right = audio[:, 1].astype(np.float32) / 32768.0
+                audio_queue.put(right)
+        finally:
+            proc.terminate()
+            proc.wait()
+            audio_queue.put(_END_OF_STREAM)
 
     worker_thread = threading.Thread(target=worker, daemon=True)
     worker_thread.start()
