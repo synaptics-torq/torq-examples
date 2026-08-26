@@ -1,6 +1,6 @@
 # Object Detection Demo
 
-YOLOv8n object detection using a Torq VMFB model.
+YOLOv8n and YOLO26n object detection using a Torq VMFB model.
 
 ## Setup
 
@@ -22,12 +22,12 @@ python setup_demos.py object_detection
 
 This verifies Python dependencies for the demo and downloads the object detection assets from Hugging Face.
 
-Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/`
+Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/` (YOLOv8n) and `models/Synaptics/yolov26n_od/` (YOLO26n).
 
-The setup downloads:
-- `yolo_8n_2.0.0_npu.vmfb`
+The setup downloads, for each model:
+- the model VMFB (`yolo_8n_2.0.0_npu.vmfb` or `yolo26n_npu.vmfb`)
 - `labels.json`
-- any files present under `samples/` in the Hugging Face repo
+- sample media from the Hugging Face repo (under `samples/`, or at the repo root such as `bus.jpg`)
 
 ## Running
 
@@ -78,9 +78,22 @@ python src/infer.py \
   --display
 ```
 
+For YOLO26n, pass `--variant yolo26` so the NMS-free head is decoded with the right quantization parameters:
+
+```sh
+python src/infer.py \
+  --model ../models/Synaptics/yolov26n_od/yolo26n_npu.vmfb \
+  --image ../models/Synaptics/yolov26n_od/bus.jpg \
+  --labels ../models/Synaptics/yolov26n_od/labels.json \
+  --variant yolo26 \
+  --device torq \
+  --device-io
+```
+
 `--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
 
 Image inference options:
+- `--variant {yolo26,yolov8}`: model head variant, defaults to `yolov8`
 - `--labels`: label JSON file to map class IDs to names
 - `--device`: Torq device URI, defaults to `torq`
 - `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
@@ -154,6 +167,7 @@ python src/infer_video.py \
 For camera input, use `--camera-device auto` or a specific `/dev/video*` path. For video files and RTSP streams, you will usually want `--rotate 0`.
 
 Video inference options:
+- `--variant {yolo26,yolov8}`: model head variant, defaults to `yolov8`
 - `--output`: save annotated video to a file
 - `--json-results`: JSON output path for detections, default `detection_results.json`
 - `--display`: show annotated frames live

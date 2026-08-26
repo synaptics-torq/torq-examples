@@ -23,10 +23,20 @@ logger = logging.getLogger("object_detection.setup")
 
 _OD_HF_REPO_MAP: Final[dict[str, str]] = {
     "nano": "Synaptics/yolov8-od-nano-320-int8-torq",
+    "yolo26n": "Synaptics/yolov26n_od",
 }
 _MODEL_FILENAME: Final[str] = "yolo_8n_2.0.0_npu.vmfb"
+_MODEL_FILENAME_MAP: Final[dict[str, str]] = {
+    "Synaptics/yolov8-od-nano-320-int8-torq": _MODEL_FILENAME,
+    "Synaptics/yolov26n_od": "yolo26n_npu.vmfb",
+}
 _LABELS_FILENAME: Final[str] = "labels.json"
 _SAMPLES_PREFIX: Final[str] = "samples/"
+_SAMPLE_SUFFIXES: Final[tuple[str, ...]] = (".jpg", ".jpeg", ".png", ".mp4")
+
+
+def _model_filename(repo_id: str) -> str:
+    return _MODEL_FILENAME_MAP.get(repo_id, _MODEL_FILENAME)
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
@@ -36,23 +46,23 @@ def _hf_file_exists(repo_id: str, filename: str) -> bool:
 
 
 def _list_sample_files(repo_id: str) -> list[str]:
+    """Sample media under ``samples/``, or at the repo root when there is no ``samples/`` dir."""
     from huggingface_hub import HfApi
 
-    return [
-        path for path in HfApi().list_repo_files(repo_id=repo_id)
-        if path.startswith(_SAMPLES_PREFIX) and not path.endswith("/")
-    ]
+    files = HfApi().list_repo_files(repo_id=repo_id)
+    samples = [f for f in files if f.startswith(_SAMPLES_PREFIX) and not f.endswith("/")]
+    return samples or [f for f in files if "/" not in f and f.lower().endswith(_SAMPLE_SUFFIXES)]
 
 
-def _has_object_detection_files(model_dir: Path) -> bool:
-    return (model_dir / _MODEL_FILENAME).exists() and (model_dir / _LABELS_FILENAME).exists()
+def _has_object_detection_files(model_dir: Path, repo_id: str) -> bool:
+    return (model_dir / _model_filename(repo_id)).exists() and (model_dir / _LABELS_FILENAME).exists()
 
 
 def _download_object_detection(repo_id: str, base_dir: Path) -> list[str]:
     """Download object detection assets; return the manifest file list."""
     manifest_files = []
 
-    for filename in (_MODEL_FILENAME, _LABELS_FILENAME):
+    for filename in (_model_filename(repo_id), _LABELS_FILENAME):
         if not _hf_file_exists(repo_id, filename):
             raise FileNotFoundError(f"Required file '{filename}' not found in {repo_id}")
         download_from_hf(repo_id, filename, base_dir=base_dir)
@@ -66,7 +76,7 @@ def _download_object_detection(repo_id: str, base_dir: Path) -> list[str]:
 
 
 def _refresh_object_detection(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
-    files_present = verify_manifest(model_dir) and _has_object_detection_files(model_dir)
+    files_present = verify_manifest(model_dir) and _has_object_detection_files(model_dir, repo_id)
     revision = get_hf_revision(repo_id)
     return ensure_model(
         model_dir,
@@ -87,7 +97,7 @@ def download_object_detection(
     can be reused by other projects that manage their own environment and models dir.
     """
     if models is None:
-        models = ["nano"]
+        models = list(_OD_HF_REPO_MAP)
     if base_dir is None:
         base_dir = default_models_dir()
     base_dir = Path(base_dir)
@@ -150,22 +160,22 @@ def ensure_object_detection_models(model_dir: str | Path, *, refresh: bool = Tru
 
 
 def setup_object_detection():
-    repo_id = _OD_HF_REPO_MAP["nano"]
     base_dir = default_models_dir()
-    model_dir = base_dir / repo_id
-
     check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("Setting up object detection demo from %s", repo_id)
 
-    try:
-        status = _refresh_object_detection(repo_id, model_dir, base_dir)
-    except Exception as e:
-        raise DownloadError(f"Unable to download object detection assets from {repo_id}") from e
+    for name, repo_id in _OD_HF_REPO_MAP.items():
+        model_dir = base_dir / repo_id
+        logger.info("Setting up object detection demo (%s) from %s", name, repo_id)
 
-    if status is ModelStatus.UP_TO_DATE:
-        logger.info("Using local object detection assets from %s", model_dir)
-    else:
-        logger.info("Downloaded object detection assets to %s", model_dir)
+        try:
+            status = _refresh_object_detection(repo_id, model_dir, base_dir)
+        except Exception as e:
+            raise DownloadError(f"Unable to download object detection assets from {repo_id}") from e
+
+        if status is ModelStatus.UP_TO_DATE:
+            logger.info("Using local object detection assets from %s", model_dir)
+        else:
+            logger.info("Downloaded object detection assets to %s", model_dir)
 
 
 if __name__ == "__main__":
