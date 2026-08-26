@@ -3,7 +3,7 @@
 
 # OD-specific
 from .draw import annotate_frame, render_annotated_image
-from .postprocess import postprocess
+from .postprocess import VARIANTS, postprocess
 
 # Shared utilities re-exported for convenience
 from utils.vision import dequantize_out, nms_numpy
@@ -22,6 +22,7 @@ from utils.video import (
 )
 
 __all__ = [
+    "VARIANTS",
     "FrameGrabber",
     "RotatingJsonArrayWriter",
     "annotate_frame",
