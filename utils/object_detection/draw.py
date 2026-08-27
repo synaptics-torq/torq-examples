@@ -13,7 +13,7 @@ __all__ = [
     "render_annotated_image",
 ]
 
-def annotate_frame(frame, detections):
+def annotate_frame(frame, detections, show_labels=True):
     import cv2
 
     annotated = frame.copy()
@@ -22,9 +22,10 @@ def annotate_frame(frame, detections):
         x1, y1, width, height = [float(v) for v in box]
         x2, y2 = x1 + width, y1 + height
         cv2.rectangle(annotated, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
-        text = f"{label} {confidence:.2f}"
-        text_y = int(y1) - 8 if int(y1) - 8 > 10 else int(y1) + 18
-        cv2.putText(annotated, text, (int(x1), text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
+        if show_labels:
+            text = f"{label} {confidence:.2f}"
+            text_y = int(y1) - 8 if int(y1) - 8 > 10 else int(y1) + 18
+            cv2.putText(annotated, text, (int(x1), text_y), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2, cv2.LINE_AA)
         frame_detections.append({
             "label": label,
             "confidence": float(confidence),

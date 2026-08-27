@@ -88,12 +88,13 @@ def resolve_camera_device(camera_device):
 def create_display_pipeline(Gst, width, height, fps, sink_name, disp_width=None, disp_height=None):
     disp_width = disp_width or width
     disp_height = disp_height or height
+    sink = "waylandsink fullscreen=true sync=false" if sink_name == "waylandsink" else f"{sink_name} sync=false"
     pipeline_str = (
         "appsrc name=display_src format=time is-live=true block=true ! "
         f"video/x-raw,format=BGRA,width={width},height={height},framerate={fps}/1 ! "
         "synavideoconvertscale ! "
         f"video/x-raw,width={disp_width},height={disp_height} ! "
-        f"{sink_name} sync=false"
+        f"{sink}"
     )
     pipeline = Gst.parse_launch(pipeline_str)
     appsrc = pipeline.get_by_name("display_src")
@@ -257,6 +258,8 @@ def build_video_argparser(description, default_json_results="results.json"):
     parser.add_argument("--camera-height", type=int, default=480, help="USB camera height")
     parser.add_argument("--camera-fps", type=int, default=30, help="USB camera frame rate")
     parser.add_argument("--display", action="store_true", help="Display annotated frames live")
+    parser.add_argument("--raw-yuyv", action="store_true", dest="raw_yuyv", default=False,
+                        help="Preserve raw YUYV camera frames for model input")
     parser.add_argument("--display-sink", default="waylandsink",
                         help="GStreamer video sink for live display")
     parser.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=180,
@@ -276,7 +279,7 @@ def build_video_argparser(description, default_json_results="results.json"):
     return parser
 
 
-def run_video_inference_loop(args, process_fn, ui_title):
+def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
     """Run the main video inference loop.
 
     Args:
@@ -329,6 +332,8 @@ def run_video_inference_loop(args, process_fn, ui_title):
         except (ValueError, TypeError):
             cam_index = dev
         cap = cv2.VideoCapture(cam_index, cv2.CAP_V4L2)
+        if getattr(args, "raw_yuyv", False):
+            cap.set(cv2.CAP_PROP_CONVERT_RGB, 0)
         if args.camera_width:
             cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.camera_width)
         if args.camera_height:
@@ -388,7 +393,24 @@ def run_video_inference_loop(args, process_fn, ui_title):
             elif args.rotate == 270:
                 bgr_frame = cv2.rotate(bgr_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-            annotated, frame_detections, infer_time, log_str = process_fn(bgr_frame)
+            if getattr(args, "raw_yuyv", False):
+                raw_frame = bgr_frame
+                if raw_frame.ndim == 3 and raw_frame.shape[2] == 2:
+                    bgr_frame = cv2.cvtColor(raw_frame, cv2.COLOR_YUV2BGR_YUYV)
+                elif raw_frame.ndim == 2 and raw_frame.shape[1] == width * 2:
+                    raw_frame = raw_frame.reshape(height, width, 2)
+                    bgr_frame = cv2.cvtColor(raw_frame, cv2.COLOR_YUV2BGR_YUYV)
+                else:
+                    raise RuntimeError(f"Expected YUYV camera frame, got shape {raw_frame.shape}")
+                if args.rotate == 90:
+                    raw_frame = cv2.rotate(raw_frame, cv2.ROTATE_90_CLOCKWISE)
+                elif args.rotate == 180:
+                    raw_frame = cv2.rotate(raw_frame, cv2.ROTATE_180)
+                elif args.rotate == 270:
+                    raw_frame = cv2.rotate(raw_frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                annotated, frame_detections, infer_time, log_str = process_fn(bgr_frame, raw_frame)
+            else:
+                annotated, frame_detections, infer_time, log_str = process_fn(bgr_frame)
 
             if log_str != last_log_str:
                 print("\n", end="", flush=True)
@@ -400,6 +422,10 @@ def run_video_inference_loop(args, process_fn, ui_title):
             frame_result = {"frame": frame_count, "detections": frame_detections}
             all_detections.append(frame_result)
             json_writer.append(frame_result)
+
+            # Some UIs (for example Qt windows) render independently of GStreamer output.
+            if display_ui is not None and hasattr(display_ui, "update_source_frame"):
+                display_ui.update_source_frame(annotated, frame_detections)
 
             if args.display:
                 assert Gst is not None
@@ -413,6 +439,8 @@ def run_video_inference_loop(args, process_fn, ui_title):
                 draw_ui(display_frame_bgr, ui_title,
                         {"fps": fps, "npu": infer_time, "count": len(frame_detections)},
                         video_rect)
+                if display_ui is not None:
+                    display_ui.render(display_frame_bgr)
                 rendered_frame = cv2.cvtColor(display_frame_bgr, cv2.COLOR_BGR2BGRA)
                 ret = push_display_frame(Gst, display_appsrc, rendered_frame, frame_count, display_fps)
                 if ret != Gst.FlowReturn.OK:
