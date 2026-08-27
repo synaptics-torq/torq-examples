@@ -30,6 +30,7 @@ DEMOS = [
     "LiquidAI-LFM2-VL-450M",
     "object_detection",
     "pose_estimation",
+    "face_id",
 ]
 
 # Demos whose setup supports the --with-prefill flag (their models have a batched
@@ -116,7 +117,10 @@ def setup_demo(
             setup_object_detection(model_version=model_version, no_update=no_update)
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
-            setup_pose_estimation(model_version=model_version, no_update=no_update)
+            setup_pose_estimation()
+        elif name == "face_id":
+            from Face_ID.setup_demo import setup_face_id
+            setup_face_id()
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
