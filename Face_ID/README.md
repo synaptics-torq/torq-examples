@@ -1,58 +1,82 @@
-# FACE ID
+# Face ID Demo
 
-Board-side Qt face detection, recognition, and enrollment application for a USB
-camera running on the Torq runtime and Synaptics NPU.
+Face detection on an image file using a Torq VMFB model.
 
-## Setup and Run
+This Torq example runs the detector only.
+## Setup
 
-From the repository root, activate the virtual environment and install the
-repository and Face ID requirements:
+See repo [README.md](../README.md) for installing the virtual environment and
+base dependencies.
 
-```sh
-python3 -m pip install -r Face_ID/requirements.txt
-```
-
-After installing the requirements, run setup once before the first launch. This
-downloads or refreshes the three VMFB files from Hugging Face into the
-repository-level `models/` directory:
+Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
 ```sh
-python3 setup_demos.py face_id
+cd Face_ID
+pip install -r requirements.txt
+cd ..
 ```
 
-After setup completes, start the Qt application:
+From the repo root, run:
 
 ```sh
-python3 Face_ID/run_qt_app.py
+python setup_demos.py face_id
 ```
 
-`PyQt6` is provided by the board image and is intentionally not listed in the
-demo `requirements.txt`.
+This verifies the Python dependencies and downloads the detector model from
+Hugging Face.
 
-### Registering faces one at a time
+Downloaded assets are stored at:
 
-Use this sequence for each person:
+```text
+models/Synaptics/face-id-torq/
+```
 
-1. Make sure the person's face is visible in the camera view.
-2. Click `REGISTER FACES`.
-3. Wait for the visible face cards to appear.
-4. Click `SELECT` on the card for the person you want to enroll.
-5. Enter the person's name in that card's name field.
-6. Click `ENROLL SELECTED FACE`.
-7. Keep that face visible and steady while the application collects the target
-        number of samples.
-8. Wait until the card changes to `ENROLLED`.
-9. To add another person, click `ADD FACE` and repeat the sequence.
+The Torq example downloads only:
 
-Only the selected card is enrolled. Other visible faces do not need names and
-do not block the selected person's enrollment. An enrolled card is locked and
-cannot be enrolled again.
+- `face_detection.vmfb`
+- `face.jpg`
 
-The application prevents re-enrollment when the face embedding already matches
-an identity in the database. It also rejects duplicate names and keeps the
-existing registered identity unchanged.
 
-## Shutdown
+## Running
 
-Press `Ctrl+C` in the terminal. The application stops the camera, closes the
-Qt window, restores the NPU frequency, closes the JSON results writer, and exits.
+Run the demo from the `Face_ID` directory.
+
+```sh
+cd Face_ID
+```
+
+### Image inference
+
+```sh
+python src/infer.py \
+  --model ../models/Synaptics/face-id-torq/face_detection.vmfb \
+  --image ../models/Synaptics/face-id-torq/face.jpg \
+  --device torq
+```
+
+The command writes an annotated image to `face_detection.jpg` and detection
+data to `face_detection_results.json`.
+
+The JSON bounding box uses pixel coordinates in the original image, in this
+format:
+
+```text
+[x, y, width, height]
+```
+
+where `x` and `y` are the top-left corner of the face.
+
+### Options
+
+- `--model`: path to `face_detection.vmfb` (required)
+- `--image`: input image path (required)
+- `--output`: annotated output image, default `face_detection.jpg`
+- `--json-results`: detection JSON output, default `face_detection_results.json`
+- `--device`: Torq device URI, default `torq`
+- `--tda {cpu,dmabuf}`: allocator backing Torq buffers, default `dmabuf`
+- `--device-io`: allocate inputs and keep outputs device-backed; enabled automatically with `--tda dmabuf`
+- `--confidence-threshold`: minimum detection confidence, default `0.6`
+
+Use `python src/infer.py -h` to see all options.
+
+

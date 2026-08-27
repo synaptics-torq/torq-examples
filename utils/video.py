@@ -475,4 +475,3 @@ def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
             f"(previous: {json_writer.rotated_path if os.path.exists(json_writer.rotated_path) else 'none'})"
         )
         print(f"Kept the last {len(all_detections)} detections in memory.")
-
