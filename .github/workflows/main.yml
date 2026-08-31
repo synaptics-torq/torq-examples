@@ -1,74 +1,18 @@
-name: Trigger Jenkins Test Job
+name: Trigger Torq Examples CI/CD Test Job
 
 on:
   workflow_dispatch:
-    inputs:
-      jenkins_job_name:
-        description: "Jenkins job name to trigger (e.g. torq-examples-test)"
-        required: true
-        type: string
-      source_name:
-        description: "Model source name (e.g. Synaptics__yolo)"
-        required: false
-        type: string
-        default: ""
-      compiler_version:
-        description: "Compiler version (e.g. 2.1.0)"
-        required: false
-        type: string
-        default: "2.1.0"
 
 jobs:
   trigger-jenkins:
-    name: Trigger Jenkins Job
-    runs-on: ubuntu-24.04
-
+    runs-on: ubuntu-latest
     steps:
       - name: Trigger Jenkins job
-        id: trigger
         env:
           JENKINS_URL: ${{ secrets.JENKINS_URL }}
           JENKINS_USER: ${{ secrets.JENKINS_USER }}
           JENKINS_API_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
         run: |
-          JOB_NAME="${{ inputs.jenkins_job_name }}"
-          ENCODED_JOB=$(python3 -c "import urllib.parse; print(urllib.parse.quote('${JOB_NAME}', safe='/'))")
-
-          PARAMS=""
-          if [[ -n "${{ inputs.source_name }}" ]]; then
-            PARAMS="${PARAMS}&SOURCE_NAME=${{ inputs.source_name }}"
-          fi
-          if [[ -n "${{ inputs.compiler_version }}" ]]; then
-            PARAMS="${PARAMS}&COMPILER_VERSION=${{ inputs.compiler_version }}"
-          fi
-
-          if [[ -n "${PARAMS}" ]]; then
-            TRIGGER_URL="${JENKINS_URL}/job/${ENCODED_JOB}/buildWithParameters?${PARAMS#&}"
-          else
-            TRIGGER_URL="${JENKINS_URL}/job/${ENCODED_JOB}/build"
-          fi
-
-          echo "Triggering Jenkins job: ${JOB_NAME}"
-          echo "URL: ${TRIGGER_URL}"
-
-          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -X POST "${TRIGGER_URL}" \
+          curl -sS -X POST \
             --user "${JENKINS_USER}:${JENKINS_API_TOKEN}" \
-            -H "Jenkins-Crumb: $(curl -s \
-              "${JENKINS_URL}/crumbIssuer/api/json" \
-              --user "${JENKINS_USER}:${JENKINS_API_TOKEN}" \
-              | python3 -c "import sys,json; d=json.load(sys.stdin); print(d['crumb'])")")
-
-          echo "http_status=${HTTP_STATUS}" >> "$GITHUB_OUTPUT"
-
-          if [[ "${HTTP_STATUS}" -eq 201 ]]; then
-            echo "Jenkins job triggered successfully (HTTP 201)."
-          else
-            echo "Unexpected HTTP status: ${HTTP_STATUS}" >&2
-            exit 1
-          fi
-
-      - name: Print Jenkins job URL
-        run: |
-          echo "Jenkins job URL: ${{ secrets.JENKINS_URL }}/job/${{ inputs.jenkins_job_name }}"
-          echo "HTTP status: ${{ steps.trigger.outputs.http_status }}"
+            "${JENKINS_URL}/job/SL261x_TORQ_EXAMPLES-Test/build"
