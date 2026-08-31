@@ -3,7 +3,7 @@
 
 """PP-OCRv6-tiny OCR: DBNet text detection + CTC text recognition on the Torq NPU.
 
-Detection runs at one static shape; recognition uses one vmfb per width bucket, so each detected
+Detection runs at one of the downloaded static shapes (selected with --det-hw); recognition uses one vmfb per width bucket, so each detected
 line is padded to the narrowest width that fits it.
 """
 
@@ -16,7 +16,7 @@ from utils.ppocr import (BucketTextRecognizer, NPUBackend, ORTBackend, TextDetec
                          render_annotated_ocr_image, run_ocr)
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_for_inference
 
-DEFAULT_DET = "ppocr_det_800x608.vmfb"
+DET_FILENAME_FMT = "ppocr_det_{h}x{w}.vmfb"
 DEFAULT_REC_YML = "ppocr_rec.yml"
 DEFAULT_REC_BUCKET_DIR = "rec_buckets"
 DEFAULT_BUCKETS = (320, 640, 1280, 2432)
@@ -29,7 +29,7 @@ def build_detector(args, runtime_flags):
             sys.exit("--det-backend ort requires --det-onnx")
         return TextDetector(ORTBackend(args.det_onnx))
 
-    det_vmfb = args.det_vmfb or (Path(args.models) / DEFAULT_DET)
+    det_vmfb = args.det_vmfb or (Path(args.models) / DET_FILENAME_FMT.format(h=args.det_hw[0], w=args.det_hw[1]))
     if not Path(det_vmfb).exists():
         sys.exit(f"Detection vmfb not found: {det_vmfb}")
     backend = NPUBackend(det_vmfb, device_uri=args.device, runtime_flags=runtime_flags, device_io=args.device_io)
@@ -83,9 +83,9 @@ def parse_args():
     parser.add_argument("--tda", choices=["cpu", "dmabuf"], default="cpu", help="Allocator backing Torq device buffers; detection fails on 'dmabuf' (default: %(default)s)")
     parser.add_argument("--device-io", action="store_true", help="Preallocate inputs and keep outputs as device arrays")
     # Detection
-    parser.add_argument("--det-vmfb", help=f"Detection vmfb (default: <models>/{DEFAULT_DET})")
+    parser.add_argument("--det-vmfb", help="Detection vmfb (default: <models>/ppocr_det_<H>x<W>.vmfb from --det-hw)")
     parser.add_argument("--det-onnx", help="Detection fp32 ONNX, for --det-backend ort")
-    parser.add_argument("--det-hw", type=int, nargs=2, metavar=("H", "W"), default=[800, 608], help="Static input the detection vmfb was compiled for (default: %(default)s)")
+    parser.add_argument("--det-hw", type=int, nargs=2, metavar=("H", "W"), default=[800, 608], help="Static detection input; picks the matching vmfb. Setup downloads 800 608 and 640 384 (default: %(default)s)")
     parser.add_argument("--det-backend", choices=["npu", "ort"], default="npu")
     # Recognition
     parser.add_argument("--rec-yml", help=f"Char dict (default: <models>/{DEFAULT_REC_YML})")

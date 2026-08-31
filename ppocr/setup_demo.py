@@ -13,8 +13,10 @@ logger = logging.getLogger("ppocr.setup")
 
 _PPOCR_HF_REPO: Final[str] = "Synaptics/paddle-paddle-tiny"
 
-# Detection runs at one static shape; recognition uses one vmfb per width bucket.
-_DET_FILENAME: Final[str] = "ppocr_det_800x608.vmfb"
+# Detection runs at one of two static shapes (800x608 portrait, 640x384 for 16:9
+# sources); recognition uses one vmfb per width bucket.
+_DET_HWS: Final[tuple[tuple[int, int], ...]] = ((800, 608), (640, 384))
+_DET_FILENAMES: Final[tuple[str, ...]] = tuple(f"ppocr_det_{h}x{w}.vmfb" for h, w in _DET_HWS)
 _REC_YML_FILENAME: Final[str] = "ppocr_rec.yml"
 _REC_BUCKET_WIDTHS: Final[tuple[int, ...]] = (320, 640, 1280, 2432)
 _REC_BUCKET_DIR: Final[str] = "rec_buckets"
@@ -26,7 +28,7 @@ def rec_bucket_filenames() -> list[str]:
 
 
 def _required_filenames() -> list[str]:
-    return [_DET_FILENAME, _REC_YML_FILENAME, *rec_bucket_filenames()]
+    return [*_DET_FILENAMES, _REC_YML_FILENAME, *rec_bucket_filenames()]
 
 
 def _has_ppocr_files(model_dir: Path) -> bool:

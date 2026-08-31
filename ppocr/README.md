@@ -3,8 +3,9 @@
 PP-OCRv6-tiny optical character recognition using Torq VMFB models: DBNet text
 detection followed by CTC text recognition.
 
-The pipeline runs in two stages. Detection finds text-line quads at one static
-input shape. Recognition then reads each line, using one vmfb per width
+The pipeline runs in two stages. Detection finds text-line quads at a static
+input shape (two sizes are provided: 800×608, and 640×384 for wide/16:9
+sources). Recognition then reads each line, using one vmfb per width
 "bucket" so a line is padded only to the narrowest width that fits it — short
 labels do not pay for the widest model.
 
@@ -28,7 +29,9 @@ models/Synaptics/paddle-paddle-tiny/
 ```
 
 The setup downloads:
-- `ppocr_det_800x608.vmfb` — detection, static 800×608 input
+- `ppocr_det_800x608.vmfb` — detection, static 800×608 input (default)
+- `ppocr_det_640x384.vmfb` — detection, static 640×384 input, for wide/16:9 sources
+  (640×360 rounded up to DBNet's required multiple of 32)
 - `rec_buckets/rec_w{320,640,1280,2432}.vmfb` — recognition, one per width bucket
 - `ppocr_rec.yml` — recognizer character dictionary
 - `samples/sample.jpg` — a 10-line café menu card to run the demo against
@@ -106,7 +109,9 @@ The ONNX path needs `onnxruntime`, listed in `requirements.txt`.
 
 ### Model geometry
 
-- `--det-hw H W`: static input the detection vmfb was compiled for, defaults to `800 608`
+- `--det-hw H W`: static detection input; selects the matching
+  `ppocr_det_<H>x<W>.vmfb`. `800 608` (default) and `640 384` are downloaded by
+  setup; pass `--det-hw 640 384` for wide/16:9 images
 - `--rec-buckets W ...`: widths available as bucket vmfbs, defaults to `320 640 1280 2432`
 - `--rec-vmfb` with `--rec-width`: use a single fixed-width recognizer instead of buckets
 
