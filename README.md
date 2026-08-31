@@ -123,3 +123,4 @@ python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.tr
 ```
 
 Run the validation script with `-h` to see all available options.
+
