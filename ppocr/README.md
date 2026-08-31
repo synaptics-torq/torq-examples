@@ -1,0 +1,118 @@
+# PP-OCR Demo
+
+PP-OCRv6-tiny optical character recognition using Torq VMFB models: DBNet text
+detection followed by CTC text recognition.
+
+The pipeline runs in two stages. Detection finds text-line quads at a static
+input shape (two sizes are provided: 800×608, and 640×352 for wide/16:9
+sources). Recognition then reads each line, using one vmfb per width
+"bucket" so a line is padded only to the narrowest width that fits it — short
+labels do not pay for the widest model.
+
+## Setup
+
+From the repo root, run:
+
+```sh
+cd ppocr
+pip install -r requirements.txt
+cd ..
+python setup_demos.py ppocr
+```
+
+This verifies Python dependencies for the demo and downloads the PP-OCR assets from Hugging Face.
+
+Downloaded assets are stored at:
+
+```sh
+models/Synaptics/paddle-paddle-tiny/
+```
+
+The setup downloads:
+- `ppocr_det_800x608.vmfb` — detection, static 800×608 input (default)
+- `ppocr_det_640x352.vmfb` — detection, static 640×352 input, for wide/16:9 sources
+  (640×360 rounded to DBNet's required multiple of 32)
+- `rec_buckets/rec_w{320,640,1280,2432}.vmfb` — recognition, one per width bucket
+- `ppocr_rec.yml` — recognizer character dictionary
+- `samples/sample.jpg` — a 10-line café menu card to run the demo against
+
+## Running
+
+Run the demo from the `ppocr` directory.
+
+### Image inference
+
+```sh
+cd ppocr
+python src/infer.py \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
+  --models ../models/Synaptics/paddle-paddle-tiny \
+  --device torq \
+  --save-image
+```
+
+`--models` points at the directory holding the assets; the detection vmfb,
+bucket directory and character dictionary are found inside it by name. Override
+any of them individually with `--det-vmfb`, `--rec-bucket-dir` and `--rec-yml`.
+
+`--save-image` writes `output_ocr.jpg`: the source image with every detected
+box outlined and its recognized text labelled, at the source resolution.
+
+Output lists one line per recognized text box with its confidence:
+
+```
+Time: detection 519.8ms, recognition 1181.8ms (10 boxes detected)
+
+[4/5] Text:
+  1   [0.991] BLUE DOOR CAFE
+  2   [0.996] all day breakfast
+  3   [0.999] BREAKFAST
+  4   [0.996] Avocado Toast  6.50
+  ...
+```
+
+Recognition time scales with the number of detected lines, since each line is a
+separate invocation — a dense page of 99 lines takes roughly 22 s.
+
+`--tda` selects the allocator backing Torq device buffers — it does not change
+where the model runs; both stages execute on the NPU either way.
+
+> **Note:** this demo defaults to `--tda cpu`, which is also the Torq runtime's
+> own default; the other demos override it to `dmabuf`. On current firmware the
+> detection model fails under `dmabuf` with `INTERNAL; failed to writeXram()`.
+
+Image inference options:
+- `--device`: Torq device URI, defaults to `torq`
+- `--tda {cpu,dmabuf}`: allocator backing Torq device buffers, defaults to `cpu`
+- `--device-io`: preallocate input buffers and keep outputs as device arrays
+- `--drop-score`: minimum recognition confidence to keep a line, defaults to `0.5`
+- `--save-image`: save the annotated output image as `output_ocr.jpg`
+- `--no-refresh`: skip the Hugging Face freshness check (offline/airgapped runs)
+
+### Comparing against the CPU
+
+Either stage can run on ONNX Runtime instead of the NPU, which is useful for
+checking NPU accuracy against a CPU reference:
+
+```sh
+cd ppocr
+python src/infer.py \
+  --image ../models/Synaptics/paddle-paddle-tiny/samples/sample.jpg \
+  --models ../models/Synaptics/paddle-paddle-tiny \
+  --rec-backend ort --rec-onnx ppocr_rec_dynamic.onnx
+```
+
+- `--det-backend {npu,ort}` with `--det-onnx` for the detector
+- `--rec-backend {npu,ort}` with `--rec-onnx` for the recognizer
+
+The ONNX path needs `onnxruntime`, listed in `requirements.txt`.
+
+### Model geometry
+
+- `--det-hw H W`: static detection input; selects the matching
+  `ppocr_det_<H>x<W>.vmfb`. `800 608` (default) and `640 352` are downloaded by
+  setup; pass `--det-hw 640 352` for wide/16:9 images
+- `--rec-buckets W ...`: widths available as bucket vmfbs, defaults to `320 640 1280 2432`
+- `--rec-vmfb` with `--rec-width`: use a single fixed-width recognizer instead of buckets
+
+Use `python src/infer.py -h` to see all options.
