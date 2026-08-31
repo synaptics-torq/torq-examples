@@ -13,9 +13,9 @@ logger = logging.getLogger("ppocr.setup")
 
 _PPOCR_HF_REPO: Final[str] = "Synaptics/paddle-paddle-tiny"
 
-# Detection runs at one of two static shapes (800x608 portrait, 640x384 for 16:9
+# Detection runs at one of two static shapes (800x608 portrait, 640x352 for 16:9
 # sources); recognition uses one vmfb per width bucket.
-_DET_HWS: Final[tuple[tuple[int, int], ...]] = ((800, 608), (640, 384))
+_DET_HWS: Final[tuple[tuple[int, int], ...]] = ((800, 608), (640, 352))
 _DET_FILENAMES: Final[tuple[str, ...]] = tuple(f"ppocr_det_{h}x{w}.vmfb" for h, w in _DET_HWS)
 _REC_YML_FILENAME: Final[str] = "ppocr_rec.yml"
 _REC_BUCKET_WIDTHS: Final[tuple[int, ...]] = (320, 640, 1280, 2432)

@@ -85,7 +85,7 @@ def parse_args():
     # Detection
     parser.add_argument("--det-vmfb", help="Detection vmfb (default: <models>/ppocr_det_<H>x<W>.vmfb from --det-hw)")
     parser.add_argument("--det-onnx", help="Detection fp32 ONNX, for --det-backend ort")
-    parser.add_argument("--det-hw", type=int, nargs=2, metavar=("H", "W"), default=[800, 608], help="Static detection input; picks the matching vmfb. Setup downloads 800 608 and 640 384 (default: %(default)s)")
+    parser.add_argument("--det-hw", type=int, nargs=2, metavar=("H", "W"), default=[800, 608], help="Static detection input; picks the matching vmfb. Setup downloads 800 608 and 640 352 (default: %(default)s)")
     parser.add_argument("--det-backend", choices=["npu", "ort"], default="npu")
     # Recognition
     parser.add_argument("--rec-yml", help=f"Char dict (default: <models>/{DEFAULT_REC_YML})")
