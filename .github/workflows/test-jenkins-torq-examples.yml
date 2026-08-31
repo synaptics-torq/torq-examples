@@ -2,6 +2,8 @@ name: Trigger Torq Examples CI/CD Test Job
 
 on:
   workflow_dispatch:
+  push:
+    branches: [ wip/ci_cd_test ]
 
 jobs:
   trigger-jenkins:
