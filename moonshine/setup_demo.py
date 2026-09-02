@@ -21,6 +21,7 @@ from utils.download import (
 
 logger = logging.getLogger("moonshine.setup")
 
+_DEFAULT_MODEL_VERSION: Final[str] = "latest"
 MOONSHINE_HF_REPO_MAP: Final[dict[str, str]] = {
     "tiny-en": "Synaptics/moonshine-tiny-bf16-torq",
 }
@@ -36,22 +37,34 @@ def _has_moonshine_files(model_dir: Path) -> bool:
     return all((model_dir / filename).exists() for filename in _MOONSHINE_REQUIRED_FILES)
 
 
-def _download_moonshine(repo_id: str, base_dir: Path) -> list[str]:
+def _download_moonshine(
+    repo_id: str,
+    base_dir: Path,
+    *,
+    revision: str | None = None,
+) -> list[str]:
     """Download all required Moonshine files; return the manifest file list."""
     for filename in _MOONSHINE_REQUIRED_FILES:
-        download_from_hf(repo_id, filename, base_dir=base_dir)
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
     return list(_MOONSHINE_REQUIRED_FILES)
 
 
-def _refresh_moonshine(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
+def _refresh_moonshine(
+    repo_id: str,
+    model_dir: Path,
+    base_dir: Path,
+    *,
+    revision_name: str | None = None,
+) -> ModelStatus:
     files_present = verify_manifest(model_dir) and _has_moonshine_files(model_dir)
-    revision = get_hf_revision(repo_id)
+    revision = get_hf_revision(repo_id, revision=revision_name)
     return ensure_model(
         model_dir,
         repo_id,
         files_present=files_present,
         revision=revision,
-        download=lambda: _download_moonshine(repo_id, base_dir),
+        download=lambda: _download_moonshine(repo_id, base_dir, revision=revision_name),
+        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
     )
 
 
@@ -59,6 +72,7 @@ def download_moonshine(
     models: list[str] | None = None,
     *,
     base_dir: str | Path | None = None,
+    model_version: str = _DEFAULT_MODEL_VERSION,
 ) -> dict[str, Path]:
     """Download/refresh the given Moonshine models; return ``{name: model_dir}``.
 
@@ -71,13 +85,13 @@ def download_moonshine(
         base_dir = default_models_dir()
     base_dir = Path(base_dir)
 
-    logger.info("Resolving Moonshine models: [%s]", ", ".join(models))
+    logger.info("Resolving Moonshine models: [%s] (revision=%s)", ", ".join(models), model_version)
     result: dict[str, Path] = {}
     for name in models:
         repo_id = resolve_repo_id(name, MOONSHINE_HF_REPO_MAP)
         model_dir = base_dir / repo_id
         try:
-            _refresh_moonshine(repo_id, model_dir, base_dir)
+            _refresh_moonshine(repo_id, model_dir, base_dir, revision_name=model_version)
         except Exception as exc:
             raise DownloadError(f"Unable to download Moonshine files from {repo_id}") from exc
         result[name] = model_dir
@@ -85,7 +99,12 @@ def download_moonshine(
     return result
 
 
-def ensure_moonshine_models(model_dir: str | Path, *, refresh: bool = True) -> None:
+def ensure_moonshine_models(
+    model_dir: str | Path,
+    *,
+    refresh: bool = True,
+    model_version: str = _DEFAULT_MODEL_VERSION,
+) -> None:
     """Verify/refresh the Moonshine models in ``model_dir`` before inference.
 
     Reads the repo id from the local manifest and applies the same revision
@@ -105,6 +124,9 @@ def ensure_moonshine_models(model_dir: str | Path, *, refresh: bool = True) -> N
             model_dir,
         )
         return
+    if not manifest.get("auto_update", True):
+        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
+        return
     base_dir = base_dir_for(model_dir, repo_id)
     if base_dir is None:
         logger.warning(
@@ -116,7 +138,12 @@ def ensure_moonshine_models(model_dir: str | Path, *, refresh: bool = True) -> N
         )
         return
     try:
-        _refresh_moonshine(repo_id, model_dir, base_dir)
+        _refresh_moonshine(
+            repo_id,
+            model_dir,
+            base_dir,
+            revision_name=model_version,
+        )
     except Exception as e:
         logger.warning(
             "Could not refresh models from %s (%s); using local files.", repo_id, e
@@ -125,9 +152,10 @@ def ensure_moonshine_models(model_dir: str | Path, *, refresh: bool = True) -> N
 
 def setup_moonshine(
     models: list[str],
+    model_version: str = _DEFAULT_MODEL_VERSION,
 ):
-    logger.info("Setting up moonshine demo with models: [%s]", ", ".join(models))
-    download_moonshine(models)
+    logger.info("Setting up moonshine demo with models: [%s] (revision=%s)", ", ".join(models), model_version)
+    download_moonshine(models, model_version=model_version)
     check_requirements(Path(__file__).parent / "requirements.txt")
     logger.info("moonshine setup complete.")
 
@@ -145,12 +173,17 @@ if __name__ == "__main__":
         "models", nargs="*", default=["tiny-en"],
         help=f"Model name or HF repo ID. Built-in: [{available_models}] (default: %(default)s)",
     )
+    parser.add_argument(
+        "--model-version",
+        default=_DEFAULT_MODEL_VERSION,
+        help="HF revision/tag to download (default: latest).",
+    )
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
 
     try:
-        setup_moonshine(args.models)
+        setup_moonshine(args.models, model_version=args.model_version)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:

@@ -75,6 +75,8 @@ def download_from_hf(
     repo_id: str,
     filename: str | os.PathLike,
     base_dir: str | os.PathLike | None = None,
+    *,
+    revision: str | None = None,
 ) -> Path:
     if base_dir is None:
         base_dir = default_models_dir()
@@ -88,18 +90,19 @@ def download_from_hf(
 
     from huggingface_hub import hf_hub_download
 
-    logger.debug("Attempting to download %s from %s...", filename, repo_id)
+    logger.debug("Attempting to download %s from %s (revision=%s)...", filename, repo_id, revision)
     hf_hub_download(
         repo_id=repo_id,
         filename=filename,
         local_dir=str(base_dir / repo_id),
+        revision=revision,
     )
     logger.debug("Download from HuggingFace completed.")
     return local_file
 
 
-def get_hf_revision(repo_id: str) -> str | None:
-    """Return the current commit SHA of a Hugging Face repo.
+def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
+    """Return the commit SHA for a Hugging Face repo or a specific revision/tag.
 
     Returns ``None`` when the Hub cannot be reached (e.g. offline) so callers
     can fall back to local files with a staleness warning instead of failing.
@@ -107,9 +110,9 @@ def get_hf_revision(repo_id: str) -> str | None:
     try:
         from huggingface_hub import HfApi
 
-        return HfApi().model_info(repo_id).sha
+        return HfApi().model_info(repo_id, revision=revision).sha
     except Exception as exc:  # offline, auth failure, missing repo, ...
-        logger.debug("Could not resolve revision for %s: %s", repo_id, exc)
+        logger.debug("Could not resolve revision for %s (%s): %s", repo_id, revision, exc)
         return None
 
 
@@ -118,17 +121,20 @@ def write_manifest(
     repo_id: str,
     files: list[str],
     revision: str | None = None,
+    auto_update: bool = True,
 ) -> Path:
     """Write a manifest after a successful model setup.
 
     ``revision`` records the upstream commit the files were downloaded from,
-    so later runs can detect when the local copy is out of date.
+    so later runs can detect when the local copy is out of date. ``auto_update``
+    controls whether inference may automatically refresh the copy.
     """
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
     manifest = {
         "repo_id": repo_id,
         "revision": revision,
+        "auto_update": auto_update,
         "files": sorted(files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -237,13 +243,13 @@ def base_dir_for(model_dir: Path, repo_id: str) -> Path | None:
     one being used.
     """
     model_dir = Path(model_dir)
-    repo_parts = Path(repo_id).parts
+    repo_parts = tuple(repo_id.split("/"))
+    if len(model_dir.parts) < len(repo_parts):
+        return None
     if model_dir.parts[-len(repo_parts):] != repo_parts:
         return None
-    base = model_dir
-    for _ in repo_parts:
-        base = base.parent
-    return base
+    base_parts = model_dir.parts[:-len(repo_parts)]
+    return Path(*base_parts) if base_parts else None
 
 
 def resolve_repo_id(model: str, repo_map: dict[str, str]) -> str:
@@ -278,6 +284,7 @@ def ensure_model(
     files_present: bool,
     revision: str | None,
     download: Callable[[], list[str]],
+    auto_update: bool = True,
 ) -> ModelStatus:
     """Refresh ``model_dir`` to ``revision`` when it is stale or incomplete.
 
@@ -296,5 +303,5 @@ def ensure_model(
     if status is ModelStatus.STALE:
         clear_model_dir(model_dir)
     files = download()
-    write_manifest(model_dir, repo_id, files, revision=revision)
+    write_manifest(model_dir, repo_id, files, revision=revision, auto_update=auto_update)
     return status
