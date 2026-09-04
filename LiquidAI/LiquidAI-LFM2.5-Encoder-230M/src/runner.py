@@ -50,7 +50,12 @@ class LiquidEncoderStatic:
         if model_path.suffix == ".vmfb":
             from torq.runtime import VMFBInferenceRunner
 
-            self.runner = VMFBInferenceRunner(str(model_path))
+            try:
+                self.runner = VMFBInferenceRunner(str(model_path))
+            except ValueError:
+                # older exports name the entrypoint after torch's "main_graph"
+                self.runner = VMFBInferenceRunner(
+                    str(model_path), function="main_graph")
             self._backend = "torq"
         elif model_path.suffix == ".onnx":
             import onnxruntime as ort
