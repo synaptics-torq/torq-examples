@@ -22,7 +22,7 @@ python setup_demos.py object_detection
 
 This verifies Python dependencies for the demo and downloads the object detection assets from Hugging Face.
 
-Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/` (YOLOv8n) and `models/Synaptics/yolov26_od/` (YOLO26n and YOLO26s).
+Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/` (YOLOv8n) and `models/Synaptics/yolov26n_od/` (YOLO26n and YOLO26s).
 
 The setup downloads, for each model:
 - the model VMFBs (`yolo_8n_2.0.0_npu.vmfb`, or `yolo26n_npu.vmfb` and `yolo26s_npu.vmfb`)
@@ -83,9 +83,9 @@ NMS-free head is decoded with the right quantization parameters:
 
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov26_od/yolo26n_npu.vmfb \
-  --image ../models/Synaptics/yolov26_od/samples/soccer.jpg \
-  --labels ../models/Synaptics/yolov26_od/labels.json \
+  --model ../models/Synaptics/yolov26n_od/yolo26n_npu.vmfb \
+  --image ../models/Synaptics/yolov26n_od/samples/soccer.jpg \
+  --labels ../models/Synaptics/yolov26n_od/labels.json \
   --variant yolo26n \
   --device torq \
   --device-io
