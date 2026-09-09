@@ -12,7 +12,8 @@ from utils.vision import nms_numpy, CONFIDENCE_THRESHOLD, IOU_THRESHOLD, decode_
 # pass below then acts as the required IoU dedupe.
 VARIANTS = {
     "yolov8": {"out_scale": 0.004194467328488827, "out_zp": -128},
-    "yolo26": {"out_scale": 0.00423651235178113, "out_zp": -128},
+    "yolo26n": {"out_scale": 0.00423651235178113, "out_zp": -128},
+    "yolo26s": {"out_scale": 0.004613031819462776, "out_zp": -128},
 }
 
 

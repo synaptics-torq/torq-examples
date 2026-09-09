@@ -23,20 +23,22 @@ logger = logging.getLogger("object_detection.setup")
 
 _OD_HF_REPO_MAP: Final[dict[str, str]] = {
     "nano": "Synaptics/yolov8-od-nano-320-int8-torq",
-    "yolo26n": "Synaptics/yolov26n_od",
+    "yolo26n": "Synaptics/yolov26_od",
+    "yolo26s": "Synaptics/yolov26_od",
 }
 _MODEL_FILENAME: Final[str] = "yolo_8n_2.0.0_npu.vmfb"
-_MODEL_FILENAME_MAP: Final[dict[str, str]] = {
-    "Synaptics/yolov8-od-nano-320-int8-torq": _MODEL_FILENAME,
-    "Synaptics/yolov26n_od": "yolo26n_npu.vmfb",
+# All model files shipped by a repo (one repo may carry several model sizes).
+_MODEL_FILENAMES_MAP: Final[dict[str, tuple[str, ...]]] = {
+    "Synaptics/yolov8-od-nano-320-int8-torq": (_MODEL_FILENAME,),
+    "Synaptics/yolov26_od": ("yolo26n_npu.vmfb", "yolo26s_npu.vmfb"),
 }
 _LABELS_FILENAME: Final[str] = "labels.json"
 _SAMPLES_PREFIX: Final[str] = "samples/"
 _SAMPLE_SUFFIXES: Final[tuple[str, ...]] = (".jpg", ".jpeg", ".png", ".mp4")
 
 
-def _model_filename(repo_id: str) -> str:
-    return _MODEL_FILENAME_MAP.get(repo_id, _MODEL_FILENAME)
+def _model_filenames(repo_id: str) -> tuple[str, ...]:
+    return _MODEL_FILENAMES_MAP.get(repo_id, (_MODEL_FILENAME,))
 
 
 def _hf_file_exists(repo_id: str, filename: str) -> bool:
@@ -55,14 +57,15 @@ def _list_sample_files(repo_id: str) -> list[str]:
 
 
 def _has_object_detection_files(model_dir: Path, repo_id: str) -> bool:
-    return (model_dir / _model_filename(repo_id)).exists() and (model_dir / _LABELS_FILENAME).exists()
+    files = (*_model_filenames(repo_id), _LABELS_FILENAME)
+    return all((model_dir / f).exists() for f in files)
 
 
 def _download_object_detection(repo_id: str, base_dir: Path) -> list[str]:
     """Download object detection assets; return the manifest file list."""
     manifest_files = []
 
-    for filename in (_model_filename(repo_id), _LABELS_FILENAME):
+    for filename in (*_model_filenames(repo_id), _LABELS_FILENAME):
         if not _hf_file_exists(repo_id, filename):
             raise FileNotFoundError(f"Required file '{filename}' not found in {repo_id}")
         download_from_hf(repo_id, filename, base_dir=base_dir)
