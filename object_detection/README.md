@@ -84,12 +84,15 @@ NMS-free head is decoded with the right quantization parameters:
 ```sh
 python src/infer.py \
   --model ../models/Synaptics/yolov26_od/yolo26n_npu.vmfb \
-  --image ../models/Synaptics/yolov26_od/bus.jpg \
+  --image ../models/Synaptics/yolov26_od/samples/soccer.jpg \
   --labels ../models/Synaptics/yolov26_od/labels.json \
   --variant yolo26n \
   --device torq \
   --device-io
 ```
+
+On `samples/soccer.jpg` both sizes detect all five players (YOLO26s additionally
+picks up the sports ball).
 
 Measured on an SL2610 board (320x320 int8, `iree-benchmark-module`, 10 reps): YOLO26n ~13 ms,
 YOLO26s ~33 ms per inference.
