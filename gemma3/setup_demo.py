@@ -31,6 +31,7 @@ _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
     ("model.vmfb",),
 )
 _GEMMA3_TRIM_LUT_FILENAME: Final[str] = "token_id_lut.npy"
+_GEMMA3_PREFILL_FILENAME: Final[str] = "transformer_prefill.vmfb"
 _GEMMA3_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "token_embeddings.npy",
     "config.json",
@@ -115,6 +116,11 @@ def _download_gemma3(repo_id: str, base_dir: Path) -> list[str]:
     lut_file = _download_optional_if_exists(repo_id, _GEMMA3_TRIM_LUT_FILENAME, base_dir)
     if lut_file is not None:
         manifest_files.append(lut_file)
+    prefill_file = _download_optional_if_exists(
+        repo_id, _GEMMA3_PREFILL_FILENAME, base_dir
+    )
+    if prefill_file is not None:
+        manifest_files.append(prefill_file)
     return manifest_files
 
 

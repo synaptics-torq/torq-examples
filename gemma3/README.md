@@ -36,6 +36,10 @@ python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim 
 > [!TIP]
 > If the downloaded repo only contains `model.vmfb`, use that path instead.
 
+> [!TIP]
+> When the model directory contains a `transformer_prefill.vmfb` (a fixed-size batched prefill model exported alongside `transformer.vmfb`), the demo picks it up automatically: complete prompt chunks run through the prefill model and only the final prompt unit uses the LM head, so time-to-first-token drops sharply.
+> Any prompt remainder and all generated tokens still use `transformer.vmfb`, and both paths share the same KV cache. Use `--prefill-model PATH` to point at a specific prefill model, or `--no-prefill-model` to force single-token prompt prefill.
+
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
 Run `python src/infer.py -h` to see all available inference options.
