@@ -278,6 +278,7 @@ class DecoderOnlyLLMRunner(ABC):
                 runtime_flags=runtime_flags,
             )
 
+        self._validate_decode_model()
         model_seq_len = self._query_model_seq_len()
         if max_seq_len is not None and model_seq_len is not None:
             if max_seq_len != model_seq_len:
@@ -357,6 +358,11 @@ class DecoderOnlyLLMRunner(ABC):
                 )
             else:
                 self._prefill_id_buf = np.zeros((1, self._prefill_size), dtype=np.int32)
+        else:
+            self._logger.debug(
+                "No batched prefill model available; prompts will be "
+                "prefilled with single-token decode steps."
+            )
 
         self._warmup_len = self._warmup()
         if self._warmup_len > 0:
@@ -434,6 +440,35 @@ class DecoderOnlyLLMRunner(ABC):
         if not paths:
             return None
         return np.load(paths[0])
+
+    def _validate_decode_model(self) -> None:
+        """Fail early when the main model is not a single-token decode build.
+
+        A fixed-size batched build (for example a ``transformer_prefill.vmfb``
+        export deployed over the main model path) only rejects a single
+        token deep inside the runtime with an opaque shape assertion. Catch
+        it at load time and say how to fix the deployment.
+        """
+        info = self._model.inputs_info
+        if not info or not info[0].shape:
+            return
+        shape = tuple(info[0].shape)
+        if isinstance(shape[0], int) and shape[0] != 1:
+            raise ValueError(
+                f"Model '{self._model.model_path}' expects batch size "
+                f"{shape[0]} (first input shape {shape}); only batch size "
+                "1 is supported."
+            )
+        if len(shape) > 1 and isinstance(shape[1], int) and shape[1] > 1:
+            raise ValueError(
+                f"Model '{self._model.model_path}' expects {shape[1]} tokens "
+                f"per step (first input shape {shape}); it looks like a "
+                "fixed-size batched build rather than the single-token "
+                "decode model. Pass the decode model (e.g. "
+                "'transformer.vmfb') via -m, and provide the batched build "
+                "as a sibling 'transformer_prefill.vmfb' or via "
+                "--prefill-model."
+            )
 
     def _query_model_seq_len(self) -> int | None:
         """Extract max sequence length from the KV cache input shape."""
