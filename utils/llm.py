@@ -88,6 +88,58 @@ def resolve_lm_head_path(
     return discovered
 
 
+def discover_prefill_model_path(model_path: str | os.PathLike) -> Path | None:
+    """Find a sibling batched prefill VMFB for *model_path*, when unambiguous.
+
+    Matches the same rules as :func:`discover_lm_head_path` but looks for
+    ``prefill`` in the file name (e.g. ``transformer_prefill.vmfb``).
+    """
+    model_path = Path(model_path).resolve()
+    candidates = []
+    for path in sorted(model_path.parent.glob("*.vmfb*")):
+        if path.resolve() == model_path:
+            continue
+        if path.suffix.lower() in _SIDECAR_SUFFIXES:
+            continue
+        normalized_stem = path.stem.lower().replace("-", "_")
+        if "prefill" in normalized_stem:
+            candidates.append(path)
+
+    if not candidates:
+        return None
+    if len(candidates) == 1:
+        return candidates[0]
+
+    candidate_list = ", ".join(str(path) for path in candidates)
+    raise ValueError(
+        "Found multiple batched prefill candidates next to model. "
+        f"Please pass --prefill-model explicitly. Candidates: {candidate_list}"
+    )
+
+
+def resolve_prefill_model_path(
+    model_path: str | os.PathLike,
+    prefill_model_path: str | os.PathLike | None = None,
+    *,
+    disable_prefill: bool = False,
+    logger: logging.Logger | None = None,
+) -> Path | None:
+    """Resolve explicit, disabled, or auto-discovered prefill model selection."""
+    if prefill_model_path is not None and disable_prefill:
+        raise ValueError(
+            "--prefill-model and --no-prefill-model cannot be used together."
+        )
+    if prefill_model_path is not None:
+        return Path(prefill_model_path)
+    if disable_prefill:
+        return None
+
+    discovered = discover_prefill_model_path(model_path)
+    if discovered is not None and logger is not None:
+        logger.info("Auto-discovered batched prefill model '%s'", str(discovered))
+    return discovered
+
+
 def resolve_token_id_lut(
     logits_size: int | None,
     vocab_size: int | None,
@@ -173,6 +225,10 @@ class DecoderOnlyLLMRunner(ABC):
         "_last_infer_ns",
         "_time_to_first_token_ns",
         "_start_time_ns",
+        "_prefill_model",
+        "_prefill_size",
+        "_prefill_emb_buf",
+        "_prefill_id_buf",
     )
 
     def __init__(
@@ -190,6 +246,8 @@ class DecoderOnlyLLMRunner(ABC):
         device_io: bool = False,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
+        prefill_model_path: str | os.PathLike | None = None,
+        disable_prefill: bool = False,
     ) -> None:
         self._logger = logging.getLogger(self.__class__.__name__)
         self._debug_logging = self._logger.isEnabledFor(logging.DEBUG)
@@ -198,6 +256,12 @@ class DecoderOnlyLLMRunner(ABC):
             model_path,
             lm_head_path,
             disable_lm_head=disable_lm_head,
+            logger=self._logger,
+        )
+        prefill_path = resolve_prefill_model_path(
+            model_path,
+            prefill_model_path,
+            disable_prefill=disable_prefill,
             logger=self._logger,
         )
         self._model = ManagedSelfAttnCacheRunner(
@@ -280,6 +344,20 @@ class DecoderOnlyLLMRunner(ABC):
         else:
             self._emb_buf = None
 
+        self._prefill_model = None
+        self._prefill_size = None
+        self._prefill_emb_buf = None
+        self._prefill_id_buf = None
+        if prefill_path is not None:
+            self._setup_prefill_model(prefill_path, n_threads, runtime_flags, device_io)
+            if self._token_embeddings is not None:
+                self._prefill_emb_buf = np.zeros(
+                    (1, self._prefill_size, self._token_embeddings.shape[-1]),
+                    dtype=self._token_embeddings.dtype,
+                )
+            else:
+                self._prefill_id_buf = np.zeros((1, self._prefill_size), dtype=np.int32)
+
         self._warmup_len = self._warmup()
         if self._warmup_len > 0:
             self._reset_cache_state = self._model.save_kv_state()
@@ -300,6 +378,11 @@ class DecoderOnlyLLMRunner(ABC):
     @property
     def max_seq_len(self) -> int:
         return self._max_seq_len
+
+    @property
+    def prefill_size(self) -> int | None:
+        """Fixed prompt chunk size when a batched prefill model is loaded."""
+        return self._prefill_size
 
     @property
     def last_infer_time(self) -> float:
@@ -391,26 +474,61 @@ class DecoderOnlyLLMRunner(ABC):
     ) -> int:
         if sample_next and not compute_logits:
             raise ValueError("sample_next=True requires compute_logits=True")
+        return self._llm_tokens_step(
+            self._model,
+            [token],
+            seq_pos,
+            compute_logits=compute_logits,
+            sample_next=sample_next,
+        )
 
-        if self._emb_buf is not None:
-            self._emb_buf[0, 0, :] = self._token_embeddings[token]
-            first = self._emb_buf
+    def _llm_tokens_step(
+        self,
+        model,
+        tokens: list[int],
+        seq_pos: int,
+        *,
+        compute_logits: bool = True,
+        sample_next: bool = True,
+    ) -> int:
+        """Run one or more consecutive tokens through *model*.
+
+        A single token is the usual decode step on the main model. A
+        fixed-size chunk is a batched prefill step: the prefill model's graph
+        expands the single *seq_pos* (the chunk's start position) across the
+        whole chunk, and only the final position's hidden state is returned
+        for the shared LM head.
+        """
+        if sample_next and not compute_logits:
+            raise ValueError("sample_next=True requires compute_logits=True")
+
+        if len(tokens) == 1:
+            if self._emb_buf is not None:
+                self._emb_buf[0, 0, :] = self._token_embeddings[tokens[0]]
+                first = self._emb_buf
+            else:
+                self._pos_buf[0, 0] = tokens[0]
+                first = self._pos_buf.copy()
         else:
-            self._pos_buf[0, 0] = token
-            first = self._pos_buf.copy()
+            if self._prefill_emb_buf is not None:
+                self._prefill_emb_buf[...] = self._token_embeddings[tokens]
+                first = self._prefill_emb_buf
+            else:
+                self._prefill_id_buf[0, :] = tokens
+                first = self._prefill_id_buf
 
         self._pos_buf[0, 0] = seq_pos
 
         if not compute_logits:
-            if isinstance(self._model, SplitLMHeadRunner):
-                self._model.infer([first, self._pos_buf], skip_lm_head=True)
+            if isinstance(model, SplitLMHeadRunner):
+                model.infer([first, self._pos_buf], skip_lm_head=True)
             else:
-                self._model.infer([first, self._pos_buf])
-            self._logger.debug("LLM step time: %.3f ms", self._model.infer_time_ms)
+                model.infer([first, self._pos_buf])
+            self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
             return 0
 
-        results = self._model.infer([first, self._pos_buf])
-        self._logger.debug("LLM step time: %.3f ms", self._model.infer_time_ms)
+        results = model.infer([first, self._pos_buf])
+        self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
 
         if not sample_next:
             return 0
@@ -428,6 +546,61 @@ class DecoderOnlyLLMRunner(ABC):
                 self._tokenizer.decode([token_id], skip_special_tokens=False),
             )
         return token_id
+
+    def _setup_prefill_model(
+        self,
+        prefill_path: str | os.PathLike,
+        n_threads: int | None,
+        runtime_flags: list[str] | None,
+        device_io: bool,
+    ) -> None:
+        """Load the fixed-size batched prefill model for prompt chunks."""
+        if not isinstance(self._model, SplitLMHeadRunner):
+            raise ValueError(
+                "Batched prefill model requires a split LM head: the prefill "
+                "model outputs hidden states that must pass through the "
+                f"standalone head. Load a split transformer model with "
+                f"--lm-head to use '{prefill_path}'."
+            )
+        prefill_body = ManagedSelfAttnCacheRunner(
+            prefill_path,
+            n_threads=n_threads,
+            runtime_flags=runtime_flags,
+            device_io=device_io,
+        )
+        prefill_size = self._query_prefill_size(prefill_body)
+        if prefill_size > self._max_seq_len:
+            raise ValueError(
+                f"Batched prefill size {prefill_size} from '{prefill_path}' "
+                f"exceeds the model max sequence length {self._max_seq_len}."
+            )
+        # The prefill model and the decode model have the same per-layer cache
+        # layout; use one set of on-device buffers for both.
+        prefill_body.share_kv_cache(self._model._body)
+        self._prefill_size = prefill_size
+        # Reuse the decode wrapper's compiled LM head instead of loading the
+        # head module a second time.
+        self._prefill_model = SplitLMHeadRunner(prefill_body, self._model._lm_head)
+        self._logger.info(
+            "Loaded %d-token batched prefill model '%s'", prefill_size, str(prefill_path)
+        )
+
+    @staticmethod
+    def _query_prefill_size(prefill_body) -> int:
+        """Fixed prompt chunk size from the prefill model's token input shape."""
+        info = prefill_body.inputs_info
+        if not info:
+            raise ValueError(
+                "Prefill model has no input metadata; cannot determine its "
+                "fixed prompt chunk size."
+            )
+        shape = info[0].shape
+        if len(shape) < 2 or not isinstance(shape[1], int) or shape[1] < 1:
+            raise ValueError(
+                f"Cannot determine fixed prefill size from first input shape "
+                f"{shape}; expected (1, N, ...)."
+            )
+        return shape[1]
 
     def _sample(self, logits: np.ndarray) -> int:
         st = time.perf_counter_ns()
@@ -470,6 +643,53 @@ class DecoderOnlyLLMRunner(ABC):
         produce_next_token: bool = True,
     ) -> tuple[int, int]:
         pos = start
+        if self._prefill_model is not None and len(tokens) >= self._prefill_size:
+            chunk = self._prefill_size
+            full_chunks = len(tokens) // chunk
+            remainder = len(tokens) - full_chunks * chunk
+            # Every complete chunk before the final unit is body-only: it only
+            # extends the shared KV cache, so the LM head is skipped.
+            body_only_chunks = full_chunks if remainder else full_chunks - 1
+            for i in range(body_only_chunks):
+                _raise_if_stopped(should_stop)
+                self._llm_tokens_step(
+                    self._prefill_model,
+                    tokens[i * chunk:(i + 1) * chunk],
+                    pos,
+                    compute_logits=False,
+                    sample_next=False,
+                )
+                pos += chunk
+                _raise_if_stopped(should_stop)
+            if remainder:
+                # Fall back to single-token decode for any remainder.
+                rem_tokens = tokens[full_chunks * chunk:]
+                for tok_id in rem_tokens[:-1]:
+                    _raise_if_stopped(should_stop)
+                    self.llm_step(tok_id, pos, compute_logits=False, sample_next=False)
+                    pos += 1
+                    _raise_if_stopped(should_stop)
+                _raise_if_stopped(should_stop)
+                tok = self.llm_step(
+                    rem_tokens[-1],
+                    pos,
+                    compute_logits=produce_next_token,
+                    sample_next=produce_next_token,
+                )
+                _raise_if_stopped(should_stop)
+                pos += 1
+            else:
+                _raise_if_stopped(should_stop)
+                tok = self._llm_tokens_step(
+                    self._prefill_model,
+                    tokens[len(tokens) - chunk:],
+                    pos,
+                    compute_logits=produce_next_token,
+                    sample_next=produce_next_token,
+                )
+                _raise_if_stopped(should_stop)
+                pos += chunk
+            return tok, pos
         for tok_id in tokens[:-1]:
             _raise_if_stopped(should_stop)
             self.llm_step(tok_id, pos, compute_logits=False, sample_next=False)
