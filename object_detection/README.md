@@ -22,10 +22,25 @@ python setup_demos.py object_detection
 
 This verifies Python dependencies for the demo and downloads the object detection assets from Hugging Face.
 
-Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/`
+By default the demo downloads the model version matching this repo's `VERSION` file (see the
+[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead,
+use:
+
+```sh
+cd object_detection
+python setup_demo.py --model-version v2.1.0
+```
+
+A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
+
+Downloaded assets are stored at:
+
+```sh
+models/Synaptics/yolov8-od-nano-320-int8-torq/
+```
 
 The setup downloads:
-- `yolo_8n_2.0.0_npu.vmfb`
+- `yolo_od.vmfb`
 - `labels.json`
 - any files present under `samples/` in the Hugging Face repo
 
@@ -58,7 +73,7 @@ export DISPLAY_WIDTH=480
 
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -69,7 +84,7 @@ To save or display the annotated image:
 
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -92,7 +107,7 @@ Image inference options:
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -104,7 +119,7 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --camera-device auto \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -117,7 +132,7 @@ Example with explicit camera controls:
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --camera-device /dev/video0 \
   --camera-control-device /dev/v4l-subdev2 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
@@ -131,7 +146,7 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --rtsp-url rtsp://user:pass@host:port/stream \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -144,7 +159,7 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_8n_2.0.0_npu.vmfb \
+  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --device torq \
   --device-io \
