@@ -17,11 +17,12 @@ from utils.download import (
     read_manifest,
     verify_manifest,
 )
+from utils.version import resolve_model_version
 
 logger = logging.getLogger("pose_estimation.setup")
 
-_DEFAULT_MODEL_VERSION: Final[str] = "latest"
 _POSE_HF_REPO: Final[str] = "Synaptics/yolov8-pose-nano-320-int8-torq"
+_BUILTIN_REPOS: Final[frozenset[str]] = frozenset({_POSE_HF_REPO})
 _MODEL_FILENAME: Final[str] = "yolo_pose.vmfb"
 _SAMPLES_PREFIX: Final[str] = "samples/"
 
@@ -73,17 +74,23 @@ def _refresh_pose_estimation(
     model_dir: Path,
     base_dir: Path,
     *,
-    revision_name: str | None = None,
+    version: str | None,
+    record: bool = True,
 ) -> ModelStatus:
-    files_present = verify_manifest(model_dir) and _has_pose_estimation_files(model_dir)
-    revision = get_hf_revision(repo_id, revision=revision_name)
+    files_present = _has_pose_estimation_files(model_dir)
+    revision = None
+    if record:
+        files_present = verify_manifest(model_dir) and files_present
+        if version is not None:
+            revision = get_hf_revision(repo_id, revision=version)
     return ensure_model(
         model_dir,
         repo_id,
         files_present=files_present,
+        version=version if record else None,
         revision=revision,
-        download=lambda: _download_pose_estimation(repo_id, base_dir, revision=revision_name),
-        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
+        download=lambda: _download_pose_estimation(repo_id, base_dir, revision=version),
+        record=record,
     )
 
 
@@ -91,31 +98,33 @@ def ensure_pose_estimation_models(
     model_dir: str | Path,
     *,
     refresh: bool = True,
-    model_version: str = _DEFAULT_MODEL_VERSION,
 ) -> None:
     """Verify/refresh pose assets before inference.
 
-    Reads the repo id from the local manifest and applies the same revision
-    check as setup. When ``refresh`` is ``False`` the check is skipped entirely
+    Re-syncs the local copy to the version recorded in its manifest (never to a
+    newer one). Untracked models (``--no-update``) have no manifest and are
+    left as-is. When ``refresh`` is ``False`` the check is skipped entirely
     for offline/airgapped runs. Refresh failures are logged, not raised, so
     inference can still proceed using local files.
     """
     model_dir = Path(model_dir)
-
     if not refresh:
         return
 
     manifest = read_manifest(model_dir)
-    repo_id = manifest.get("repo_id") if manifest else None
-    if not repo_id:
-        logger.warning(
-            "No manifest in %s; cannot verify pose estimation asset freshness. "
-            "Run `python setup_demos.py pose_estimation` if inference fails.",
+    if manifest is None:
+        logger.info(
+            "No manifest in %s; the model is untracked, so skipping the freshness check.",
             model_dir,
         )
         return
-    if not manifest.get("auto_update", True):
-        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
+    repo_id = manifest.get("repo_id")
+    if not repo_id:
+        logger.warning(
+            "Manifest in %s has no repo_id; cannot verify pose estimation asset freshness. "
+            "Run `python setup_demos.py pose_estimation` if inference fails.",
+            model_dir,
+        )
         return
     base_dir = base_dir_for(model_dir, repo_id)
     if base_dir is None:
@@ -133,26 +142,35 @@ def ensure_pose_estimation_models(
             repo_id,
             model_dir,
             base_dir,
-            revision_name=model_version,
+            version=manifest.get("version"),
         )
-    except Exception as exc:
+    except Exception as e:
         logger.warning(
             "Could not refresh pose estimation assets from %s (%s); using local files.",
             repo_id,
-            exc,
+            e,
         )
 
 
-def setup_pose_estimation(model_version: str = _DEFAULT_MODEL_VERSION):
+def setup_pose_estimation(
+    model_version: str | None = None,
+    no_update: bool = False,
+):
     repo_id = _POSE_HF_REPO
+    version = resolve_model_version(repo_id, model_version, builtin_repos=_BUILTIN_REPOS)
     base_dir = default_models_dir()
     model_dir = base_dir / repo_id
 
     check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("Setting up pose estimation demo from %s (revision=%s)", repo_id, model_version)
+    logger.info(
+        "Setting up pose estimation demo from %s (version=%s)",
+        repo_id, version or "latest",
+    )
 
     try:
-        status = _refresh_pose_estimation(repo_id, model_dir, base_dir, revision_name=model_version)
+        status = _refresh_pose_estimation(
+            repo_id, model_dir, base_dir, version=version, record=not no_update
+        )
     except Exception as exc:
         raise DownloadError(f"Unable to download pose estimation assets from {repo_id}") from exc
 
@@ -168,18 +186,30 @@ if __name__ == "__main__":
 
     from utils.log import add_logging_args, configure_logging
 
-    parser = argparse.ArgumentParser(description="Verify pose estimation demo dependencies.")
+    parser = argparse.ArgumentParser(description="Set up the pose estimation demo.")
     add_logging_args(parser)
     parser.add_argument(
         "--model-version",
-        default=_DEFAULT_MODEL_VERSION,
-        help="HF revision/tag to download (default: latest).",
+        default=None,
+        help=(
+            "Model version tag to download (default: the torq-examples version for "
+            "built-in repos, the repo's latest revision for custom repos). A "
+            "pinned version is kept in sync with its own tag but never upgraded."
+        ),
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_true",
+        help=(
+            "Download without tracking: no .manifest.json is written, so the model "
+            "is never checked for updates or refreshed (at your own risk)."
+        ),
     )
     args = parser.parse_args()
     configure_logging(args.logging)
 
     try:
-        setup_pose_estimation(model_version=args.model_version)
+        setup_pose_estimation(model_version=args.model_version, no_update=args.no_update)
     except (DownloadError, MissingRequirementsError, ValueError) as exc:
         logger.error("%s", exc)
         if exc.__cause__:

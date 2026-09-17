@@ -17,14 +17,15 @@ from utils.download import (
     read_manifest,
     resolve_repo_id,
 )
+from utils.version import parse_model_specs, resolve_model_version
 
 logger = logging.getLogger("Gemma3.setup")
 
-_DEFAULT_MODEL_VERSION: Final[str] = "latest"
 GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
     "instruct": "Synaptics/gemma-3-270m-it-torq"
 }
+_BUILTIN_REPOS: Final[frozenset[str]] = frozenset(GEMMA3_HF_REPO_MAP.values())
 _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
     ("transformer.vmfb", "lm_head.vmfb.trim"),
     ("transformer.vmfb", "lm_head.vmfb"),
@@ -158,18 +159,28 @@ def _refresh_gemma3(
     model_dir: Path,
     base_dir: Path,
     *,
-    revision_name: str | None = None,
-    auto_update: bool = True,
+    version: str | None,
+    record: bool = True,
 ) -> ModelStatus:
-    files_present = _gemma3_files_present(model_dir)
-    revision = get_hf_revision(repo_id, revision=revision_name)
+    if record:
+        # Tracked copies must have a manifest (which also records the exact
+        # file set to verify); untracked ones (``--no-update``) never do, so
+        # only the files themselves are checked.
+        files_present = _gemma3_files_present(model_dir)
+        revision = None
+        if version is not None:
+            revision = get_hf_revision(repo_id, revision=version)
+    else:
+        files_present = _has_gemma3_files(model_dir)
+        revision = None
     return ensure_model(
         model_dir,
         repo_id,
         files_present=files_present,
+        version=version if record else None,
         revision=revision,
-        download=lambda: _download_gemma3(repo_id, base_dir, revision=revision_name),
-        auto_update=auto_update,
+        download=lambda: _download_gemma3(repo_id, base_dir, revision=version),
+        record=record,
     )
 
 
@@ -190,9 +201,17 @@ def download_gemma3(
     models: list[str] | None = None,
     *,
     base_dir: str | Path | None = None,
-    model_version: str = _DEFAULT_MODEL_VERSION,
+    model_version: str | None = None,
+    no_update: bool = False,
 ) -> dict[str, Path]:
     """Download/refresh the given Gemma3 models; return ``{name: model_dir}``.
+
+    ``models`` entries may be built-in names, raw HF repo ids, or
+    ``name:version`` to pin a specific version for that model. ``model_version``
+    applies to every model without its own ``:version``; built-in repos default
+    to the torq-examples version and custom repos to their latest (HEAD)
+    revision. ``no_update=True`` downloads without writing a manifest, so the
+    models are never tracked or refreshed (at your own risk).
 
     Unlike :func:`setup_gemma3`, this does not check demo requirements, so it can
     be reused by other projects that manage their own environment and models dir.
@@ -203,31 +222,38 @@ def download_gemma3(
         base_dir = default_models_dir()
     base_dir = Path(base_dir)
 
-    logger.info("Resolving Gemma3 models: [%s] (revision=%s)", ", ".join(models), model_version)
+    logger.info("Resolving Gemma3 models: [%s]", ", ".join(models))
     result: dict[str, Path] = {}
-    for name in models:
+    for name, spec_version in parse_model_specs(models):
         repo_id = resolve_repo_id(name, GEMMA3_HF_REPO_MAP)
+        version = resolve_model_version(
+            repo_id, spec_version or model_version, builtin_repos=_BUILTIN_REPOS
+        )
         model_dir = base_dir / repo_id
         try:
             _refresh_gemma3(
                 repo_id,
                 model_dir,
                 base_dir,
-                revision_name=model_version,
-                auto_update=model_version == _DEFAULT_MODEL_VERSION,
+                version=version,
+                record=not no_update,
             )
         except Exception as exc:
             raise DownloadError(f"Unable to download Gemma3 files from {repo_id}") from exc
         result[name] = model_dir
-        logger.info("Gemma3 model files ready at '%s'", model_dir)
+        logger.info(
+            "Gemma3 model files for version %s ready at '%s'",
+            version or "latest", model_dir,
+        )
     return result
 
 
 def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None:
     """Verify/refresh the Gemma3 models in ``model_dir`` before inference.
 
-    Reads the repo id from the local manifest and applies the same revision
-    check as setup. When ``refresh`` is ``False`` the check is skipped entirely
+    Re-syncs the local copy to the version recorded in its manifest. 
+    Untracked models (``--no-update``) have no manifest and are
+    left as-is. When ``refresh`` is ``False`` the check is skipped entirely
     (offline/airgapped runs). Refresh failures are logged, not raised, so
     inference can still proceed on whatever is available locally.
     """
@@ -235,16 +261,19 @@ def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None
     if not refresh:
         return
     manifest = read_manifest(model_dir)
-    repo_id = manifest.get("repo_id") if manifest else None
-    if not repo_id:
-        logger.warning(
-            "No manifest in %s; cannot verify model freshness. "
-            "Run `python setup_demos.py gemma3` if inference fails.",
+    if manifest is None:
+        logger.info(
+            "No manifest in %s; the model is untracked, so skipping the freshness check.",
             model_dir,
         )
         return
-    if not manifest.get("auto_update", True):
-        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
+    repo_id = manifest.get("repo_id")
+    if not repo_id:
+        logger.warning(
+            "Manifest in %s has no repo_id; cannot verify model freshness. "
+            "Run `python setup_demos.py gemma3` if inference fails.",
+            model_dir,
+        )
         return
     base_dir = base_dir_for(model_dir, repo_id)
     if base_dir is None:
@@ -257,7 +286,7 @@ def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None
         )
         return
     try:
-        _refresh_gemma3(repo_id, model_dir, base_dir)
+        _refresh_gemma3(repo_id, model_dir, base_dir, version=manifest.get("version"))
     except Exception as e:
         logger.warning(
             "Could not refresh models from %s (%s); using local files.", repo_id, e
@@ -265,10 +294,12 @@ def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None
 
 
 def setup_gemma3(
-    models: list[str], model_version: str = _DEFAULT_MODEL_VERSION
+    models: list[str],
+    model_version: str | None = None,
+    no_update: bool = False,
 ):
-    logger.info("Setting up gemma3 demo with models: [%s] (revision=%s)", ", ".join(models), model_version)
-    download_gemma3(models, model_version=model_version)
+    logger.info("Setting up gemma3 demo with models: [%s]", ", ".join(models))
+    download_gemma3(models, model_version=model_version, no_update=no_update)
     check_requirements(Path(__file__).parent / "requirements.txt")
     logger.info("gemma3 setup complete.")
 
@@ -284,19 +315,33 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "models", nargs="*", default=["instruct"],
-        help=f"Model name or HF repo ID. Built-in: [{available_models}] (default: %(default)s)",
+        help=f"Model name or HF repo ID, optionally 'name:version' to pin a "
+             f"specific model version for that model. Built-in: [{available_models}] (default: %(default)s)",
     )
     parser.add_argument(
         "--model-version",
-        default=_DEFAULT_MODEL_VERSION,
-        help="HF revision/tag to download (default: latest).",
+        default=None,
+        help=(
+            "Model version tag to download for every model without its own "
+            "'name:version' (default: the torq-examples version for built-in "
+            "repos, the repo's latest revision for custom repos). A pinned "
+            "version is kept in sync with its own tag but never upgraded."
+        ),
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_true",
+        help=(
+            "Download without tracking: no .manifest.json is written, so the "
+            "models are never checked for updates or refreshed (at your own risk)."
+        ),
     )
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
 
     try:
-        setup_gemma3(args.models, model_version=args.model_version)
+        setup_gemma3(args.models, model_version=args.model_version, no_update=args.no_update)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:

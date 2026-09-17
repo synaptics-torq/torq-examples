@@ -15,7 +15,8 @@ python setup_demos.py pose_estimation
 
 This verifies Python dependencies for the demo and downloads the pose estimation assets from Hugging Face.
 
-By default the demo downloads the current `latest` model revision from the HF repo. To pin a specific release tag instead,
+By default the demo downloads the model version matching this repo's `VERSION` file (see the
+[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead,
 use:
 
 ```sh
@@ -23,7 +24,7 @@ cd pose_estimation
 python setup_demo.py --model-version v2.1.0
 ```
 
-The `--model-version` flag accepts a Hugging Face revision or tag name, such as `latest` or a release like `v2.1.0`.
+A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
 
 Downloaded assets are stored at:
 
