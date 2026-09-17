@@ -180,7 +180,8 @@ def list_hf_files(
     """List file paths in an HF repo (directories excluded), optionally under *prefix*."""
     from huggingface_hub import HfApi
 
-    files = HfApi().list_repo_files(repo_id=repo_id, revision=revision)
+    info = HfApi().model_info(repo_id, revision=revision, timeout=HF_CHECK_TIMEOUT)
+    files = [sibling.rfilename for sibling in info.siblings]
     return [
         path for path in files
         if not path.endswith("/") and (prefix is None or path.startswith(prefix))
