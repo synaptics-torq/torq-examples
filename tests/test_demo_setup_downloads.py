@@ -10,6 +10,7 @@ from moonshine import setup_demo as moonshine_setup
 from object_detection import setup_demo as object_detection_setup
 from pose_estimation import setup_demo as pose_setup
 from utils.download import DownloadError, ModelVersionNotFoundError, write_manifest
+from utils import model_setup
 from utils.version import examples_version
 
 _REVISION = "abc123"
@@ -56,9 +57,9 @@ def test_setup_default_tracks_examples_version(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
@@ -78,9 +79,9 @@ def test_setup_pins_explicit_version(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -99,9 +100,9 @@ def test_setup_per_model_version_spec_wins_over_global(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
@@ -118,9 +119,9 @@ def test_setup_custom_repo_defaults_to_head_untracked(tmp_path):
     repo_id = "custom/moonshine"
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision") as rev,
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -142,9 +143,9 @@ def test_setup_custom_repo_with_explicit_version_is_tracked(tmp_path):
     repo_id = "custom/moonshine"
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
@@ -160,10 +161,10 @@ def test_setup_missing_version_fails_loudly(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch.object(
-            moonshine_setup, "get_hf_revision",
+            model_setup, "get_hf_revision",
             side_effect=ModelVersionNotFoundError(f"Model version '{_PINS}' not found in Hugging Face repo '{repo_id}'."),
         ),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
@@ -181,8 +182,8 @@ def test_setup_missing_examples_version_fails_loudly(tmp_path):
     base_dir = tmp_path
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch("utils.version.examples_version", return_value=None),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
@@ -203,9 +204,9 @@ def test_setup_skips_when_revision_matches(tmp_path):
     _make_moonshine_copy(base_dir, repo_id, _REVISION)
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.setup_moonshine(["tiny-en"])
@@ -219,9 +220,9 @@ def test_setup_downloads_required_files_and_records_revision(tmp_path):
     model_dir = base_dir / repo_id
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -252,9 +253,9 @@ def test_setup_refreshes_and_clears_stale_files_on_revision_change(tmp_path):
     )
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -283,9 +284,9 @@ def test_setup_offline_uses_local_files(tmp_path):
     write_manifest(model_dir, repo_id, files, version=_EXAMPLES_VERSION, revision="old-revision")
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=None),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=None),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.setup_moonshine(["tiny-en"])
@@ -298,9 +299,9 @@ def test_setup_offline_with_missing_files_fails_loudly(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=None),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=None),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=ConnectionError("offline")
         ),
@@ -317,12 +318,12 @@ def test_setup_no_update_writes_no_manifest(tmp_path):
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
-        mock.patch.object(moonshine_setup, "get_hf_revision") as rev,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
     ):
         moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
 
@@ -341,8 +342,8 @@ def test_setup_no_update_reuses_existing_files(tmp_path):
         (model_dir / filename).write_text("pre-existing")
 
     with (
-        mock.patch.object(moonshine_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(moonshine_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -364,7 +365,7 @@ def test_inference_refreshes_stale_models(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, "old-revision")
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -387,7 +388,7 @@ def test_inference_no_refresh_skips_network(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, "old-revision")
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision") as revision,
+        mock.patch.object(model_setup, "get_hf_revision") as revision,
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir, refresh=False)
@@ -407,7 +408,7 @@ def test_inference_tracks_manifest_version_not_latest(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, _REVISION, version=_PINS)
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir)
@@ -423,7 +424,7 @@ def test_inference_pinned_tag_move_refreshes_at_pinned_version(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, "old-sha", version=_PINS)
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value="new-sha") as rev,
+        mock.patch.object(model_setup, "get_hf_revision", return_value="new-sha") as rev,
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
@@ -445,7 +446,7 @@ def test_inference_unversioned_custom_model_makes_no_network_calls(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, None, version=None)
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision") as rev,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir)
@@ -461,7 +462,7 @@ def test_inference_without_manifest_does_not_download(tmp_path):
     model_dir.mkdir(parents=True)
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision") as revision,
+        mock.patch.object(model_setup, "get_hf_revision") as revision,
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir)
@@ -476,7 +477,7 @@ def test_inference_offline_uses_local_files(tmp_path):
     model_dir = _make_moonshine_copy(base_dir, repo_id, "old-revision")
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=None),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=None),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         moonshine_setup.ensure_moonshine_models(model_dir)
@@ -494,7 +495,7 @@ def test_inference_offline_with_missing_files_keeps_local_state(tmp_path):
     (model_dir / "encoder.vmfb").unlink()
 
     with (
-        mock.patch.object(moonshine_setup, "get_hf_revision", return_value=None),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=None),
         mock.patch.object(
             moonshine_setup, "download_from_hf", side_effect=ConnectionError("offline")
         ) as download,
@@ -512,20 +513,15 @@ def test_inference_offline_with_missing_files_keeps_local_state(tmp_path):
 
 def _make_yolo_copy(base_dir, repo_id, *, version=_EXAMPLES_VERSION, revision=_REVISION):
     model_dir = base_dir / repo_id
-    for filename in (
-        object_detection_setup._MODEL_FILENAME,
-        object_detection_setup._LABELS_FILENAME,
-    ):
+    filenames = (*object_detection_setup._model_filenames(repo_id), object_detection_setup._LABELS_FILENAME)
+    for filename in filenames:
         path = model_dir / filename
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(filename)
     write_manifest(
         model_dir,
         repo_id,
-        [
-            object_detection_setup._MODEL_FILENAME,
-            object_detection_setup._LABELS_FILENAME,
-        ],
+        list(filenames),
         version=version,
         revision=revision,
     )
@@ -537,13 +533,13 @@ def test_yolo_setup_default_tracks_examples_version(tmp_path):
     repo_id = object_detection_setup._OD_HF_REPO_MAP["nano"]
 
     with (
-        mock.patch.object(object_detection_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(object_detection_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch.object(
-            object_detection_setup, "get_hf_revision", return_value=_REVISION
+            model_setup, "get_hf_revision", return_value=_REVISION
         ) as rev,
-        mock.patch.object(object_detection_setup, "_hf_file_exists", return_value=True),
-        mock.patch.object(object_detection_setup, "_list_sample_files", return_value=[]),
+        mock.patch.object(object_detection_setup, "hf_file_exists", return_value=True),
+        mock.patch.object(object_detection_setup, "list_hf_files", return_value=[]),
         mock.patch.object(
             object_detection_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
@@ -559,13 +555,71 @@ def test_yolo_inference_tracks_manifest_version(tmp_path):
     model_dir = _make_yolo_copy(tmp_path, repo_id, version=_PINS)
 
     with (
-        mock.patch.object(object_detection_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(object_detection_setup, "download_from_hf") as download,
     ):
         object_detection_setup.ensure_object_detection_models(model_dir)
 
     assert rev.call_args.kwargs["revision"] == _PINS
     download.assert_not_called()
+
+
+def test_yolo26_setup_downloads_untracked_at_head(tmp_path):
+    base_dir = tmp_path
+    nano_repo = object_detection_setup._OD_HF_REPO_MAP["nano"]
+    yolo26_repo = object_detection_setup._YOLO26_REPO_ID
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(object_detection_setup, "hf_file_exists", return_value=True),
+        mock.patch.object(object_detection_setup, "list_hf_files", return_value=[]),
+        mock.patch.object(
+            object_detection_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ),
+    ):
+        object_detection_setup.setup_object_detection()
+
+    # The yolo26 repo has no version tags, so it is downloaded at HEAD and left
+    # untracked; the revision check only happens for the tracked nano repo.
+    rev.assert_called_once_with(nano_repo, revision=_EXAMPLES_VERSION)
+    manifest = _manifest(base_dir / yolo26_repo)
+    assert manifest["version"] is None
+    assert set(manifest["files"]) == {
+        "yolo26n_npu.vmfb", "yolo26s_npu.vmfb", object_detection_setup._LABELS_FILENAME,
+    }
+
+
+def test_yolo26_inference_keeps_untracked_copy(tmp_path):
+    yolo26_repo = object_detection_setup._YOLO26_REPO_ID
+    model_dir = _make_yolo_copy(tmp_path, yolo26_repo, version=None, revision=None)
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(object_detection_setup, "download_from_hf") as download,
+    ):
+        object_detection_setup.ensure_object_detection_models(model_dir)
+
+    # Untracked copies (version=None) are never checked against the hub.
+    rev.assert_not_called()
+    download.assert_not_called()
+
+
+def test_yolo_sample_files_fall_back_to_repo_root():
+    yolo26_repo = object_detection_setup._YOLO26_REPO_ID
+
+    with mock.patch.object(
+        object_detection_setup, "list_hf_files",
+        return_value=["README.md", "labels.json", "samples/bus.jpg"],
+    ):
+        assert object_detection_setup._list_sample_files(yolo26_repo, None) == ["samples/bus.jpg"]
+
+    with mock.patch.object(
+        object_detection_setup, "list_hf_files",
+        return_value=["README.md", "labels.json", "bus.jpg", "yolo26n_npu.vmfb"],
+    ):
+        assert object_detection_setup._list_sample_files(yolo26_repo, None) == ["bus.jpg"]
 
 
 def test_pose_inference_tracks_manifest_version(tmp_path):
@@ -583,7 +637,7 @@ def test_pose_inference_tracks_manifest_version(tmp_path):
     )
 
     with (
-        mock.patch.object(pose_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
         mock.patch.object(pose_setup, "download_from_hf") as download,
     ):
         pose_setup.ensure_pose_estimation_models(model_dir)
@@ -612,10 +666,10 @@ def test_gemma_skips_when_revision_matches(tmp_path):
     )
 
     with (
-        mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(gemma_setup, "check_requirements"),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
         mock.patch.object(
-            gemma_setup, "get_hf_revision", return_value=_REVISION
+            model_setup, "get_hf_revision", return_value=_REVISION
         ) as rev,
         mock.patch.object(gemma_setup, "download_from_hf") as download,
     ):
@@ -644,10 +698,10 @@ def test_gemma_repairs_incomplete_download_and_records_lut(tmp_path):
         return filename == gemma_setup._GEMMA3_TRIM_LUT_FILENAME
 
     with (
-        mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(gemma_setup, "check_requirements"),
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(gemma_setup, "_hf_file_exists", side_effect=exists),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
             gemma_setup,
             "download_from_hf",
@@ -685,10 +739,10 @@ def test_gemma_downloads_split_lm_head_pair(tmp_path):
         return filename in {"transformer.vmfb", "lm_head.vmfb.trim"}
 
     with (
-        mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(gemma_setup, "check_requirements"),
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(gemma_setup, "_hf_file_exists", side_effect=exists),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
             gemma_setup,
             "download_from_hf",
@@ -726,10 +780,10 @@ def test_gemma_repairs_existing_split_body_by_fetching_lm_head(tmp_path):
         return filename in {"transformer.vmfb", "lm_head.vmfb"}
 
     with (
-        mock.patch.object(gemma_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(gemma_setup, "check_requirements"),
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(gemma_setup, "_hf_file_exists", side_effect=exists),
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
             gemma_setup,
             "download_from_hf",
@@ -792,8 +846,8 @@ def test_inference_accepts_alternate_lm_head_name_without_downloading(tmp_path):
     )
 
     with (
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(gemma_setup, "_hf_file_exists") as exists,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists") as exists,
         mock.patch.object(gemma_setup, "download_from_hf") as download,
     ):
         gemma_setup.ensure_gemma3_models(model_dir)
@@ -811,8 +865,8 @@ def test_inference_still_repairs_a_genuinely_incomplete_copy(tmp_path):
     (model_dir / gemma_setup._GEMMA3_TRIM_LUT_FILENAME).unlink()
 
     with (
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(gemma_setup, "_hf_file_exists", return_value=True),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", return_value=True),
         mock.patch.object(
             gemma_setup, "download_from_hf", side_effect=_fake_download(tmp_path)
         ) as download,
@@ -837,8 +891,8 @@ def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
     )
 
     with (
-        mock.patch.object(gemma_setup, "get_hf_revision", return_value="new-revision"),
-        mock.patch.object(gemma_setup, "_hf_file_exists") as exists,
+        mock.patch.object(model_setup, "get_hf_revision", return_value="new-revision"),
+        mock.patch.object(gemma_setup, "hf_file_exists") as exists,
         mock.patch.object(gemma_setup, "download_from_hf") as download,
     ):
         gemma_setup.ensure_gemma3_models(model_dir)
