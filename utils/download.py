@@ -33,6 +33,8 @@ __all__ = [
     "download_from_url",
     "download_from_hf",
     "get_hf_revision",
+    "hf_file_exists",
+    "list_hf_files",
     "write_manifest",
     "verify_manifest",
     "read_manifest",
@@ -163,6 +165,26 @@ def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
     except Exception as exc:  # offline, auth failure, transient Hub errors, ...
         logger.debug("Could not resolve revision for %s (%s): %s", repo_id, revision, exc)
         return None
+
+
+def hf_file_exists(repo_id: str, filename: str, *, revision: str | None = None) -> bool:
+    """Whether ``filename`` exists in the HF repo at *revision* (default HEAD)."""
+    from huggingface_hub import HfApi
+
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=revision)
+
+
+def list_hf_files(
+    repo_id: str, *, prefix: str | None = None, revision: str | None = None
+) -> list[str]:
+    """List file paths in an HF repo (directories excluded), optionally under *prefix*."""
+    from huggingface_hub import HfApi
+
+    files = HfApi().list_repo_files(repo_id=repo_id, revision=revision)
+    return [
+        path for path in files
+        if not path.endswith("/") and (prefix is None or path.startswith(prefix))
+    ]
 
 
 def write_manifest(
