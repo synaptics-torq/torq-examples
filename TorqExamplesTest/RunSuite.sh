@@ -332,6 +332,12 @@ setup_dut_python_env() {
         return 1
     fi
 
+
+    echo "[WARN] Prevent pip is missing on DUT, installing python3-pip"
+    if ! bash -lc "apt-get install -y python3-pip"; then
+        echo "[WARNING] Failed to install pip on DUT" >&2
+    fi
+
     echo "[INFO] Consolidating DUT logs under ${DUT_REPO_DIR}/log"
     bash -lc "mkdir -p '${DUT_REPO_DIR}/log'" || {
         echo "[ERROR] Failed to create DUT log folder: ${DUT_REPO_DIR}/log" >&2
