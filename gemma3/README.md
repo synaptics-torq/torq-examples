@@ -22,14 +22,15 @@ python setup_demos.py gemma3
 
 This downloads the default instruct model files to: `models/Synaptics/gemma-3-270m-it-torq/`
 
-By default the demo downloads the current `latest` model revision from the HF repo. To pin a specific release tag instead, use:
+By default the demo downloads the model version matching this repo's `VERSION` file (see the
+[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
 
 ```sh
 cd gemma3
 python setup_demo.py --model-version v2.1.0
 ```
 
-The `--model-version` flag accepts a Hugging Face revision or tag name, such as `latest` or a release like `v2.1.0`.
+A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
 
 ## Running
 

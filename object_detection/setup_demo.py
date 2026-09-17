@@ -18,29 +18,30 @@ from utils.download import (
     resolve_repo_id,
     verify_manifest,
 )
+from utils.version import parse_model_specs, resolve_model_version
 
 logger = logging.getLogger("object_detection.setup")
 
-_DEFAULT_MODEL_VERSION: Final[str] = "latest"
 _OD_HF_REPO_MAP: Final[dict[str, str]] = {
     "nano": "Synaptics/yolov8-od-nano-320-int8-torq",
 }
+_BUILTIN_REPOS: Final[frozenset[str]] = frozenset(_OD_HF_REPO_MAP.values())
 _MODEL_FILENAME: Final[str] = "yolo_od.vmfb"
 _LABELS_FILENAME: Final[str] = "labels.json"
 _SAMPLES_PREFIX: Final[str] = "samples/"
 
 
-def _hf_file_exists(repo_id: str, filename: str) -> bool:
+def _hf_file_exists(repo_id: str, filename: str, *, revision: str | None = None) -> bool:
     from huggingface_hub import HfApi
 
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
+    return HfApi().file_exists(repo_id=repo_id, filename=filename, revision=revision)
 
 
-def _list_sample_files(repo_id: str) -> list[str]:
+def _list_sample_files(repo_id: str, *, revision: str | None = None) -> list[str]:
     from huggingface_hub import HfApi
 
     return [
-        path for path in HfApi().list_repo_files(repo_id=repo_id)
+        path for path in HfApi().list_repo_files(repo_id=repo_id, revision=revision)
         if path.startswith(_SAMPLES_PREFIX) and not path.endswith("/")
     ]
 
@@ -59,12 +60,12 @@ def _download_object_detection(
     manifest_files = []
 
     for filename in (_MODEL_FILENAME, _LABELS_FILENAME):
-        if not _hf_file_exists(repo_id, filename):
+        if not _hf_file_exists(repo_id, filename, revision=revision):
             raise FileNotFoundError(f"Required file '{filename}' not found in {repo_id}")
         download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
         manifest_files.append(filename)
 
-    for sample_file in _list_sample_files(repo_id):
+    for sample_file in _list_sample_files(repo_id, revision=revision):
         download_from_hf(repo_id, sample_file, base_dir=base_dir, revision=revision)
         manifest_files.append(sample_file)
 
@@ -76,17 +77,23 @@ def _refresh_object_detection(
     model_dir: Path,
     base_dir: Path,
     *,
-    revision_name: str | None = None,
+    version: str | None,
+    record: bool = True,
 ) -> ModelStatus:
-    files_present = verify_manifest(model_dir) and _has_object_detection_files(model_dir)
-    revision = get_hf_revision(repo_id, revision=revision_name)
+    files_present = _has_object_detection_files(model_dir)
+    revision = None
+    if record:
+        files_present = verify_manifest(model_dir) and files_present
+        if version is not None:
+            revision = get_hf_revision(repo_id, revision=version)
     return ensure_model(
         model_dir,
         repo_id,
         files_present=files_present,
+        version=version if record else None,
         revision=revision,
-        download=lambda: _download_object_detection(repo_id, base_dir, revision=revision_name),
-        auto_update=revision_name == _DEFAULT_MODEL_VERSION,
+        download=lambda: _download_object_detection(repo_id, base_dir, revision=version),
+        record=record,
     )
 
 
@@ -94,9 +101,17 @@ def download_object_detection(
     models: list[str] | None = None,
     *,
     base_dir: str | Path | None = None,
-    model_version: str = _DEFAULT_MODEL_VERSION,
+    model_version: str | None = None,
+    no_update: bool = False,
 ) -> dict[str, Path]:
     """Download/refresh the given Yolo models; return ``{name: model_dir}``.
+
+    ``models`` entries may be built-in names, raw HF repo ids, or
+    ``name:version`` to pin a specific version for that model. ``model_version``
+    applies to every model without its own ``:version``; built-in repos default
+    to the torq-examples version and custom repos to their latest (HEAD)
+    revision. ``no_update=True`` downloads without writing a manifest, so the
+    models are never tracked or refreshed (at your own risk).
 
     Unlike :func:`setup_object_detection`, this does not check demo requirements, so it
     can be reused by other projects that manage their own environment and models dir.
@@ -107,17 +122,25 @@ def download_object_detection(
         base_dir = default_models_dir()
     base_dir = Path(base_dir)
 
-    logger.info("Resolving Yolo models: [%s] (revision=%s)", ", ".join(models), model_version)
+    logger.info("Resolving Yolo models: [%s]", ", ".join(models))
     result: dict[str, Path] = {}
-    for name in models:
+    for name, spec_version in parse_model_specs(models):
         repo_id = resolve_repo_id(name, _OD_HF_REPO_MAP)
+        version = resolve_model_version(
+            repo_id, spec_version or model_version, builtin_repos=_BUILTIN_REPOS
+        )
         model_dir = base_dir / repo_id
         try:
-            _refresh_object_detection(repo_id, model_dir, base_dir, revision_name=model_version)
+            _refresh_object_detection(
+                repo_id, model_dir, base_dir, version=version, record=not no_update
+            )
         except Exception as exc:
             raise DownloadError(f"Unable to download Yolo files from {repo_id}") from exc
         result[name] = model_dir
-        logger.info("Yolo model files ready at '%s'", model_dir)
+        logger.info(
+            "Yolo model files for version %s ready at '%s'",
+            version or "latest", model_dir,
+        )
     return result
 
 
@@ -125,12 +148,12 @@ def ensure_object_detection_models(
     model_dir: str | Path,
     *,
     refresh: bool = True,
-    model_version: str = _DEFAULT_MODEL_VERSION,
 ) -> None:
     """Verify/refresh object detection assets before inference.
 
-    Reads the repo id from the local manifest and applies the same revision
-    check as setup. When ``refresh`` is ``False`` the check is skipped entirely
+    Re-syncs the local copy to the version recorded in its manifest (never to a
+    newer one). Untracked models (``--no-update``) have no manifest and are
+    left as-is. When ``refresh`` is ``False`` the check is skipped entirely
     for offline/airgapped runs. Refresh failures are logged, not raised, so
     inference can still proceed using local files.
     """
@@ -139,18 +162,20 @@ def ensure_object_detection_models(
         return
 
     manifest = read_manifest(model_dir)
-    repo_id = manifest.get("repo_id") if manifest else None
+    if manifest is None:
+        logger.info(
+            "No manifest in %s; the model is untracked, so skipping the freshness check.",
+            model_dir,
+        )
+        return
+    repo_id = manifest.get("repo_id")
     if not repo_id:
         logger.warning(
-            "No manifest in %s; cannot verify object detection asset freshness. "
+            "Manifest in %s has no repo_id; cannot verify object detection asset freshness. "
             "Run `python setup_demos.py object_detection` if inference fails.",
             model_dir,
         )
         return
-    if not manifest.get("auto_update", True):
-        logger.debug("Model files in %s are pinned; skipping automatic refresh.", model_dir)
-        return
-
     base_dir = base_dir_for(model_dir, repo_id)
     if base_dir is None:
         logger.warning(
@@ -167,7 +192,7 @@ def ensure_object_detection_models(
             repo_id,
             model_dir,
             base_dir,
-            revision_name=model_version,
+            version=manifest.get("version"),
         )
     except Exception as e:
         logger.warning(
@@ -177,16 +202,25 @@ def ensure_object_detection_models(
         )
 
 
-def setup_object_detection(model_version: str = _DEFAULT_MODEL_VERSION):
+def setup_object_detection(
+    model_version: str | None = None,
+    no_update: bool = False,
+):
     repo_id = _OD_HF_REPO_MAP["nano"]
+    version = resolve_model_version(repo_id, model_version, builtin_repos=_BUILTIN_REPOS)
     base_dir = default_models_dir()
     model_dir = base_dir / repo_id
 
     check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("Setting up object detection demo from %s (revision=%s)", repo_id, model_version)
+    logger.info(
+        "Setting up object detection demo from %s (version=%s)",
+        repo_id, version or "latest",
+    )
 
     try:
-        status = _refresh_object_detection(repo_id, model_dir, base_dir, revision_name=model_version)
+        status = _refresh_object_detection(
+            repo_id, model_dir, base_dir, version=version, record=not no_update
+        )
     except Exception as e:
         raise DownloadError(f"Unable to download object detection assets from {repo_id}") from e
 
@@ -202,18 +236,30 @@ if __name__ == "__main__":
 
     from utils.log import add_logging_args, configure_logging
 
-    parser = argparse.ArgumentParser(description="Verify object detection demo dependencies.")
+    parser = argparse.ArgumentParser(description="Set up the object detection demo.")
     add_logging_args(parser)
     parser.add_argument(
         "--model-version",
-        default=_DEFAULT_MODEL_VERSION,
-        help="HF revision/tag to download (default: latest).",
+        default=None,
+        help=(
+            "Model version tag to download (default: the torq-examples version for "
+            "built-in repos, the repo's latest revision for custom repos). A "
+            "pinned version is kept in sync with its own tag but never upgraded."
+        ),
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_true",
+        help=(
+            "Download without tracking: no .manifest.json is written, so the model "
+            "is never checked for updates or refreshed (at your own risk)."
+        ),
     )
     args = parser.parse_args()
     configure_logging(args.logging)
 
     try:
-        setup_object_detection(model_version=args.model_version)
+        setup_object_detection(model_version=args.model_version, no_update=args.no_update)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:
