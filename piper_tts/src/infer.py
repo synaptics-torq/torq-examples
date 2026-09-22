@@ -10,8 +10,9 @@ two overlap, so the CPU encodes the next sentence while the NPU vocodes the
 current one and the speaker plays the previous one. Assets download from Hugging
 Face (``Synaptics/Piper-TTS``) on first run.
 
-Two voices ship: English (``en_US-libritts_r-medium``, the default) and Mexican
-Spanish (``es_MX-ald-medium``); pick one with ``--voice``.
+Three voices ship: English (``en_US-libritts_r-medium``, the default), a lighter
+16 kHz English (``en_US-lessac-low``) and Mexican Spanish (``es_MX-ald-medium``);
+pick one with ``--voice``.
 """
 
 import argparse
@@ -175,7 +176,7 @@ def main():
                    audio_device=args.audio_device, dac_rate=args.dac_rate)
     phon = Phonemizer(model_dir, voice)
     print(f"  partA {tts.load_s['partA']:.1f} s | partB {len(tts.windows)} windows "
-          f"({', '.join(f'{w * 256 / 22050:.0f}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
+          f"({', '.join(f'{w * 256 / tts.sr:.0f}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
           f"speaker {'(silent)' if args.no_play else tts.audio_device}")
 
     try:

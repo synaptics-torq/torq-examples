@@ -19,6 +19,7 @@ its vocoder takes ``z`` alone. Both halves are driven off the signatures the
 models declare rather than a per-voice table, so either shape just runs.
 """
 
+import json
 import queue
 import re
 import subprocess
@@ -34,7 +35,7 @@ from torq.runtime import VMFBInferenceRunner
 
 from piper_tts.piper_core.voices import get_voice
 
-HOP, SR = 256, 22050                                   # vocoder hop, sample rate
+HOP = 256                                              # vocoder hop (samples per frame)
 Z_NAME, G_NAME = "/Mul_7_output_0", "/Unsqueeze_output_0"   # partA -> partB seam
 
 
@@ -48,7 +49,7 @@ def find_audio_device():
     return f"plughw:CARD={m.group(1)},DEV={m.group(2)}" if m else "default"
 
 
-def write_wav(path, audio, rate=SR):
+def write_wav(path, audio, rate):
     """Write mono float audio to a 16-bit PCM wav; return the path."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -76,6 +77,8 @@ class PiperTTS:
                  speaker=0, audio_device=None, dac_rate=48000, dac_channels=2):
         d = Path(model_dir)
         self.voice = voice if voice is not None else get_voice()
+        config = json.loads((d / self.voice.asset("voice", self.voice.config_name)).read_text())
+        self.sr = config["audio"]["sample_rate"]            # 22050 medium, 16000 low
         self.dac_rate, self.dac_channels = dac_rate, dac_channels
         self.audio_device = audio_device or find_audio_device()
         self.scales = np.array([0.333, length_scale, 0.0], dtype=np.float32)  # noise, length, noise_w
@@ -110,7 +113,7 @@ class PiperTTS:
 
     @property
     def max_seconds(self):
-        return self.sizes[-1] * HOP / SR
+        return self.sizes[-1] * HOP / self.sr
 
     def _encode(self, ids):
         """partA: phoneme ids -> (z, g) latents, with F fixed and exact.
@@ -146,7 +149,7 @@ class PiperTTS:
                                   stdin=subprocess.PIPE)
         while (item := play_q.get()) is not None:
             marks.setdefault("first_sound", time.perf_counter() - t0)
-            pcm = to_pcm16(resample(item, SR, self.dac_rate))
+            pcm = to_pcm16(resample(item, self.sr, self.dac_rate))
             try:
                 player.stdin.write(np.repeat(pcm, self.dac_channels).tobytes()), player.stdin.flush()
             except (BrokenPipeError, OSError):
@@ -182,7 +185,7 @@ class PiperTTS:
                     audio[i], used[i] = self._vocode(z, g)
                     if audio[i] is None:                # longer than the widest window
                         audio[i] = np.zeros(0, dtype=np.float32)
-                        on_skip(i, z.shape[2] * HOP / SR) if on_skip else None
+                        on_skip(i, z.shape[2] * HOP / self.sr) if on_skip else None
                         continue
                     marks.setdefault("first_audio", time.perf_counter() - t0)
                     play_q.put(audio[i]) if play else None
@@ -206,12 +209,12 @@ class PiperTTS:
             raise errors[0]
 
         full = np.concatenate(audio) if n else np.zeros(0, dtype=np.float32)
-        stats = {"audio_s": full.size / SR, "compute_s": compute_s,
-                 "rtf": (full.size / SR) / compute_s if compute_s else 0.0,
+        stats = {"audio_s": full.size / self.sr, "compute_s": compute_s,
+                 "rtf": (full.size / self.sr) / compute_s if compute_s else 0.0,
                  "first_audio_s": marks.get("first_audio"), "first_sound_s": marks.get("first_sound"),
-                 "windows": [w * HOP / SR for w in used if w]}
+                 "windows": [w * HOP / self.sr for w in used if w]}
         if wav_path:
-            stats["wav"] = write_wav(wav_path, full)
+            stats["wav"] = write_wav(wav_path, full, self.sr)
         return full, stats
 
     def close(self):
