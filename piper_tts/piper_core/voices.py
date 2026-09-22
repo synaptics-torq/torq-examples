@@ -12,7 +12,8 @@ Voices also differ in *shape*: a multi-speaker VITS export takes a speaker id
 and conditions the vocoder on a speaker embedding, while a single-speaker one
 has neither. Nothing here encodes that — :mod:`piper_core.pipeline` reads the
 signatures off the models themselves — but ``speakers`` lets the CLI reject an
-out-of-range ``--speaker`` before anything loads.
+out-of-range ``--speaker`` before anything loads. Likewise the sample rate
+(22.05 kHz for medium voices, 16 kHz for low) is read from the voice config.
 """
 
 from dataclasses import dataclass
@@ -57,6 +58,17 @@ EN_US_LIBRITTS_R: Final = Voice(
     ),
 )
 
+# A low-quality (16 kHz) single-speaker voice: a lighter, faster alternative to
+# the default. Same samples as the default, so the two are directly comparable.
+EN_US_LESSAC_LOW: Final = Voice(
+    key="en_US-lessac-low",
+    language="English (US), 16 kHz",
+    espeak="en-us",
+    speakers=1,
+    subdir="en_US-lessac-low",
+    samples=EN_US_LIBRITTS_R.samples,
+)
+
 # Latin American Spanish. The samples mirror the English ones scene for scene,
 # so the two voices can be compared directly.
 ES_MX_ALD: Final = Voice(
@@ -78,7 +90,7 @@ ES_MX_ALD: Final = Voice(
     ),
 )
 
-VOICES: Final[dict[str, Voice]] = {v.key: v for v in (EN_US_LIBRITTS_R, ES_MX_ALD)}
+VOICES: Final[dict[str, Voice]] = {v.key: v for v in (EN_US_LIBRITTS_R, EN_US_LESSAC_LOW, ES_MX_ALD)}
 DEFAULT_VOICE: Final[str] = EN_US_LIBRITTS_R.key
 
 

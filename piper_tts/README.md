@@ -1,17 +1,18 @@
 # Piper TTS Demo
 
-Neural text-to-speech on Torq. Runs **Piper** (a VITS model, 22.05 kHz) **split
+Neural text-to-speech on Torq. Runs **Piper** (a VITS model) **split
 across CPU and NPU**: the text encoder and duration predictor stay on the CPU
 under onnxruntime, and the HiFi-GAN vocoder — the expensive 82% — runs on the NPU
 as bf16 NSS-only VMFBs. The two halves overlap, so the CPU encodes the next
 sentence while the NPU vocodes the current one and the speaker plays the previous
 one.
 
-Two voices ship, selected with `--voice`:
+Three voices ship, selected with `--voice`:
 
 | Voice | Language | Speakers |
 |---|---|---|
 | `en_US-libritts_r-medium` (default) | English (US) | 904 |
+| `en_US-lessac-low` | English (US), 16 kHz | 1 |
 | `es_MX-ald-medium` | Spanish (Mexico) | 1 |
 
 They differ in more than weights: the Spanish model is single-speaker, so its
@@ -44,7 +45,8 @@ models/Synaptics/Piper-TTS/
 ├── onnx/partA.onnx                       # text encoder + duration (CPU, onnxruntime)
 ├── vmfb/partB_static_{1,2,4,6,8}s.vmfb   # HiFi-GAN vocoder (NPU), one per window
 ├── voice/en_US-libritts_r-medium.onnx.json   # phoneme -> id map + voice config
-├── es_MX-ald-medium/{onnx,vmfb,voice}/       # the same three, for the Spanish voice
+├── en_US-lessac-low/{onnx,vmfb,voice}/       # the same three, per extra voice
+├── es_MX-ald-medium/{onnx,vmfb,voice}/
 └── espeak/{phonemizerd, espeak-ng-data/}     # phonemizer daemon + dictionaries
 ```
 
@@ -113,7 +115,8 @@ Options:
 - `--no-play` — write the wav only, don't open the speaker.
 - `--audio-device DEV` — ALSA device (default: autodetected USB DAC).
 - `--dac-rate HZ` — rate the DAC accepts, 48000 by default; audio is resampled
-  from 22.05 kHz to this before playback. The wav on disk is always 22.05 kHz.
+  from the voice's rate (22.05 kHz, or 16 kHz for `lessac-low`) to this before
+  playback. The wav on disk keeps the voice's own rate.
 - `--speaker N` — speaker id, for multi-speaker voices only (0–903 on
   `en_US-libritts_r-medium`; `es_MX-ald-medium` has a single speaker).
 - `--length-scale F` — phoneme duration scale; `>1` speaks slower. Note it is
