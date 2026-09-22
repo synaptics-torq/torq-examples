@@ -10,7 +10,9 @@ mapping that follows it: NFD-normalize, drop ``(lang)`` switches, and emit
 ``[BOS, PAD, (id, PAD)*, EOS]`` per sentence.
 
 espeak is loaded once and stays resident, so per-utterance phonemization is a
-few milliseconds instead of a fresh dictionary load.
+few milliseconds instead of a fresh dictionary load. The language and the
+phoneme->id map both come from the voice: one ``espeak-ng-data`` serves every
+language, so a new voice needs no new phonemizer assets.
 """
 
 import json
@@ -20,22 +22,26 @@ from pathlib import Path
 
 import numpy as np
 
+from piper_tts.piper_core.voices import get_voice
+
 ID_BOS, ID_EOS, ID_PAD = 1, 2, 0
-VOICE_JSON = "voice/en_US-libritts_r-medium.onnx.json"
 
 
 class Phonemizer:
     """Persistent espeak-ng phonemizer producing Piper-exact id sequences."""
 
-    def __init__(self, model_dir):
+    def __init__(self, model_dir, voice=None):
         d = Path(model_dir)
+        self.voice = voice if voice is not None else get_voice()
         daemon, data = d / "espeak" / "phonemizerd", d / "espeak" / "espeak-ng-data"
-        for p in (daemon, data, d / VOICE_JSON):
+        config = d / self.voice.asset("voice", self.voice.config_name)
+        for p in (daemon, data, config):
             if not p.exists():
                 raise FileNotFoundError(f"missing phonemizer asset: {p}")
-        self.id_map = json.loads((d / VOICE_JSON).read_text())["phoneme_id_map"]
-        self.proc = subprocess.Popen([str(daemon), str(data), "en-us"], stdin=subprocess.PIPE,
-                                     stdout=subprocess.PIPE, text=True, bufsize=1)
+        self.id_map = json.loads(config.read_text())["phoneme_id_map"]
+        self.proc = subprocess.Popen([str(daemon), str(data), self.voice.espeak],
+                                     stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                     text=True, bufsize=1)
         if self.proc.stdout.readline().strip() != "READY":
             raise RuntimeError(f"{daemon} did not start")
         self("Warm up.")  # first call primes espeak's dictionaries

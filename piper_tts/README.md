@@ -1,11 +1,22 @@
 # Piper TTS Demo
 
-Neural text-to-speech on Torq. Runs **Piper** (a VITS model, voice
-`en_US-libritts_r-medium`, 904 speakers, 22.05 kHz) **split across CPU and NPU**:
-the text encoder and duration predictor stay on the CPU under onnxruntime, and
-the HiFi-GAN vocoder — the expensive 82% — runs on the NPU as bf16 NSS-only
-VMFBs. The two halves overlap, so the CPU encodes the next sentence while the
-NPU vocodes the current one and the speaker plays the previous one.
+Neural text-to-speech on Torq. Runs **Piper** (a VITS model, 22.05 kHz) **split
+across CPU and NPU**: the text encoder and duration predictor stay on the CPU
+under onnxruntime, and the HiFi-GAN vocoder — the expensive 82% — runs on the NPU
+as bf16 NSS-only VMFBs. The two halves overlap, so the CPU encodes the next
+sentence while the NPU vocodes the current one and the speaker plays the previous
+one.
+
+Two voices ship, selected with `--voice`:
+
+| Voice | Language | Speakers |
+|---|---|---|
+| `en_US-libritts_r-medium` (default) | English (US) | 904 |
+| `es_MX-ald-medium` | Spanish (Mexico) | 1 |
+
+They differ in more than weights: the Spanish model is single-speaker, so its
+partA takes no speaker id and its vocoder takes the latent alone. The demo reads
+both signatures off the models rather than a table, so either shape just runs.
 
 Each run **writes a `.wav` file and plays it on the speaker**.
 
@@ -33,8 +44,13 @@ models/Synaptics/Piper-TTS/
 ├── onnx/partA.onnx                       # text encoder + duration (CPU, onnxruntime)
 ├── vmfb/partB_static_{1,2,4,6,8}s.vmfb   # HiFi-GAN vocoder (NPU), one per window
 ├── voice/en_US-libritts_r-medium.onnx.json   # phoneme -> id map + voice config
+├── es_MX-ald-medium/{onnx,vmfb,voice}/       # the same three, for the Spanish voice
 └── espeak/{phonemizerd, espeak-ng-data/}     # phonemizer daemon + dictionaries
 ```
+
+Only the voice you ask for is downloaded, so running English never fetches the
+Spanish vocoder. The espeak dictionaries are shared — one copy covers every
+language, so a voice adds no phonemizer assets.
 
 The vocoder windows are shipped as five separate VMFBs because the NPU model is
 statically shaped; see [How it runs](#how-it-runs). The demo reads each window's
@@ -63,6 +79,11 @@ echo "The bakery on the corner opens at six." > article.txt
 python src/infer.py --file article.txt
 python src/infer.py --interactive
 
+# Spanish — each voice carries its own samples, so --interactive and --sample
+# give you Spanish ones here
+python src/infer.py --voice es_MX-ald-medium --interactive
+python src/infer.py --voice es_MX-ald-medium --text "Buenos días. El sistema ya funciona."
+
 # write the wav without playing it (e.g. over SSH with no speaker)
 python src/infer.py --text "Silent run." --no-play
 ```
@@ -82,15 +103,19 @@ Loading (partA on CPU, partB windows on NPU, espeak resident)...
 
 Options:
 
+- `--voice KEY` — which voice to speak with (default `en_US-libritts_r-medium`).
+  `--list-voices` prints them.
 - `--text STR` / `--file PATH` / `--sample N` / `--interactive` — what to speak
-  (mutually exclusive; default is sample 1). `--list-samples` prints the samples.
+  (mutually exclusive; default is sample 1). `--list-samples` prints the samples
+  for the selected voice.
 - `--output PATH` — output wav (default `tts_out.wav`). In `--interactive` mode
   this is the *directory* written to instead (default `out/`).
 - `--no-play` — write the wav only, don't open the speaker.
 - `--audio-device DEV` — ALSA device (default: autodetected USB DAC).
 - `--dac-rate HZ` — rate the DAC accepts, 48000 by default; audio is resampled
   from 22.05 kHz to this before playback. The wav on disk is always 22.05 kHz.
-- `--speaker N` — speaker id, 0–903 (this voice is multi-speaker).
+- `--speaker N` — speaker id, for multi-speaker voices only (0–903 on
+  `en_US-libritts_r-medium`; `es_MX-ald-medium` has a single speaker).
 - `--length-scale F` — phoneme duration scale; `>1` speaks slower. Note it is
   **not proportional** — Piper interleaves a PAD token between phonemes whose
   duration is pinned at one frame by a `Ceil`, so roughly a third of a short
@@ -98,7 +123,9 @@ Options:
 - `--threads N` — onnxruntime threads for partA (default 2, the board's core count).
 - `--device URI` — IREE device for the vocoder (default `torq`).
 - `--model-dir DIR` — asset dir (default `models/Synaptics/Piper-TTS`).
-- `--no-refresh` — skip the Hugging Face update check (offline).
+- `--no-refresh` — skip Hugging Face entirely and run against the assets already
+  on disk. Anything missing is named in the error instead of being fetched, which
+  is also how locally built vocoders are used.
 - `--quiet` — suppress the per-utterance timing lines.
 
 ## How it runs
@@ -112,6 +139,10 @@ alignment expansion, flow and vocoder that follow are **partB**. The split is at
 text --[espeak]--> phoneme ids --> [partA]  (CPU, onnxruntime)  --> z [1,192,F], g [1,512,1]
                                               z,g --> [partB]   (NPU, bf16 vmfb) --> audio [F*256]
 ```
+
+`g` is the speaker embedding. A single-speaker voice such as `es_MX-ald-medium`
+has none, so its interface is the one tensor `z` and its vocoder is 68 nodes
+instead of 73 — the same graph minus the per-block speaker conditioning.
 
 That cut point is what makes the NPU side tractable. partA holds 85% of the
 *nodes* — a swarm of small shape and attention ops — but partB holds 82% of the

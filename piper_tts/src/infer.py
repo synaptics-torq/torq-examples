@@ -9,6 +9,9 @@ on the NPU as one of five bf16 NSS-only vmfbs covering 1/2/4/6/8 s windows. The
 two overlap, so the CPU encodes the next sentence while the NPU vocodes the
 current one and the speaker plays the previous one. Assets download from Hugging
 Face (``Synaptics/Piper-TTS``) on first run.
+
+Two voices ship: English (``en_US-libritts_r-medium``, the default) and Mexican
+Spanish (``es_MX-ald-medium``); pick one with ``--voice``.
 """
 
 import argparse
@@ -19,20 +22,9 @@ from pathlib import Path
 
 from piper_tts.piper_core.phonemize import Phonemizer
 from piper_tts.piper_core.pipeline import PiperTTS
+from piper_tts.piper_core.voices import DEFAULT_VOICE, VOICES, get_voice
 from piper_tts.setup_demo import ensure_piper_models
 from utils.npu import enable_npu_clock
-
-SAMPLES = [
-    "The morning train was late again. Nobody on the platform seemed surprised.",
-    "Rain fell steadily on the harbour road. The ferry would not sail until morning, "
-    "and the lamps along the quay came on one by one.",
-    "She opened the wooden gate and crossed the wet grass. Below the cliff, the grey "
-    "water moved slowly against the rocks.",
-    "The bakery on the corner opens at six. By seven the shelves are half empty, and "
-    "by nine there is nothing left but rye.",
-    "At midnight the lighthouse changed its rhythm. Three short flashes, then a long "
-    "pause, exactly as the old keeper had promised.",
-]
 
 
 def wrapped(text, prefix="  ", hang=None):
@@ -59,12 +51,13 @@ def report(stats, quiet=False):
           + (f" | saved {stats['wav']}" if stats.get("wav") else ""))
 
 
-def resolve_text(parser, args):
+def resolve_text(parser, args, voice):
     """Validate the input selection and return the text to speak.
 
     Called before any model loads, so a bad path or sample number fails in
     milliseconds with a one-line message instead of after a 7 s load.
     """
+    samples = voice.samples
     if args.interactive:
         return None
     if args.file:
@@ -73,11 +66,11 @@ def resolve_text(parser, args):
             parser.error(f"no such file: {args.file}")
         text = path.read_text(errors="replace").strip()
     elif args.sample is not None:
-        if not 1 <= args.sample <= len(SAMPLES):
-            parser.error(f"--sample must be 1-{len(SAMPLES)} (see --list-samples)")
-        text = SAMPLES[args.sample - 1]
+        if not 1 <= args.sample <= len(samples):
+            parser.error(f"--sample must be 1-{len(samples)} (see --list-samples)")
+        text = samples[args.sample - 1]
     else:
-        text = SAMPLES[0] if args.text is None else args.text.strip()
+        text = samples[0] if args.text is None else args.text.strip()
     if not text:
         parser.error(f"nothing to speak: {args.file or '--text'} is empty")
     return text
@@ -100,22 +93,24 @@ def run_once(tts, phon, text, out_path, play, quiet):
 
 def interactive(tts, phon, out_dir, play, quiet):
     """Menu loop: pick a sample or type your own text; 'q' quits."""
+    samples = tts.voice.samples
     while True:
-        print("\n=== Piper TTS (CPU partA || NPU partB) ===\n   0) type your own text")
-        for i, s in enumerate(SAMPLES):
+        print(f"\n=== Piper TTS — {tts.voice.language} (CPU partA || NPU partB) ==="
+              "\n   0) type your own text")
+        for i, s in enumerate(samples):
             print(wrapped(s, prefix=f"  {i + 1:2d}) ", hang=6))
         try:
-            choice = input(f"Select 0-{len(SAMPLES)}, q to quit: ").strip().lower()
+            choice = input(f"Select 0-{len(samples)}, q to quit: ").strip().lower()
         except EOFError:
             break
         if choice in ("q", "quit", "exit"):
             break
-        if not choice.isdigit() or not 0 <= int(choice) <= len(SAMPLES):
+        if not choice.isdigit() or not 0 <= int(choice) <= len(samples):
             print(f"  invalid: {choice}")
             continue
         k = int(choice)
         if k:
-            text, out = SAMPLES[k - 1], Path(out_dir) / f"sample_{k}.wav"
+            text, out = samples[k - 1], Path(out_dir) / f"sample_{k}.wav"
         else:
             try:
                 text = input("Your text: ").strip()
@@ -135,15 +130,19 @@ def main():
     src = p.add_mutually_exclusive_group()
     src.add_argument("--text", help="Text to speak (default: the first built-in sample).")
     src.add_argument("--file", help="Read the text to speak from a file.")
-    src.add_argument("--sample", type=int, metavar="N", help=f"Speak built-in sample 1-{len(SAMPLES)}.")
+    src.add_argument("--sample", type=int, metavar="N", help="Speak built-in sample N (see --list-samples).")
     src.add_argument("--interactive", action="store_true", help="Menu loop: pick a sample or type text.")
+    p.add_argument("--voice", default=DEFAULT_VOICE, choices=sorted(VOICES),
+                   help="Voice to speak with (default: %(default)s).")
     p.add_argument("--list-samples", action="store_true", help="Print the built-in samples and exit.")
+    p.add_argument("--list-voices", action="store_true", help="Print the available voices and exit.")
     p.add_argument("--output", default=None, help="Output wav (default: tts_out.wav, or out/ when interactive).")
     p.add_argument("--no-play", action="store_true", help="Only write the wav; do not play it.")
     p.add_argument("--audio-device", default=None, help="ALSA device (default: autodetected USB DAC).")
     p.add_argument("--dac-rate", type=int, default=48000, help="Playback rate the DAC accepts (default: %(default)s).")
     p.add_argument("--length-scale", type=float, default=1.0, help="Phoneme duration scale (>1 speaks slower).")
-    p.add_argument("--speaker", type=int, default=0, help="Speaker id, 0-903 (default: %(default)s).")
+    p.add_argument("--speaker", type=int, default=0,
+                   help="Speaker id for multi-speaker voices (default: %(default)s).")
     p.add_argument("--threads", type=int, default=2, help="ORT threads for partA (default: %(default)s).")
     p.add_argument("--model-dir", default=None, help="Asset dir (default: models/Synaptics/Piper-TTS).")
     p.add_argument("--device", default="torq", help="IREE device URI for the vocoder (default: %(default)s).")
@@ -151,20 +150,30 @@ def main():
     p.add_argument("--quiet", action="store_true", help="Suppress per-utterance timing lines.")
     args = p.parse_args()
 
-    if args.list_samples:
-        for i, s in enumerate(SAMPLES):
-            print(f"{i + 1:2d}) {s}")
+    if args.list_voices:
+        for key, v in sorted(VOICES.items()):
+            speakers = f"{v.speakers} speakers" if v.speakers > 1 else "single speaker"
+            print(f"{key:<26} {v.language} ({speakers}, espeak {v.espeak})")
         return
 
-    text = resolve_text(p, args)   # validate input before the slow model load
-    model_dir = ensure_piper_models(args.model_dir, refresh=not args.no_refresh)
+    voice = get_voice(args.voice)
+    if args.list_samples:
+        for i, s in enumerate(voice.samples):
+            print(f"{i + 1:2d}) {s}")
+        return
+    if not 0 <= args.speaker < voice.speakers:
+        p.error(f"--speaker must be 0-{voice.speakers - 1} for {voice.key}")
+
+    text = resolve_text(p, args, voice)   # validate input before the slow model load
+    model_dir = ensure_piper_models(args.model_dir, refresh=not args.no_refresh, voice=voice)
     ok, message = enable_npu_clock()
     print(f"[NPU] {message}")
 
-    print("Loading (partA on CPU, partB windows on NPU, espeak resident)...")
-    tts = PiperTTS(model_dir, device_uri=args.device, threads=args.threads, length_scale=args.length_scale,
-                   speaker=args.speaker, audio_device=args.audio_device, dac_rate=args.dac_rate)
-    phon = Phonemizer(model_dir)
+    print(f"Loading {voice.language} (partA on CPU, partB windows on NPU, espeak resident)...")
+    tts = PiperTTS(model_dir, voice=voice, device_uri=args.device, threads=args.threads,
+                   length_scale=args.length_scale, speaker=args.speaker,
+                   audio_device=args.audio_device, dac_rate=args.dac_rate)
+    phon = Phonemizer(model_dir, voice)
     print(f"  partA {tts.load_s['partA']:.1f} s | partB {len(tts.windows)} windows "
           f"({', '.join(f'{w * 256 / 22050:.0f}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
           f"speaker {'(silent)' if args.no_play else tts.audio_device}")

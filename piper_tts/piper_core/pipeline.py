@@ -13,6 +13,10 @@ partA reports the exact frame count F, so the vocoder window is known before it
 runs: the smallest of the 1/2/4/6/8 s vmfbs that fits is picked and the latent is
 edge-padded up to it. Three threads overlap so the CPU encodes sentence *n+1*
 while the NPU vocodes sentence *n* and the speaker plays sentence *n-1*.
+
+A single-speaker voice has no speaker embedding: its partA takes no ``sid`` and
+its vocoder takes ``z`` alone. Both halves are driven off the signatures the
+models declare rather than a per-voice table, so either shape just runs.
 """
 
 import queue
@@ -27,6 +31,8 @@ import ml_dtypes
 import numpy as np
 import onnxruntime as ort
 from torq.runtime import VMFBInferenceRunner
+
+from piper_tts.piper_core.voices import get_voice
 
 HOP, SR = 256, 22050                                   # vocoder hop, sample rate
 Z_NAME, G_NAME = "/Mul_7_output_0", "/Unsqueeze_output_0"   # partA -> partB seam
@@ -66,9 +72,10 @@ def resample(audio, src_rate, dst_rate):
 class PiperTTS:
     """Load partA (CPU) + the partB window vmfbs (NPU) once, synthesize many times."""
 
-    def __init__(self, model_dir, *, device_uri="torq", threads=2, length_scale=1.0,
+    def __init__(self, model_dir, *, voice=None, device_uri="torq", threads=2, length_scale=1.0,
                  speaker=0, audio_device=None, dac_rate=48000, dac_channels=2):
         d = Path(model_dir)
+        self.voice = voice if voice is not None else get_voice()
         self.dac_rate, self.dac_channels = dac_rate, dac_channels
         self.audio_device = audio_device or find_audio_device()
         self.scales = np.array([0.333, length_scale, 0.0], dtype=np.float32)  # noise, length, noise_w
@@ -78,9 +85,11 @@ class PiperTTS:
         t = time.perf_counter()
         so = ort.SessionOptions()
         so.intra_op_num_threads = threads
-        self.partA = ort.InferenceSession(str(d / "onnx" / "partA.onnx"), sess_options=so,
-                                          providers=["CPUExecutionProvider"])
+        self.partA = ort.InferenceSession(str(d / self.voice.asset("onnx", "partA.onnx")),
+                                          sess_options=so, providers=["CPUExecutionProvider"])
         self.a_names = [o.name for o in self.partA.get_outputs()]
+        # A single-speaker voice has no sid input and emits no speaker embedding.
+        self.a_inputs = {i.name for i in self.partA.get_inputs()}
         self._encode(np.array([1, 0, 3, 0, 2], dtype=np.int64))          # warm ORT
         self.load_s["partA"] = time.perf_counter() - t
 
@@ -88,11 +97,12 @@ class PiperTTS:
         # rather than hardcoded, so a recompiled set of windows just works.
         t = time.perf_counter()
         self.windows = {}
-        for p in sorted((d / "vmfb").glob("partB_static_*s.vmfb")):
+        vmfb_dir = d / self.voice.asset("vmfb")
+        for p in sorted(vmfb_dir.glob("partB_static_*s.vmfb")):
             r = VMFBInferenceRunner(str(p), device_uri=device_uri)
             self.windows[r.inputs_info[0].shape[2]] = r
         if not self.windows:
-            raise FileNotFoundError(f"no partB vmfbs found in {d / 'vmfb'}")
+            raise FileNotFoundError(f"no partB vmfbs found in {vmfb_dir}")
         self.sizes = sorted(self.windows)
         smallest = self.windows[self.sizes[0]]
         smallest.infer([np.zeros(i.shape, dtype=ml_dtypes.bfloat16) for i in smallest.inputs_info])
@@ -103,11 +113,16 @@ class PiperTTS:
         return self.sizes[-1] * HOP / SR
 
     def _encode(self, ids):
-        """partA: phoneme ids -> (z, g) latents, with F fixed and exact."""
-        out = dict(zip(self.a_names, self.partA.run(None, {
-            "input": ids[np.newaxis, :], "input_lengths": np.array([ids.size], dtype=np.int64),
-            "scales": self.scales, "sid": self.sid})))
-        return out[Z_NAME], out[G_NAME]
+        """partA: phoneme ids -> (z, g) latents, with F fixed and exact.
+
+        ``g`` is None for a single-speaker voice, which has no speaker embedding.
+        """
+        feed = {"input": ids[np.newaxis, :], "input_lengths": np.array([ids.size], dtype=np.int64),
+                "scales": self.scales}
+        if "sid" in self.a_inputs:
+            feed["sid"] = self.sid
+        out = dict(zip(self.a_names, self.partA.run(None, feed)))
+        return out[Z_NAME], out.get(G_NAME)
 
     def _vocode(self, z, g):
         """partB: pick the smallest window that fits, edge-pad, run on the NPU."""
@@ -117,7 +132,11 @@ class PiperTTS:
             return None, None
         zp = np.zeros((1, z.shape[1], W), dtype=np.float32)
         zp[:, :, :F], zp[:, :, F:] = z, z[:, :, F - 1:F]      # repeat the last frame
-        out = self.windows[W].infer([zp.astype(ml_dtypes.bfloat16), g.astype(ml_dtypes.bfloat16)])
+        runner = self.windows[W]
+        inputs = [zp.astype(ml_dtypes.bfloat16)]
+        if len(runner.inputs_info) > 1:                       # multi-speaker: + embedding
+            inputs.append(g.astype(ml_dtypes.bfloat16))
+        out = runner.infer(inputs)
         return np.asarray(out[0]).astype(np.float32).ravel()[:F * HOP], W
 
     def _play_stream(self, play_q, marks, t0):
