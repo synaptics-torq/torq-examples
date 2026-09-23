@@ -21,7 +21,7 @@ use:
 
 ```sh
 cd pose_estimation
-python setup_demo.py --model-version v2.1.0
+python setup_demo.py --model-version v2.2.0
 ```
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
