@@ -53,7 +53,7 @@ base dependencies. Then, from the repo root:
 ```sh
 cd LiquidAI/LiquidAI-LFM2-VL-450M-INT8
 pip install -r requirements.txt
-cd ..
+cd ../..
 python setup_demos.py LiquidAI-LFM2-VL-450M-INT8
 ```
 
