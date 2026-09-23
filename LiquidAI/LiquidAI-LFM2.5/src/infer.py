@@ -54,6 +54,7 @@ def main(args: argparse.Namespace):
 
     setup_npu_for_inference()
 
+    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
     liquid = LiquidStatic(
         args.model,
         args.max_seq_len,
@@ -64,7 +65,8 @@ def main(args: argparse.Namespace):
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
-        runtime_flags=args.runtime_flags,
+        runtime_flags=runtime_flags,
+        device_io=args.device_io,
         lm_head_path=args.lm_head,
         disable_lm_head=args.no_lm_head,
         prefill_model_path=args.prefill_model,
@@ -204,6 +206,19 @@ if __name__ == "__main__":
     inference_group.add_argument(
         "--top-k", type=int, default=64,
         help="Top-k pre-filter size for sampling (default: %(default)s)",
+    )
+    runtime_group.add_argument(
+        "--tda",
+        type=str,
+        choices=["cpu", "dmabuf"],
+        default="dmabuf",
+        help="Allocator backing Torq device buffers (default: %(default)s)",
+    )
+    runtime_group.add_argument(
+        "--device-io",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
     )
     runtime_group.add_argument(
         "--runtime-flags",

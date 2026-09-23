@@ -67,6 +67,10 @@ to interrupt an in-flight answer. Stats print per answer as
 format + system-prompt warm-up (drop it for a base/completion model). Run
 `python src/infer.py -h` for all options.
 
+> The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use
+> `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user
+> inputs as NumPy arrays.
+
 > [!TIP]
 > When the model directory contains a `transformer_prefill.vmfb` (a fixed-size
 > batched prefill model exported alongside `transformer.vmfb`), the demo picks
