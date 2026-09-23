@@ -108,7 +108,14 @@ def setup_demo(
             setup_moonshine(["tiny-en"], model_version=model_version, no_update=no_update)
         elif name == "moonshine_streaming":
             from moonshine_streaming.setup_demo import setup_moonshine_streaming
+<<<<<<< HEAD
             setup_moonshine_streaming(["streaming-tiny-en"], model_version=model_version, no_update=no_update)
+=======
+            setup_moonshine_streaming(["streaming-tiny-en"])
+        elif name == "LiquidAI-LFM2-VL-450M-INT8":
+            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M-INT8", "setup_demo.py")
+            _mod.setup_liquidvl_int8(["default"])
+>>>>>>> 8484952 ([Examples] Added Example for LFM2-VL-450M-INT8)
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl(["default"], model_version=model_version, no_update=no_update)
