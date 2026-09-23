@@ -91,7 +91,13 @@ class FakeBody:
 
 
 class FakeLMHead(VMFBInferenceRunner):
+    # The real torq runner exposes these as read-only properties (the CI
+    # stub does not); shadow them with plain attributes so the fake can
+    # set them in __init__ in both environments.
     model_path = "lm_head.vmfb"
+    inputs_info = None
+    outputs_info = None
+    infer_time_ms = None
 
     def __init__(self):
         self.inputs_info = [TensorInfo((1, 1, HIDDEN), F32)]
