@@ -24,6 +24,7 @@ logger = logging.getLogger("setup")
 DEMOS = [
     "gemma3",
     "LiquidAI-LFM2.5-230M",
+    "LiquidAI-LFM2-VL-450M-INT8",
     "moonshine",
     "moonshine_streaming",
     "LiquidAI-LFM2-VL-450M",
@@ -84,6 +85,9 @@ def setup_demo(name: str):
         elif name == "moonshine_streaming":
             from moonshine_streaming.setup_demo import setup_moonshine_streaming
             setup_moonshine_streaming(["streaming-tiny-en"])
+        elif name == "LiquidAI-LFM2-VL-450M-INT8":
+            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M-INT8", "setup_demo.py")
+            _mod.setup_liquidvl_int8(["default"])
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl(["default"])
