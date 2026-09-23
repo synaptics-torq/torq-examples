@@ -369,7 +369,7 @@ class DecoderOnlyLLMRunner(ABC):
             if self._token_embeddings is not None:
                 self._prefill_emb_buf = np.zeros(
                     (1, self._prefill_size, self._token_embeddings.shape[-1]),
-                    dtype=self._token_embeddings.dtype,
+                    dtype=np.dtype(prefill_token_info.dtype),
                 )
             else:
                 self._prefill_id_buf = np.zeros(
@@ -496,7 +496,11 @@ class DecoderOnlyLLMRunner(ABC):
                 )
             self._emb_buf = np.zeros(
                 (1, 1, emb_hidden),
-                dtype=self._token_embeddings.dtype,
+                # The LUT may be stored at higher precision than the model's
+                # token input (e.g. an f32 embedding file for a bf16 export);
+                # the buffer follows the input the runtime actually expects
+                # and the lookup is cast on assignment.
+                dtype=np.dtype(token_info.dtype),
             )
             self._id_buf = None
         else:
