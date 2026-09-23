@@ -21,8 +21,8 @@ both signatures off the models rather than a table, so either shape just runs.
 
 Each run **writes a `.wav` file and plays it on the speaker**.
 
-On the SL2619 board this synthesizes **2.2× faster than real time**, against
-1.0× for the same model run entirely on the CPU.
+On the SL2619 board this synthesizes **2.7–3.8× faster than real time** — about
+**2× faster** than the same voice run entirely on the CPU.
 
 ## Setup
 
@@ -65,7 +65,8 @@ and falls back to the ALSA `default` device; override with `--audio-device`.
 ## Running
 
 Run the demo from the `piper_tts` directory. The first run downloads the assets
-automatically; pass `--no-refresh` for fully offline runs afterwards.
+automatically, and later runs re-download them when the Hugging Face repo has
+been updated; pass `--no-refresh` for fully offline runs.
 
 ```sh
 cd piper_tts
@@ -97,10 +98,10 @@ the time until the first sound reached the speaker, and the synthesis speed:
 ```
 [NPU] NPU clock enabled
 Loading (partA on CPU, partB windows on NPU, espeak resident)...
-  partA 6.1 s | partB 5 windows (1s, 2s, 4s, 6s, 8s) 0.8 s | speaker plughw:CARD=C1,DEV=0
+  partA 5.9 s | partB 5 windows (1s, 2s, 4s, 6s, 8s) 0.7 s | speaker plughw:CARD=C1,DEV=0
 
   "The morning train was late again. Nobody on the platform seemed surprised."
-  audio 3.05 s | windows 2s+2s | first sound 0.91 s | compute 1.41 s (2.16x real time) | saved tts_out.wav
+  audio 3.05 s | windows 2s+2s | first sound 0.70 s | compute 1.16 s (2.64x real time) | saved tts_out.wav
 ```
 
 Options:
@@ -182,44 +183,42 @@ milliseconds instead of a fresh dictionary load. Source:
 
 ## Performance
 
-SL2619 board, `en_US-libritts_r-medium`, 2 CPU threads for partA, NPU at full
-clock. "compute" excludes speaker drain time.
+SL2619 board, 2 CPU threads for partA, NPU at full clock. A three-sentence sample,
+text in to all audio synthesized (phonemization included, model load excluded),
+median of 5 runs:
 
-Sample 1 (two sentences, 3.05 s of audio):
+| voice | audio | all-CPU onnxruntime | **CPU (partA) ‖ NPU (partB)** | speedup | first audio (CPU / NPU) |
+|---|---|---|---|---|---|
+| `en_US-libritts_r-medium` | 7.70 s | 5.62 s (1.37× RT) | **2.82 s (2.73× RT)** | **1.99×** | 0.94 s / **0.77 s** |
+| `en_US-lessac-low` | 9.82 s | 5.21 s (1.89× RT) | **2.59 s (3.79× RT)** | **2.01×** | 0.89 s / **0.66 s** |
+| `es_MX-ald-medium` | 12.63 s | 8.84 s (1.43× RT) | **4.05 s (3.12× RT)** | **2.18×** | 1.83 s / **1.37 s** |
 
-| | compute | speed |
+The CPU is also left free during vocoding. The vocoder alone on the NPU, per window:
+
+| window | libritts / Spanish (22.05 kHz) | lessac-low (16 kHz) |
 |---|---|---|
-| **CPU (partA) ‖ NPU (partB)** | **1.37 s** | **2.22× real time** |
-| serial, all-CPU onnxruntime | 3.03 s | 1.01× real time |
+| 1 s | 170 ms (5.9× RT) | 126 ms (7.8× RT) |
+| 2 s | 335 ms (6.0× RT) | 249 ms (8.0× RT) |
+| 4 s | 688 ms (5.8× RT) | 497 ms (8.0× RT) |
+| 6 s | 1032 ms (5.8× RT) | 749 ms (8.0× RT) |
+| 8 s | 1200–1356 ms (5.9–6.7× RT) | 1027 ms (7.8× RT) |
 
-**2.2× faster end to end**, and the CPU is left free during vocoding.
+The 16 kHz voice has about 27% fewer vocoder frames per second of speech, which
+is why it is the fastest.
 
-The vocoder itself is a steady ~3.9× real time on the NPU at every window size:
-
-| window | frames | NPU time | speed |
-|---|---|---|---|
-| 1 s | 86 | 254 ms | 3.9× RT |
-| 2 s | 172 | 499 ms | 4.0× RT |
-| 4 s | 345 | 1059 ms | 3.8× RT |
-| 6 s | 517 | 1549 ms | 3.9× RT |
-| 8 s | 689 | 2038 ms | 3.9× RT |
-
-Startup, paid once: partA ~6 s (onnxruntime loading a 71 MB graph), all five
-VMFBs ~0.8 s, phonemizer ~0.3 s. Resident set with all five windows loaded is
-~110 MB — they are kept loaded so no window switch costs a reload.
-
-Typical end-to-end figures: **first sound ~0.9 s** after you press enter,
-2.1–2.2× real time sustained.
+Startup, paid once: partA ~6 s (onnxruntime loading the graph), all five VMFBs
+~0.5–0.7 s, phonemizer ~0.3 s. The windows are kept loaded so no window switch
+costs a reload. Forty utterances back to back show no memory growth or slowdown.
 
 ## Accuracy
 
 The bf16 NPU vocoder against the same partB graph in fp32 on the CPU, same
-latents:
+latents, every window of every voice:
 
 | | |
 |---|---|
-| SNR | **39.6 dB** |
-| correlation | **0.99998** |
+| SNR | **37.3–40.7 dB** |
+| correlation | **≥ 0.9999** |
 
 That is inaudible in practice — the difference is well below the run-to-run
 variation of the model itself, which samples noise internally (the same text
