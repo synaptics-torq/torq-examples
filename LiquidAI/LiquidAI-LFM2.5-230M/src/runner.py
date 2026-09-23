@@ -19,18 +19,25 @@ class LiquidStatic(DecoderOnlyLLMRunner):
 
     LFM2.5 is a hybrid model — each layer is either a conv block (sliding
     ``past_conv.N`` state ``[1, 1024, 3]``) or an attention block (combined
-    ``past_key_values.X.key_value`` cache ``[1, 16, 256, 64]``). The shared
+    ``past_key_values.N.key_value`` cache ``[1, 16, 256, 64]``). The shared
     :class:`~utils.llm.DecoderOnlyLLMRunner` cache manager is agnostic to what
     each cached tensor represents: it zero-inits every per-layer cache from the
     model's input-shape metadata and shuttles each output back to its matching
     input, so the mixed conv/KV caches thread correctly without special-casing.
 
-    The VMFB takes two non-cache inputs — ``token_embedding`` ``[1, 1, 1024]``
-    (a CPU-side embedding-LUT lookup; the VMFB has no 65 K embedding table) and
-    ``position_ids`` ``[1, 1]`` — followed by the per-layer cache inputs. With
+    The new exporter's VMFB takes three non-cache inputs — ``token_embedding``
+    ``[1, 1, 1024]`` (a CPU-side embedding-LUT lookup; the VMFB has no 65 K
+    embedding table), ``position_ids`` ``[1, 1]``, and a fixed all-ones
+    ``attention_mask`` ``[1, 256]`` sized at the compiled KV-cache window —
+    followed by the per-layer cache inputs. The shared runner builds all of
+    these (shapes, dtypes and the mask value) from the model's reflection
+    metadata, so legacy two-input exports keep working unchanged. With
     ``lm_head_path`` the decoder is split into a body (hidden output) and a
-    standalone lm_head, so prefill skips the ``[1024, 65536]`` lm_head (lower
-    TTFT, no decode-throughput cost).
+    standalone lm_head, so prefill tokens skip the ``[1024, 65536]`` lm_head
+    -> lower TTFT. An optional sibling ``transformer_prefill.vmfb`` (a
+    fixed-size batched prompt-chunk build with the lm_head baked in) is picked
+    up automatically; complete prompt chunks run through it on the shared KV
+    cache and only the final prompt unit needs a sampled token.
     """
 
     __slots__ = ("_instruct_model", "_sys_prompt", "_nl_token_id", "_double_nl_token_id")
@@ -52,6 +59,8 @@ class LiquidStatic(DecoderOnlyLLMRunner):
         sys_prompt: str | None = None,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
+        prefill_model_path: str | os.PathLike | None = None,
+        disable_prefill: bool = False,
     ):
         self._instruct_model = instruct_model
         self._sys_prompt = (sys_prompt or DEFAULT_SYS_PROMPT) if instruct_model else None
@@ -73,6 +82,8 @@ class LiquidStatic(DecoderOnlyLLMRunner):
             device_io=device_io,
             lm_head_path=lm_head_path,
             disable_lm_head=disable_lm_head,
+            prefill_model_path=prefill_model_path,
+            disable_prefill=disable_prefill,
         )
 
     @property
@@ -82,8 +93,9 @@ class LiquidStatic(DecoderOnlyLLMRunner):
     def _query_model_seq_len(self) -> int | None:
         """Sequence length is the KV-cache window (axis 2 of a rank-4
         ``past_key_values.*`` input). Overrides the base, which reads
-        ``inputs_info[2]`` — for LFM2.5 that slot is a conv cache
-        ``[1, 1024, 3]`` (axis 2 == 3), not the 256-token KV window."""
+        ``inputs_info[2]`` — for LFM2.5 that slot is either a conv cache
+        ``[1, 1024, 3]`` (legacy exports) or the ``[1, 256]`` attention mask
+        (newer exports), not the 256-token KV window."""
         info = self._model.inputs_info
         if info is None:
             return None

@@ -4,11 +4,21 @@
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from runner import LiquidStatic, InferenceInterrupted
 from utils.log import add_logging_args, configure_logging
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 from utils.terminal import InferenceStopInput
+
+# The model-refresh helper lives one level up (the demo dir's setup_demo.py). The demo
+# dir name has a hyphen, so it is not importable as a package; add it to the path and
+# import the module directly. Guarded so a missing setup_demo never breaks inference.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from setup_demo import ensure_liquid_models
+except Exception:
+    ensure_liquid_models = None
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
@@ -37,6 +47,10 @@ def main(args: argparse.Namespace):
 
     configure_logging(args.logging)
     logging.getLogger("Liquid").info("Starting assistant...")
+    if ensure_liquid_models is not None:
+        # Sync the local copy with its tracked manifest before inference
+        # (no-op for untracked/airgapped models; --no-refresh skips it).
+        ensure_liquid_models(Path(args.model).parent, refresh=not args.no_refresh)
 
     setup_npu_for_inference()
 
@@ -52,6 +66,9 @@ def main(args: argparse.Namespace):
         top_k=args.top_k,
         runtime_flags=args.runtime_flags,
         lm_head_path=args.lm_head,
+        disable_lm_head=args.no_lm_head,
+        prefill_model_path=args.prefill_model,
+        disable_prefill=args.no_prefill_model,
     )
     try:
         while True:
@@ -105,6 +122,40 @@ if __name__ == "__main__":
     parser.add_argument(
         "-m", "--model", type=str, required=True, help="Path to VMFB model"
     )
+    lm_head_group = parser.add_mutually_exclusive_group()
+    lm_head_group.add_argument(
+        "--lm-head", type=str, default=None, dest="lm_head", metavar="PATH",
+        help=(
+            "Path to a separately compiled LM head .vmfb. When set, -m is the "
+            "decoder body (hidden output) and the lm_head runs only when "
+            "sampling, so prefill tokens skip it. Overrides sibling LM head "
+            "auto-discovery."
+        ),
+    )
+    lm_head_group.add_argument(
+        "--no-lm-head", action="store_true", default=False,
+        help=(
+            "Disable sibling LM head auto-discovery and run only --model. "
+            "The model must then emit logits directly (fused build)."
+        ),
+    )
+    prefill_group = parser.add_mutually_exclusive_group()
+    prefill_group.add_argument(
+        "--prefill-model", type=str, default=None, metavar="PATH",
+        help=(
+            "Path to a batched prefill .vmfb that runs complete fixed-size "
+            "prompt chunks. Overrides sibling prefill model auto-discovery. "
+            "Requires a split LM head (--lm-head or sibling lm_head) unless "
+            "the prefill build has the head baked in."
+        ),
+    )
+    prefill_group.add_argument(
+        "--no-prefill-model", action="store_true", default=False,
+        help=(
+            "Disable sibling batched prefill model auto-discovery and prefill "
+            "the prompt with single-token decode steps only."
+        ),
+    )
     parser.add_argument(
         "--max-seq-len", type=int, default=None,
         help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
@@ -121,12 +172,8 @@ if __name__ == "__main__":
         help="Number of cores to use for CPU execution (default: all)",
     )
     parser.add_argument(
-        "--lm-head", type=str, default=None, dest="lm_head",
-        help=(
-            "Optional standalone lm_head VMFB. When set, -m is the decoder *body* "
-            "(hidden output) and the lm_head is applied only when sampling, so "
-            "prefill tokens skip the [1024,65536] lm_head -> lower TTFT."
-        ),
+        "--no-refresh", action="store_true", default=False,
+        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
     )
     runtime_group = parser.add_argument_group("runtime")
     add_logging_args(parser)

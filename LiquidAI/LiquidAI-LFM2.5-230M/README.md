@@ -1,6 +1,6 @@
 # LFM2.5 (LiquidAI) LLM Demo
 
-Interactive text chat with LiquidAI **LFM2.5-230M** using a Torq VMFB.
+Interactive text chat with LiquidAI **LFM2.5** using a Torq VMFB.
 
 ## Setup
 
@@ -14,7 +14,8 @@ pip install -r requirements.txt
 cd ..
 ```
 
-From the repo root — downloads the 230M model from HuggingFace:
+From the repo root — downloads the model from HuggingFace (230M by default,
+`350m` also available once its runtime repo is published):
 
 ```sh
 python setup_demos.py LiquidAI-LFM2.5-230M
@@ -31,50 +32,66 @@ into `models/Synaptics/LiquidAI-LFM2.5-230M/`:
 
 ```
 models/Synaptics/LiquidAI-LFM2.5-230M/
-├── body.vmfb             ← decoder minus lm_head (hidden output, bf16, 256-token KV cache)
-├── lm_head.vmfb          ← standalone lm_head (hidden -> logits; skipped during prefill)
-├── token_embeddings.npy  ← CPU-side embedding LUT (bf16)
+├── transformer.vmfb           ← decoder body (hidden output, 256-token KV cache)
+├── transformer_prefill.vmfb   ← optional: fixed-size batched prefill build
+├── lm_head.vmfb               ← standalone lm_head (hidden -> logits; skipped during prefill)
+├── token_embeddings.npy       ← CPU-side embedding LUT
 ├── config.json
 └── tokenizer.json
 ```
+
+> [!NOTE]
+> Legacy deployments of `body.vmfb` + `lm_head.vmfb` (or the fused
+> `model.vmfb`) still run; the demo picks whichever file set is present.
 
 ## Running
 
 The decoder is split into a **body** (decoder minus lm_head → hidden state) and a
 standalone **lm_head** (hidden → logits). The `[1024, 65536]` lm_head MatMul
-(~134 MB bf16) only produces logits, so it runs only when a token is sampled (the
+only produces logits, so it runs only when a token is sampled (the
 last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
 cd LiquidAI/LiquidAI-LFM2.5-230M
 python src/infer.py \
-  -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/body.vmfb \
-  --lm-head ../../models/Synaptics/LiquidAI-LFM2.5-230M/lm_head.vmfb \
+  -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/transformer.vmfb \
   --instruct-model
 ```
 
-`-m` is the **body** vmfb; `--lm-head` is the standalone lm_head. Multi-turn chat
-loop — type `exit` or `quit` to stop; press <kbd>Ctrl</kbd>+<kbd>C</kbd> /
-<kbd>Ctrl</kbd>+<kbd>D</kbd> to interrupt an in-flight answer. Stats print per
-answer as `(<total_ms>, TTFT: <ms>, <tok/s>)` — the 230M runs ~6.3 tok/s on the
-SL2619, TTFT ~1.6 s (skipping the lm_head in prefill is ~34% faster than the
-fused model). `--instruct-model` enables the ChatML chat format + system-prompt
-warm-up (drop it for a base/completion model). Run `python src/infer.py -h` for
-all options.
+`-m` is the **body** vmfb; the standalone `lm_head.vmfb` next to it is picked
+up automatically (`--lm-head PATH` to point elsewhere, `--no-lm-head` to run a
+fused build that emits logits directly). Multi-turn chat loop — type `exit` or
+`quit` to stop; press <kbd>Ctrl</kbd>+<kbd>C</kbd> / <kbd>Ctrl</kbd>+<kbd>D</kbd>
+to interrupt an in-flight answer. Stats print per answer as
+`(<total_ms>, TTFT: <ms>, <tok/s>)`. `--instruct-model` enables the ChatML chat
+format + system-prompt warm-up (drop it for a base/completion model). Run
+`python src/infer.py -h` for all options.
 
 > [!TIP]
-> The `body.vmfb` + `lm_head.vmfb` pair is produced by the exporter's
-> `--split-decoder` flag:
-> `torq-export-model liquid --model-size 230m --convert-dtypes --extract-embeddings --split-decoder`.
-> (A fused single-file `model.vmfb` — run with just `-m`, no `--lm-head` — is also
-> in the HF repo if you prefer the monolithic path.)
+> When the model directory contains a `transformer_prefill.vmfb` (a fixed-size
+> batched prefill model exported alongside `transformer.vmfb`), the demo picks
+> it up automatically: complete prompt chunks run through the prefill model and
+> only the final prompt unit samples a token, so time-to-first-token drops
+> sharply. The prefill build has the lm_head baked in for its final position.
+> Any prompt remainder and all generated tokens still use `transformer.vmfb`,
+> and both paths share the same KV cache. Use `--prefill-model PATH` to point
+> at a specific prefill model, or `--no-prefill-model` to force single-token
+> prompt prefill.
 
 ## Model notes
 
-LFM2.5-230M is a hybrid conv + attention model with **14 layers** (8 depthwise-conv
-+ 6 attention). Each layer is either a depthwise 1D conv block (sliding
-`past_conv.N` state `[1, 1024, 3]`) or an attention block (per-layer KV cache,
-8 KV heads × 64 head-dim, 256-token window).
+LFM2.5 is a hybrid conv + attention model: each layer is either a depthwise 1D
+conv block (sliding `past_conv.N` state `[1, 1024, 3]`) or an attention block
+(per-layer combined KV cache `[1, 16, 256, 64]` — 8 KV heads × 64 head-dim,
+256-token window). The 230M build has 14 layers (8 conv + 6 attention); the
+350M build has 16 layers (9 conv + 7 attention).
+
+The new exporter's body VMFB takes three non-cache inputs — `token_embedding`
+`[1, 1, 1024]`, `position_ids` `[1, 1]`, and a fixed all-ones
+`attention_mask` `[1, 256]` sized at the compiled KV-cache window —
+followed by the per-layer cache inputs. The shared runner builds all of them
+(shapes, dtypes and the mask value) from the model's reflection metadata, so
+legacy two-input exports keep working unchanged.
 
 The runner (`src/runner.py`) is a thin subclass of the shared
 [`DecoderOnlyLLMRunner`](../../utils/llm.py); it only supplies the LFM2.5 ChatML

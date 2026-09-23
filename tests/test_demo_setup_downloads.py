@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+import importlib.util
 import json
 from pathlib import Path
 from unittest import mock
@@ -16,6 +17,19 @@ from utils.version import examples_version
 _REVISION = "abc123"
 _PINS = "v2.0.0"
 _EXAMPLES_VERSION = examples_version()
+
+
+def _load_liquid_setup():
+    # The Liquid demo dir name has a dot + hyphen, so it is not importable as
+    # a package; load setup_demo.py by file path (as setup_demos.py does).
+    path = Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5-230M" / "setup_demo.py"
+    spec = importlib.util.spec_from_file_location("liquid_setup_demo", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+liquid_setup = _load_liquid_setup()
 
 
 def _fake_download(default_base_dir: Path):
@@ -902,3 +916,161 @@ def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
     # The stale-refresh path must not have cleared the dir it cannot replace.
     assert (model_dir / "transformer.vmfb").exists()
     assert not (tmp_path / "models" / "Synaptics").exists()
+
+
+# ── liquid ──────────────────────────────────────────────────────────────────
+
+
+def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        assert revision == _EXAMPLES_VERSION
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m"])
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert downloaded == [
+        "transformer.vmfb",
+        "lm_head.vmfb",
+        *liquid_setup._LIQUID_REQUIRED_FILES,
+        liquid_setup._LIQUID_PREFILL_FILENAME,
+    ]
+    manifest = _manifest(base_dir / repo_id)
+    assert manifest["files"] == sorted(downloaded)
+    assert manifest["version"] == _EXAMPLES_VERSION
+    assert manifest["revision"] == _REVISION
+
+
+def test_liquid_falls_back_to_legacy_body_set(tmp_path):
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        return filename in {"body.vmfb", "lm_head.vmfb"}
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m"])
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert downloaded == [
+        "body.vmfb",
+        "lm_head.vmfb",
+        *liquid_setup._LIQUID_REQUIRED_FILES,
+    ]
+    # No prefill in this repo: not downloaded, not tracked.
+    manifest = _manifest(base_dir / repo_id)
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in manifest["files"]
+
+
+def _make_liquid_copy(model_dir: Path, model_files, revision=_REVISION):
+    model_dir.mkdir(parents=True, exist_ok=True)
+    files = [*model_files, *liquid_setup._LIQUID_REQUIRED_FILES]
+    for filename in files:
+        (model_dir / filename).write_text(filename)
+    write_manifest(
+        model_dir,
+        liquid_setup._HF_REPO_MAP["230m"],
+        files,
+        version=_EXAMPLES_VERSION,
+        revision=revision,
+    )
+    return model_dir
+
+
+def test_liquid_inference_accepts_alternate_model_set(tmp_path):
+    """A manifest recorded the new set, but the local dir holds the legacy set.
+
+    Both are valid decode bodies, so the tracked copy must be complete and no
+    download must happen.
+    """
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+    model_dir = _make_liquid_copy(
+        tmp_path / repo_id,
+        ["body.vmfb", "lm_head.vmfb"],
+    )
+    # Rewrite the manifest as if the new set had been downloaded.
+    write_manifest(
+        model_dir,
+        repo_id,
+        ["transformer.vmfb", "lm_head.vmfb", *liquid_setup._LIQUID_REQUIRED_FILES],
+        version=_EXAMPLES_VERSION,
+        revision=_REVISION,
+    )
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists") as exists,
+        mock.patch.object(liquid_setup, "download_from_hf") as download,
+    ):
+        liquid_setup.ensure_liquid_models(model_dir)
+
+    exists.assert_not_called()
+    download.assert_not_called()
+
+
+def test_liquid_inference_repairs_missing_recorded_prefill(tmp_path):
+    """The manifest tracked a prefill build the local dir lost: re-fetch it."""
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+    model_dir = _make_liquid_copy(
+        tmp_path / repo_id,
+        ["transformer.vmfb", "lm_head.vmfb"],
+    )
+    (model_dir / liquid_setup._LIQUID_PREFILL_FILENAME).write_text("prefill")
+    write_manifest(
+        model_dir,
+        repo_id,
+        [
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            *liquid_setup._LIQUID_REQUIRED_FILES,
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        ],
+        version=_EXAMPLES_VERSION,
+        revision=_REVISION,
+    )
+    (model_dir / liquid_setup._LIQUID_PREFILL_FILENAME).unlink()
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", return_value=True),
+        mock.patch.object(
+            liquid_setup, "download_from_hf", side_effect=_fake_download(tmp_path)
+        ) as download,
+    ):
+        liquid_setup.ensure_liquid_models(model_dir)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    # The lost prefill build is re-fetched; the intact model set is not.
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
+    assert "transformer.vmfb" not in downloaded
+    assert "lm_head.vmfb" not in downloaded
