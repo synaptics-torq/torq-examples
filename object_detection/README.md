@@ -1,6 +1,6 @@
 # Object Detection Demo
 
-YOLOv8n and YOLO26n object detection using a Torq VMFB model.
+YOLOv8n and YOLO26 (nano + small) object detection using Torq VMFB models.
 
 ## Setup
 
@@ -32,6 +32,8 @@ python setup_demo.py --model-version v2.1.0
 ```
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
+
+The YOLO26 repo has no version tags yet, so its models are downloaded at the repo's latest (HEAD) revision and left untracked: re-runs only repair missing files rather than following a tag.
 
 Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/` (YOLOv8n) and `models/Synaptics/yolov26n_od/` (YOLO26n and YOLO26s).
 
@@ -67,9 +69,10 @@ export DISPLAY_WIDTH=480
 
 ### Image inference
 
+`--model` is optional: it defaults to the model file setup downloaded for `--variant` (the YOLOv8n model by default).
+
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -80,7 +83,6 @@ To save or display the annotated image:
 
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -94,7 +96,6 @@ NMS-free head is decoded with the right quantization parameters:
 
 ```sh
 python src/infer.py \
-  --model ../models/Synaptics/yolov26n_od/yolo26n_npu.vmfb \
   --image ../models/Synaptics/yolov26n_od/samples/soccer.jpg \
   --labels ../models/Synaptics/yolov26n_od/labels.json \
   --variant yolo26n \
@@ -111,6 +112,7 @@ YOLO26s ~33 ms per inference.
 `--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
 
 Image inference options:
+- `--model`: model VMFB path, defaults to the one setup_demo.py downloaded for `--variant`
 - `--variant {yolo26n,yolo26s,yolov8}`: model head variant, defaults to `yolov8`
 - `--labels`: label JSON file to map class IDs to names
 - `--device`: Torq device URI, defaults to `torq`
@@ -123,7 +125,6 @@ Image inference options:
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -135,7 +136,6 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --camera-device auto \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -148,7 +148,6 @@ Example with explicit camera controls:
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --camera-device /dev/video0 \
   --camera-control-device /dev/v4l-subdev2 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
@@ -162,7 +161,6 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --rtsp-url rtsp://user:pass@host:port/stream \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
@@ -175,7 +173,6 @@ python src/infer_video.py \
 
 ```sh
 python src/infer_video.py \
-  --model ../models/Synaptics/yolov8-od-nano-320-int8-torq/yolo_od.vmfb \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --device torq \
   --device-io \
@@ -185,6 +182,7 @@ python src/infer_video.py \
 For camera input, use `--camera-device auto` or a specific `/dev/video*` path. For video files and RTSP streams, you will usually want `--rotate 0`.
 
 Video inference options:
+- `--model`: model VMFB path, defaults to the one setup_demo.py downloaded for `--variant`
 - `--variant {yolo26n,yolo26s,yolov8}`: model head variant, defaults to `yolov8`
 - `--output`: save annotated video to a file
 - `--json-results`: JSON output path for detections, default `detection_results.json`

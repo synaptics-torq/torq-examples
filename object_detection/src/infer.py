@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from object_detection.setup_demo import ensure_object_detection_models
+from object_detection.setup_demo import default_model_path, ensure_object_detection_models
 from utils.vision import dequantize_out
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
@@ -55,7 +55,10 @@ def maybe_save_and_display(args, results):
 
 def main():
     parser = argparse.ArgumentParser(description="Run YOLO object detection on an image.")
-    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--model", default=None,
+        help="Path to the model VMFB (default: the one setup_demo.py downloads for --variant)",
+    )
     parser.add_argument("--image", required=True)
     parser.add_argument("--labels")
     parser.add_argument(
@@ -80,6 +83,14 @@ def main():
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
     args = parser.parse_args()
+
+    if args.model is None:
+        args.model = str(default_model_path(args.variant))
+        if not Path(args.model).exists():
+            parser.error(
+                f"default model {args.model} not found; pass --model or run "
+                f"`python setup_demos.py object_detection` from torq-examples root"
+            )
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
 

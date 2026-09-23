@@ -143,17 +143,35 @@ def _gemma3_files_present(model_dir: Path) -> bool:
     )
 
 
+#: Main model file names in setup preference order; the first one present
+#: locally is what the demo's ``-m``/``--model`` defaults to.
+_GEMMA3_MAIN_MODEL_FILENAMES: Final[tuple[str, ...]] = (
+    "transformer.vmfb",
+    "model.vmfb.trim",
+    "model.vmfb",
+)
+
+
 def local_gemma3_model_path(
     model: str = "instruct",
     *,
     base_dir: str | Path | None = None,
 ) -> Path | None:
-    """Return the local ``model.vmfb.trim`` path for ``model`` if it exists."""
+    """Return the local main-model VMFB path for ``model`` if it exists.
+
+    Tries the file names in setup preference order, so both the split layout
+    (``transformer.vmfb`` + sibling lm head) and the monolithic layouts
+    (``model.vmfb[.trim]``) are supported.
+    """
     if base_dir is None:
         base_dir = default_models_dir()
     repo_id = resolve_repo_id(model, GEMMA3_HF_REPO_MAP)
-    model_path = Path(base_dir) / repo_id / "model.vmfb.trim"
-    return model_path if model_path.exists() else None
+    local_dir = Path(base_dir) / repo_id
+    for filename in _GEMMA3_MAIN_MODEL_FILENAMES:
+        candidate = local_dir / filename
+        if candidate.exists():
+            return candidate
+    return None
 
 
 def download_gemma3(

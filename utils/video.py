@@ -216,15 +216,17 @@ def shutdown_display_pipeline(Gst, pipeline, appsrc):
     pipeline.get_state(Gst.SECOND)
 
 
-def build_video_argparser(description, default_json_results="results.json"):
+def build_video_argparser(description, default_json_results="results.json", model_required=True, model_help=None):
     """Build the shared argparse parser for video inference scripts.
 
     Each script calls this, then adds any model-specific args (e.g. --labels).
+    Pass ``model_required=False`` when the script resolves a default model
+    itself (e.g. from what the demo setup downloaded).
     """
     import argparse
 
     parser = argparse.ArgumentParser(description=description)
-    parser.add_argument("--model", required=True)
+    parser.add_argument("--model", required=model_required, help=model_help)
 
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument("--rtsp-url", help="RTSP stream URL")

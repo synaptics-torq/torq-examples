@@ -38,13 +38,13 @@ Run the demo from the `gemma3` directory:
 
 ```sh
 cd gemma3
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
+python src/infer.py --instruct-model
 ```
+
+`-m`/`--model` defaults to the model downloaded during setup. Pass `-m` to use a different (e.g. a custom HF repo) model instead.
+
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
-
-> [!TIP]
-> If the downloaded repo only contains `model.vmfb`, use that path instead.
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
@@ -56,7 +56,7 @@ Gemma 3 includes a validation script for text translation datasets. For example:
 
 ```sh
 cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model --max-samples 10
+python src/validate.py --instruct-model --max-samples 10
 ```
 
 Run `python src/validate.py -h` to see all available validation options.
