@@ -435,3 +435,39 @@ def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
     # The stale-refresh path must not have cleared the dir it cannot replace.
     assert (model_dir / "transformer.vmfb").exists()
     assert not (tmp_path / "models" / "Synaptics").exists()
+
+
+def _piper_env(base_dir, revision):
+    from piper_tts import setup_demo as piper_setup
+
+    return piper_setup, (
+        mock.patch.object(piper_setup, "get_hf_revision", return_value=revision),
+        mock.patch.object(piper_setup, "download_from_hf", side_effect=_fake_download(base_dir)),
+        mock.patch.object(piper_setup, "_unpack_espeak",
+                          side_effect=lambda d: (d / "espeak" / "espeak-ng-data").mkdir(parents=True, exist_ok=True)),
+    )
+
+
+def test_piper_voices_accumulate_and_refresh_on_new_revision(tmp_path):
+    from piper_tts.piper_core.voices import get_voice
+
+    en, es = get_voice("en_US-libritts_r-medium"), get_voice("es_MX-ald-medium")
+    piper_setup, patches = _piper_env(tmp_path, "rev1")
+    model_dir = tmp_path / piper_setup.PIPER_REPO_ID
+    with patches[0], patches[1] as download, patches[2]:
+        piper_setup.ensure_piper_models(model_dir, voice=en)
+        piper_setup.ensure_piper_models(model_dir, voice=es)   # second voice: added, not replacing
+        files = json.loads((model_dir / ".manifest.json").read_text())["files"]
+        assert set(piper_setup.voice_files(en)) | set(piper_setup.voice_files(es)) <= set(files)
+        calls = download.call_count
+        piper_setup.ensure_piper_models(model_dir, voice=en)   # up to date: nothing fetched
+        assert download.call_count == calls
+
+    piper_setup, patches = _piper_env(tmp_path, "rev2")
+    (model_dir / es.asset("vmfb", "partB_static_4s.vmfb")).write_text("old")
+    with patches[0], patches[1], patches[2]:
+        piper_setup.ensure_piper_models(model_dir, voice=en)   # new revision: cleared, re-fetched
+    manifest = json.loads((model_dir / ".manifest.json").read_text())
+    assert manifest["revision"] == "rev2"
+    assert not (model_dir / es.asset("vmfb", "partB_static_4s.vmfb")).exists()
+    assert set(manifest["files"]) == set(piper_setup.voice_files(en)) | set(piper_setup.ESPEAK_FILES)
