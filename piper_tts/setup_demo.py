@@ -18,7 +18,8 @@ from typing import Final
 
 from piper_tts.piper_core.voices import VOICES, Voice, get_voice
 from utils.deps import MissingRequirementsError, check_requirements
-from utils.download import DownloadError, default_models_dir, download_from_hf
+from utils.download import (DownloadError, base_dir_for, default_models_dir, download_from_hf,
+                            ensure_model, get_hf_revision, read_manifest)
 
 logger = logging.getLogger("piper_tts.setup")
 
@@ -53,61 +54,78 @@ def _unpack_espeak(model_dir: Path) -> None:
         daemon.chmod(0o755)
 
 
-def download_piper(base_dir: str | Path | None = None, voices: tuple[Voice, ...] | None = None) -> Path:
-    """Download the assets for ``voices`` (default: all); return the model dir.
+def _refresh_voice(voice: Voice, model_dir: Path, base_dir: Path) -> None:
+    """Bring one voice (plus the shared espeak assets) up to the repo's current revision.
 
-    Files already present are not re-downloaded (see
-    :func:`utils.download.download_from_hf`).
+    Uses the shared manifest check: a new upstream revision clears the dir and
+    re-downloads, so replaced vmfbs reach existing installs. Voices are fetched on
+    demand, so the manifest lists the union of every voice downloaded so far.
     """
+    wanted = (*voice_files(voice), *ESPEAK_FILES)
+    manifest = read_manifest(model_dir) or {}
+    files_present = (set(wanted) <= set(manifest.get("files", ()))
+                     and all((model_dir / f).exists() for f in wanted))
+
+    def download() -> list[str]:
+        have = [f for f in (read_manifest(model_dir) or {}).get("files", ()) if (model_dir / f).exists()]
+        for filename in wanted:
+            download_from_hf(PIPER_REPO_ID, filename, base_dir=base_dir)
+        _unpack_espeak(model_dir)
+        return sorted(set(have) | set(wanted))
+
+    ensure_model(model_dir, PIPER_REPO_ID, files_present=files_present,
+                 revision=get_hf_revision(PIPER_REPO_ID), download=download)
+    _unpack_espeak(model_dir)
+
+
+def download_piper(base_dir: str | Path | None = None, voices: tuple[Voice, ...] | None = None) -> Path:
+    """Download/refresh the assets for ``voices`` (default: all); return the model dir."""
     base_dir = Path(base_dir) if base_dir is not None else default_models_dir()
     model_dir = base_dir / PIPER_REPO_ID
-    voices = voices if voices is not None else tuple(VOICES.values())
-    unpacked = (model_dir / "espeak" / "espeak-ng-data").exists()
-    wanted = (*(f for v in voices for f in voice_files(v)), *ESPEAK_FILES)
-    for filename in wanted:
-        if unpacked and filename.endswith(".tar.gz"):
-            continue  # espeak dictionaries already unpacked; no need for the archive
-        download_from_hf(PIPER_REPO_ID, filename, base_dir=base_dir)
-    _unpack_espeak(model_dir)
+    for voice in voices if voices is not None else tuple(VOICES.values()):
+        _refresh_voice(voice, model_dir, base_dir)
     return model_dir
 
 
 def ensure_piper_models(model_dir: str | Path | None = None, *, refresh: bool = True,
                         voice: Voice | str | None = None) -> Path:
-    """Ensure one voice's Piper assets are present; return the model dir.
+    """Ensure one voice's Piper assets are present and current; return the model dir.
 
     ``model_dir`` may be the ``.../Synaptics/Piper-TTS`` dir (as passed by
     ``infer.py``) or ``None`` to use the shared ``models/`` dir. Only the
     requested voice is fetched, so speaking English never downloads the Spanish
-    vocoder. Already-present files are never re-downloaded.
+    vocoder. A newer upstream revision is re-downloaded; if the Hub can't be
+    reached, whatever is on disk is used.
 
     ``refresh=False`` skips Hugging Face entirely and runs against whatever is on
     disk, which is what makes locally built assets usable; anything missing is
     named in the error rather than being fetched.
     """
-    if model_dir is None:
-        base_dir = default_models_dir()
-    else:
-        base_dir = Path(model_dir)
-        for _ in Path(PIPER_REPO_ID).parts:  # strip Synaptics/Piper-TTS -> base
-            base_dir = base_dir.parent
+    local = Path(model_dir) if model_dir is not None else default_models_dir() / PIPER_REPO_ID
     if not isinstance(voice, Voice):
         voice = get_voice(voice)
-    if not refresh:
-        # What the demo actually needs to run: partA, the config, the phonemizer,
-        # and at least one window. A partial set of windows is legitimate — the
-        # pipeline picks from whichever vmfbs are present.
-        local = base_dir / PIPER_REPO_ID
-        required = (voice.asset("onnx", "partA.onnx"), voice.asset("voice", voice.config_name),
-                    "espeak/phonemizerd", "espeak/espeak-ng-data")
-        missing = [f for f in required if not (local / f).exists()]
-        if not list((local / voice.asset("vmfb")).glob("partB_static_*s.vmfb")):
-            missing.append(voice.asset("vmfb", "partB_static_*s.vmfb"))
-        if missing:
-            raise DownloadError(f"--no-refresh but {len(missing)} asset(s) missing under {local}: "
-                                + ", ".join(missing))
-        return local
-    return download_piper(base_dir, voices=(voice,))
+    if refresh:
+        base_dir = base_dir_for(local, PIPER_REPO_ID)
+        if base_dir is None:
+            logger.warning("%s is not laid out as <models dir>/%s; skipping the update check.",
+                           local, PIPER_REPO_ID)
+        else:
+            try:
+                _refresh_voice(voice, local, base_dir)
+            except Exception as e:  # noqa: BLE001 - fall back to local files below
+                logger.warning("Could not refresh %s from %s (%s); using local files.",
+                               voice.key, PIPER_REPO_ID, e)
+    # What the demo actually needs to run: partA, the config, the phonemizer,
+    # and at least one window. A partial set of windows is legitimate — the
+    # pipeline picks from whichever vmfbs are present.
+    required = (voice.asset("onnx", "partA.onnx"), voice.asset("voice", voice.config_name),
+                "espeak/phonemizerd", "espeak/espeak-ng-data")
+    missing = [f for f in required if not (local / f).exists()]
+    if not list((local / voice.asset("vmfb")).glob("partB_static_*s.vmfb")):
+        missing.append(voice.asset("vmfb", "partB_static_*s.vmfb"))
+    if missing:
+        raise DownloadError(f"{len(missing)} Piper asset(s) missing under {local}: " + ", ".join(missing))
+    return local
 
 
 def setup_piper() -> None:
