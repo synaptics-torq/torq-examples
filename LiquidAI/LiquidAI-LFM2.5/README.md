@@ -9,7 +9,7 @@ See repo [README.md](../README.md) for installing the virtual environment and ba
 Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2.5-230M
+cd LiquidAI/LiquidAI-LFM2.5
 pip install -r requirements.txt
 cd ..
 ```
@@ -18,7 +18,7 @@ From the repo root — downloads the model from HuggingFace (230M by default,
 `350m` also available once its runtime repo is published):
 
 ```sh
-python setup_demos.py LiquidAI-LFM2.5-230M
+python setup_demos.py LiquidAI-LFM2.5
 ```
 
 The model version defaults to the one matching this repo's `VERSION` file (see the
@@ -52,7 +52,7 @@ only produces logits, so it runs only when a token is sampled (the
 last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2.5-230M
+cd LiquidAI/LiquidAI-LFM2.5
 python src/infer.py \
   -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/transformer.vmfb \
   --instruct-model

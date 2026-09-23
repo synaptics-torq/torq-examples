@@ -16,8 +16,9 @@ import numpy as np
 import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-if str(_REPO_ROOT / "LiquidAI" / "LiquidAI-LFM2.5-230M" / "src") not in sys.path:
-    sys.path.insert(0, str(_REPO_ROOT / "LiquidAI" / "LiquidAI-LFM2.5-230M" / "src"))
+_LIQUID_SRC = _REPO_ROOT / "LiquidAI" / "LiquidAI-LFM2.5" / "src"
+if str(_LIQUID_SRC) not in sys.path:
+    sys.path.insert(0, str(_LIQUID_SRC))
 
 from runner import LiquidStatic  # noqa: E402
 from utils import llm as llm_module  # noqa: E402

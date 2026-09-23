@@ -23,7 +23,7 @@ logger = logging.getLogger("setup")
 
 DEMOS = [
     "gemma3",
-    "LiquidAI-LFM2.5-230M",
+    "LiquidAI-LFM2.5",
     "moonshine",
     "moonshine_streaming",
     "LiquidAI-LFM2-VL-450M",
@@ -72,11 +72,11 @@ def setup_demo(name: str, *, model_version: str | None = None, no_update: bool =
         if name == "gemma3":
             from gemma3.setup_demo import setup_gemma3
             setup_gemma3(["instruct"], model_version=model_version, no_update=no_update)
-        elif name == "LiquidAI-LFM2.5-230M":
+        elif name == "LiquidAI-LFM2.5":
             # 230M is the LFM2.5 size with a published runtime HF repo
             # (Synaptics/LiquidAI-LFM2.5-230M); the 350M runtime repo is
             # not published yet.
-            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5-230M", "setup_demo.py")
+            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
             _mod.setup_liquid(["230m"], model_version=model_version, no_update=no_update)
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine

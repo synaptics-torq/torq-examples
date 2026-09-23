@@ -22,7 +22,7 @@ _EXAMPLES_VERSION = examples_version()
 def _load_liquid_setup():
     # The Liquid demo dir name has a dot + hyphen, so it is not importable as
     # a package; load setup_demo.py by file path (as setup_demos.py does).
-    path = Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5-230M" / "setup_demo.py"
+    path = Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5" / "setup_demo.py"
     spec = importlib.util.spec_from_file_location("liquid_setup_demo", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

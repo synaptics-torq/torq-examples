@@ -154,7 +154,7 @@ def ensure_liquid_models(model_dir: str | Path, *, refresh: bool = True) -> None
     ensure_demo_models(
         model_dir,
         refresh=refresh,
-        demo_name="LiquidAI-LFM2.5-230M",
+        demo_name="LiquidAI-LFM2.5",
         files_present=_has_liquid_files,
         download=_download_liquid,
         tracked_files_present=_liquid_files_present,
@@ -166,7 +166,7 @@ def setup_liquid(
     model_version: str | None = None,
     no_update: bool = False,
 ):
-    """Set up the LiquidAI-LFM2.5-230M demo.
+    """Set up the LiquidAI-LFM2.5 demo.
 
     Version selection, ``name:version`` specs and ``no_update`` are handled by
     :func:`utils.model_setup.setup_demo`, which checks demo requirements first,
@@ -177,7 +177,7 @@ def setup_liquid(
     return setup_demo(
         _HF_REPO_MAP,
         models,
-        demo_name="LiquidAI-LFM2.5-230M",
+        demo_name="LiquidAI-LFM2.5",
         requirements=Path(__file__).parent / "requirements.txt",
         files_present=_has_liquid_files,
         download=_download_liquid,
