@@ -140,6 +140,11 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         ]
         self._kv_cache = [self.allocate_device_array(z) for z in self._kv_init]
 
+    @property
+    def n_cache_inputs(self) -> int:
+        """Number of trailing inputs that are managed caches."""
+        return self._n_kv
+
     def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
         if isinstance(inputs, Mapping):
             user_inputs = list(inputs.values())
@@ -518,6 +523,10 @@ class SplitLMHeadRunner:
     @property
     def device(self):
         return self._body.device
+
+    @property
+    def n_cache_inputs(self) -> int:
+        return self._body.n_cache_inputs
 
     def infer(
         self,

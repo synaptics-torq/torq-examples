@@ -193,6 +193,25 @@ def resolve_token_id_lut(
     return token_id_lut
 
 
+def _tensor_signature(info) -> tuple[tuple, object]:
+    """Comparable (shape, dtype) signature of a tensor metadata entry."""
+    try:
+        dtype = np.dtype(info.dtype)
+    except (AttributeError, TypeError, ValueError):
+        dtype = str(info.dtype)
+    return tuple(info.shape), dtype
+
+
+def _tensor_signature_matches(a, b) -> bool:
+    return _tensor_signature(a) == _tensor_signature(b)
+
+
+def _tensor_info(info) -> str:
+    """Short "shape/dtype" description of a tensor metadata entry."""
+    shape, dtype = _tensor_signature(info)
+    return f"shape={shape}, dtype={dtype}"
+
+
 class DecoderOnlyLLMRunner(ABC):
     """Shared runner for decoder-only LLM VMFBs with managed KV cache."""
 
@@ -220,6 +239,8 @@ class DecoderOnlyLLMRunner(ABC):
         "_token_id_lut",
         "_pos_buf",
         "_emb_buf",
+        "_id_buf",
+        "_extra_step_inputs",
         "_cache_keep_n",
         "_n_tokens_gen",
         "_last_infer_ns",
@@ -336,14 +357,7 @@ class DecoderOnlyLLMRunner(ABC):
                 len(self._token_id_lut),
             )
 
-        self._pos_buf = np.zeros((1, 1), dtype=np.int32)
-        if self._token_embeddings is not None:
-            self._emb_buf = np.zeros(
-                (1, 1, self._token_embeddings.shape[-1]),
-                dtype=self._token_embeddings.dtype,
-            )
-        else:
-            self._emb_buf = None
+        self._init_step_buffers()
 
         self._prefill_model = None
         self._prefill_size = None
@@ -351,13 +365,16 @@ class DecoderOnlyLLMRunner(ABC):
         self._prefill_id_buf = None
         if prefill_path is not None:
             self._setup_prefill_model(prefill_path, n_threads, runtime_flags, device_io)
+            prefill_token_info = self._prefill_model.inputs_info[0]
             if self._token_embeddings is not None:
                 self._prefill_emb_buf = np.zeros(
                     (1, self._prefill_size, self._token_embeddings.shape[-1]),
                     dtype=self._token_embeddings.dtype,
                 )
             else:
-                self._prefill_id_buf = np.zeros((1, self._prefill_size), dtype=np.int32)
+                self._prefill_id_buf = np.zeros(
+                    prefill_token_info.shape, dtype=np.dtype(prefill_token_info.dtype)
+                )
         else:
             self._logger.debug(
                 "No batched prefill model available; prompts will be "
@@ -440,6 +457,61 @@ class DecoderOnlyLLMRunner(ABC):
         if not paths:
             return None
         return np.load(paths[0])
+
+    def _init_step_buffers(self) -> None:
+        """Build the per-step input buffers from the model's input metadata.
+
+        Input 0 is the token input (embedding vector or token id), input 1 is
+        ``position_ids``; both shapes and dtypes are taken from the model's
+        reflection data rather than assumed. Any further non-cache inputs
+        (e.g. the fixed ``attention_mask`` of newer static exports) are
+        constant per step and are built by :meth:`_build_extra_step_inputs`.
+        """
+        in_info = self._model.inputs_info
+        if not in_info or len(in_info) < 2:
+            raise ValueError(
+                f"Model '{self._model.model_path}' has no input metadata; "
+                "cannot build the per-step input buffers."
+            )
+        n_user = len(in_info) - self._model.n_cache_inputs
+        if n_user < 2:
+            raise ValueError(
+                f"Model '{self._model.model_path}' has only {n_user} non-cache "
+                "input(s); expected at least (tokens, position_ids)."
+            )
+        token_info, pos_info = in_info[0], in_info[1]
+        self._pos_buf = np.zeros(pos_info.shape, dtype=np.dtype(pos_info.dtype))
+        if self._token_embeddings is not None:
+            emb_hidden = self._token_embeddings.shape[-1]
+            tok_shape = tuple(token_info.shape)
+            if (
+                len(tok_shape) >= 3
+                and isinstance(tok_shape[-1], int)
+                and tok_shape[-1] != emb_hidden
+            ):
+                raise ValueError(
+                    f"token_embeddings.npy has hidden size {emb_hidden} but the "
+                    f"model's token input expects {tok_shape[-1]} "
+                    f"(shape {tok_shape})."
+                )
+            self._emb_buf = np.zeros(
+                (1, 1, emb_hidden),
+                dtype=self._token_embeddings.dtype,
+            )
+            self._id_buf = None
+        else:
+            self._emb_buf = None
+            self._id_buf = np.zeros(token_info.shape, dtype=np.dtype(token_info.dtype))
+        self._extra_step_inputs = self._build_extra_step_inputs(in_info[2:n_user])
+
+    def _build_extra_step_inputs(self, infos) -> list[np.ndarray]:
+        """Constant per-step inputs beyond (tokens, position_ids).
+
+        Newer static exports add a fixed ``attention_mask`` input sized at
+        the compiled KV-cache length; every step feeds it all-ones. Override
+        for models whose extra inputs are not constant masks.
+        """
+        return [np.ones(info.shape, dtype=np.dtype(info.dtype)) for info in infos]
 
     def _validate_decode_model(self) -> None:
         """Fail early when the main model is not a single-token decode build.
@@ -531,8 +603,9 @@ class DecoderOnlyLLMRunner(ABC):
         A single token is the usual decode step on the main model. A
         fixed-size chunk is a batched prefill step: the prefill model's graph
         expands the single *seq_pos* (the chunk's start position) across the
-        whole chunk, and only the final position's hidden state is returned
-        for the shared LM head.
+        whole chunk and returns the final position's sampleable output (its
+        hidden state routed through the shared LM head, or logits when the
+        prefill model has the head baked in).
         """
         if sample_next and not compute_logits:
             raise ValueError("sample_next=True requires compute_logits=True")
@@ -542,8 +615,8 @@ class DecoderOnlyLLMRunner(ABC):
                 self._emb_buf[0, 0, :] = self._token_embeddings[tokens[0]]
                 first = self._emb_buf
             else:
-                self._pos_buf[0, 0] = tokens[0]
-                first = self._pos_buf.copy()
+                self._id_buf[0, 0] = tokens[0]
+                first = self._id_buf
         else:
             if self._prefill_emb_buf is not None:
                 self._prefill_emb_buf[...] = self._token_embeddings[tokens]
@@ -553,16 +626,17 @@ class DecoderOnlyLLMRunner(ABC):
                 first = self._prefill_id_buf
 
         self._pos_buf[0, 0] = seq_pos
+        step_inputs = [first, self._pos_buf, *self._extra_step_inputs]
 
         if not compute_logits:
             if isinstance(model, SplitLMHeadRunner):
-                model.infer([first, self._pos_buf], skip_lm_head=True)
+                model.infer(step_inputs, skip_lm_head=True)
             else:
-                model.infer([first, self._pos_buf])
+                model.infer(step_inputs)
             self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
             return 0
 
-        results = model.infer([first, self._pos_buf])
+        results = model.infer(step_inputs)
         self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
 
         if not sample_next:
@@ -590,13 +664,11 @@ class DecoderOnlyLLMRunner(ABC):
         device_io: bool,
     ) -> None:
         """Load the fixed-size batched prefill model for prompt chunks."""
-        if not isinstance(self._model, SplitLMHeadRunner):
-            raise ValueError(
-                "Batched prefill model requires a split LM head: the prefill "
-                "model outputs hidden states that must pass through the "
-                f"standalone head. Load a split transformer model with "
-                f"--lm-head to use '{prefill_path}'."
-            )
+        decode_body = (
+            self._model._body
+            if isinstance(self._model, SplitLMHeadRunner)
+            else self._model
+        )
         prefill_body = ManagedSelfAttnCacheRunner(
             prefill_path,
             n_threads=n_threads,
@@ -611,14 +683,104 @@ class DecoderOnlyLLMRunner(ABC):
             )
         # The prefill model and the decode model have the same per-layer cache
         # layout; use one set of on-device buffers for both.
-        prefill_body.share_kv_cache(self._model._body)
+        prefill_body.share_kv_cache(decode_body)
+        self._validate_prefill_inputs(prefill_body, prefill_size)
         self._prefill_size = prefill_size
-        # Reuse the decode wrapper's compiled LM head instead of loading the
-        # head module a second time.
-        self._prefill_model = SplitLMHeadRunner(prefill_body, self._model._lm_head)
+        self._prefill_model = self._wrap_prefill_model(prefill_body)
         self._logger.info(
             "Loaded %d-token batched prefill model '%s'", prefill_size, str(prefill_path)
         )
+
+    def _wrap_prefill_model(self, prefill_body):
+        """Adapt the prefill body so its first output is sampleable logits.
+
+        The decode model's first output is always logits (a fused head, or
+        the split head applied on the way out), so the prefill model must
+        land in the same space:
+
+        * prefill emits the head's *input* (hidden states) -> route it
+          through the standalone head.
+        * prefill already emits logits (head baked in at export time) -> use
+          it directly, no wrapper.
+        """
+        prefill_out = prefill_body.outputs_info[0]
+        if isinstance(self._model, SplitLMHeadRunner):
+            head_in = self._model._lm_head.inputs_info[0]
+            if _tensor_signature_matches(prefill_out, head_in):
+                self._logger.info(
+                    "Prefill model emits hidden states; reusing the decode "
+                    "model's compiled LM head."
+                )
+                return SplitLMHeadRunner(prefill_body, self._model._lm_head)
+            if _tensor_signature_matches(prefill_out, self._model.outputs_info[0]):
+                self._logger.info(
+                    "Prefill model has its LM head baked in; using it directly."
+                )
+                return prefill_body
+            raise ValueError(
+                f"Prefill model's first output {_tensor_info(prefill_out)} "
+                f"matches neither the LM head input {_tensor_info(head_in)} "
+                f"nor the decode model's logits "
+                f"{_tensor_info(self._model.outputs_info[0])}; cannot use it "
+                "for batched prefill."
+            )
+        if _tensor_signature_matches(prefill_out, self._model.outputs_info[0]):
+            return prefill_body
+        raise ValueError(
+            "Batched prefill model emits hidden states, but the decode model "
+            "has no standalone LM head to sample from. Load the split decode "
+            "pair (transformer.vmfb + lm_head.vmfb) or a prefill model with "
+            "a fused head."
+        )
+
+    def _validate_prefill_inputs(self, prefill_body, prefill_size: int) -> None:
+        """Prefill and decode models must take the same per-step inputs.
+
+        The same buffers (positions, extra inputs) are fed to both models
+        every step, so everything but the token input's sequence length must
+        line up; a mismatch would otherwise surface as an opaque runtime
+        shape assertion deep in inference.
+        """
+        decode_in = self._model.inputs_info
+        prefill_in = prefill_body.inputs_info
+        n_decode_user = len(decode_in) - self._model.n_cache_inputs
+        n_prefill_user = len(prefill_in) - prefill_body.n_cache_inputs
+        if n_prefill_user != n_decode_user:
+            raise ValueError(
+                f"Prefill model has {n_prefill_user} non-cache inputs, the "
+                f"decode model has {n_decode_user}; they must match."
+            )
+        d_tok, p_tok = decode_in[0], prefill_in[0]
+        d_shape, d_dtype = _tensor_signature(d_tok)
+        p_shape, p_dtype = _tensor_signature(p_tok)
+        if d_dtype != p_dtype:
+            raise ValueError(
+                f"Prefill token input {_tensor_info(p_tok)} does not match "
+                f"the decode model's token input {_tensor_info(d_tok)}."
+            )
+        if (
+            len(d_shape) >= 2
+            and isinstance(d_shape[1], int)
+            and isinstance(p_shape[1], int)
+            and (d_shape[1] != 1 or p_shape[1] != prefill_size)
+        ):
+            raise ValueError(
+                f"Prefill token input sequence length {p_shape[1]} does not "
+                f"match its declared chunk size {prefill_size} (decode "
+                f"model expects 1)."
+            )
+        if d_shape[2:] != p_shape[2:]:
+            raise ValueError(
+                f"Prefill token input {_tensor_info(p_tok)} does not match "
+                f"the decode model's token input {_tensor_info(d_tok)}."
+            )
+        for i in range(1, n_decode_user):
+            if not _tensor_signature_matches(decode_in[i], prefill_in[i]):
+                raise ValueError(
+                    f"Prefill non-cache input {i} {_tensor_info(prefill_in[i])} "
+                    f"does not match the decode model's "
+                    f"{_tensor_info(decode_in[i])}."
+                )
 
     @staticmethod
     def _query_prefill_size(prefill_body) -> int:

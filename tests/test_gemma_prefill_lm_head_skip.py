@@ -145,7 +145,9 @@ class TestGemmaPrefillLMHeadSkip:
         runner._model = model
         runner._emb_buf = None
         runner._token_embeddings = None
+        runner._id_buf = PosBuffer()
         runner._pos_buf = PosBuffer()
+        runner._extra_step_inputs = []
         runner._logger = logging.getLogger("test_llm_step_body_only")
 
         token = runner.llm_step(123, 5, compute_logits=False, sample_next=False)
@@ -163,7 +165,9 @@ class TestGemmaPrefillLMHeadSkip:
         runner._model = model
         runner._emb_buf = None
         runner._token_embeddings = None
+        runner._id_buf = PosBuffer()
         runner._pos_buf = PosBuffer()
+        runner._extra_step_inputs = []
         runner._logger = logging.getLogger("test_llm_step_logits_no_sample")
 
         token = runner.llm_step(123, 5, compute_logits=True, sample_next=False)
