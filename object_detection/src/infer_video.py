@@ -13,6 +13,7 @@ from utils.runtime import (
 )
 from utils.video import build_video_argparser, run_video_inference_loop
 from utils.object_detection import (
+    VARIANTS,
     annotate_frame,
     dequantize_out,
     postprocess,
@@ -22,11 +23,11 @@ from utils.object_detection import (
 
 
 
-def make_process_fn(runner, labels):
+def make_process_fn(runner, labels, variant):
     def process_fn(bgr_frame):
         input_data, pad_info, orig_shape = preprocess_frame_cv(bgr_frame)
         raw_out = runner.infer(input_data)
-        outputs = dequantize_out(raw_out, 0.004194467328488827, -128)
+        outputs = dequantize_out(raw_out, variant["out_scale"], variant["out_zp"])
         detections = postprocess(outputs, orig_shape, pad_info, labels)
         annotated, frame_detections = annotate_frame(bgr_frame, detections)
         log_str = " ".join(f"{lbl} {conf:.2f}" for lbl, conf, _ in detections)
@@ -36,10 +37,14 @@ def make_process_fn(runner, labels):
 
 def main():
     parser = build_video_argparser(
-        "Run YOLOv8 object detection on video, RTSP, or camera input.",
+        "Run YOLO object detection on video, RTSP, or camera input.",
         default_json_results="detection_results.json",
     )
     parser.add_argument("--labels")
+    parser.add_argument(
+        "--variant", choices=sorted(VARIANTS), default="yolov8",
+        help="Model head variant (default: %(default)s)",
+    )
     args = parser.parse_args()
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
@@ -57,7 +62,7 @@ def main():
             labels = {str(k): v for k, v in data["names"].items()} if "names" in data else data
 
     try:
-        run_video_inference_loop(args, make_process_fn(runner, labels), "Object Detection")
+        run_video_inference_loop(args, make_process_fn(runner, labels, VARIANTS[args.variant]), "Object Detection")
     finally:
         cleanup_npu_after_inference()
 

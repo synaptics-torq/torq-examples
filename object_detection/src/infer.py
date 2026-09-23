@@ -12,6 +12,7 @@ from utils.vision import dequantize_out
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
 from utils.object_detection import (
+    VARIANTS,
     postprocess,
     render_annotated_image,
 )
@@ -53,10 +54,14 @@ def maybe_save_and_display(args, results):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run YOLOv8 object detection on an image.")
+    parser = argparse.ArgumentParser(description="Run YOLO object detection on an image.")
     parser.add_argument("--model", required=True)
     parser.add_argument("--image", required=True)
     parser.add_argument("--labels")
+    parser.add_argument(
+        "--variant", choices=sorted(VARIANTS), default="yolov8",
+        help="Model head variant (default: %(default)s)",
+    )
     parser.add_argument("--device", default="torq")
     parser.add_argument(
         "--no-refresh",
@@ -100,9 +105,8 @@ def main():
         if raw_out.shape != (1, 84, 2100):
             print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 84, 2100). Metadata might be needed.")
 
-        out_scale = 0.004194467328488827
-        out_zp = -128
-        outputs = dequantize_out(raw_out, out_scale, out_zp, int8=True)
+        variant = VARIANTS[args.variant]
+        outputs = dequantize_out(raw_out, variant["out_scale"], variant["out_zp"], int8=True)
 
         labels = load_labels(args.labels)
         results = postprocess(outputs, orig_shape, pad_info, labels)
