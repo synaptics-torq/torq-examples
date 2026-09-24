@@ -70,7 +70,20 @@ Individual demos also have their own `setup_demo.py` for customizing setup, but 
 
 Downloaded models are stored in `./models/` by default. Override with the `$MODELS` environment variable. Setup writes a small `.manifest.json` next to each downloaded model, so re-running setup reuses complete downloads and repairs incomplete model directories.
 
-The manifest also records the Hugging Face revision the files came from. When a model repo is updated upstream, re-running setup detects the change and automatically refreshes the local copy — there's no need to manually delete the model directory. The demos apply the same check when they start, so inference refreshes stale models even if setup wasn't re-run. If Hugging Face is unreachable (e.g. offline), the existing local files are used and a warning is logged that they may be out of date. To skip the update check entirely (for fast or airgapped runs), pass `--no-refresh` to a demo's `infer.py`.
+### Model versions
+
+This repo's version is recorded in the `VERSION` file at the root and tracks the torq-compiler release the demos are tested against. Built-in model repos on Hugging Face carry matching tags, so a checkout of examples `2.1.0` downloads and maintains the models at tag `v2.1.0`. Setup **fails loudly** if that version does not exist in a model repo.
+
+- Re-running setup — or starting any demo — re-checks the tracked tag and refreshes the local copy if the tag moved upstream or local files went missing/corrupt.
+- A model is **never** upgraded to a newer version on its own: it stays on the version it was set up with until you explicitly change it. There is no `latest` tracking.
+- `--model-version vX.Y.Z` (per-demo `setup_demo.py` or `setup_demos.py`) pins a specific model version. A pinned version is kept in sync with its own tag but never upgraded.
+- `name:version` in a model argument pins a single model, e.g. `python setup_demo.py default:v2.0.0 custom/gemma3`.
+- Custom (non-Synaptics) repos have no default version: `python setup_demo.py custom/gemma3` downloads the repo's latest (HEAD) revision, untracked.
+- `--no-update` downloads without writing a `.manifest.json`; the model is then excluded from the tracking system entirely (no checks, no refreshes), at your own risk.
+
+### Offline / airgapped runs
+
+Version checks use a short timeout (default 5s; override with `TORQ_HF_CHECK_TIMEOUT`) and fall back to the local files with a warning when Hugging Face is unreachable, so the demos run fully offline once their models are present. To skip the check entirely (for fast or airgapped runs), pass `--no-refresh` to a demo's `infer.py`.
 
 > [!TIP]
 > Some models may require a HuggingFace access token. Set `HF_TOKEN` in your environment before running setup:

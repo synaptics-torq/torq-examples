@@ -67,32 +67,32 @@ def _load_demo_module(*path_parts):
     return mod
 
 
-def setup_demo(name: str):
+def setup_demo(name: str, *, model_version: str | None = None, no_update: bool = False):
     try:
         if name == "gemma3":
             from gemma3.setup_demo import setup_gemma3
-            setup_gemma3(["instruct"])
+            setup_gemma3(["instruct"], model_version=model_version, no_update=no_update)
         elif name == "LiquidAI-LFM2.5-230M":
             # 230M is the LFM2.5 size with a published runtime HF repo
             # (Synaptics/LiquidAI-LFM2.5-230M); the 350M runtime repo is
             # not published yet.
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5-230M", "setup_demo.py")
-            _mod.setup_liquid(["230m"])
+            _mod.setup_liquid(["230m"], model_version=model_version, no_update=no_update)
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
-            setup_moonshine(["tiny-en"])
+            setup_moonshine(["tiny-en"], model_version=model_version, no_update=no_update)
         elif name == "moonshine_streaming":
             from moonshine_streaming.setup_demo import setup_moonshine_streaming
-            setup_moonshine_streaming(["streaming-tiny-en"])
+            setup_moonshine_streaming(["streaming-tiny-en"], model_version=model_version, no_update=no_update)
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
-            _mod.setup_liquidvl(["default"])
+            _mod.setup_liquidvl(["default"], model_version=model_version, no_update=no_update)
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
-            setup_object_detection()
+            setup_object_detection(model_version=model_version, no_update=no_update)
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
-            setup_pose_estimation()
+            setup_pose_estimation(model_version=model_version, no_update=no_update)
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
@@ -110,6 +110,24 @@ if __name__ == "__main__":
     group.add_argument(
         "--all", action="store_true", dest="all_demos",
         help="Set up all demos",
+    )
+    parser.add_argument(
+        "--model-version",
+        default=None,
+        help=(
+            "Model version tag to download for every demo (default: the "
+            "torq-examples version for built-in repos, the repo's latest "
+            "revision for custom repos). A pinned version is kept in sync with "
+            "its own tag but never upgraded."
+        ),
+    )
+    parser.add_argument(
+        "--no-update",
+        action="store_true",
+        help=(
+            "Download without tracking: no .manifest.json is written, so the "
+            "models are never checked for updates or refreshed (at your own risk)."
+        ),
     )
     add_logging_args(parser)
     args = parser.parse_args()
@@ -139,4 +157,8 @@ if __name__ == "__main__":
         if name not in DEMOS:
             logger.error("Unknown demo: '%s'. Valid demos: %s", name, ", ".join(DEMOS))
             sys.exit(1)
-        setup_demo(name)
+        setup_demo(
+            name,
+            model_version=args.model_version,
+            no_update=args.no_update,
+        )

@@ -19,6 +19,10 @@ This downloads the default model files from our HuggingFace repo to:
 models/Synaptics/moonshine-streaming-tiny-torq/
 ```
 
+By default the demo downloads the model version matching this repo's `VERSION` file (see the
+[repo README](../README.md) for the versioning scheme). `setup_demo.py` also supports
+`--model-version` to pin a specific release tag and `--no-update` to skip model tracking entirely.
+
 ## Transcribing a WAV file
 
 ```sh

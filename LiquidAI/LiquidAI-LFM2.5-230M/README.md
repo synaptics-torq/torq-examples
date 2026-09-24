@@ -20,6 +20,11 @@ From the repo root — downloads the 230M model from HuggingFace:
 python setup_demos.py LiquidAI-LFM2.5-230M
 ```
 
+The model version defaults to the one matching this repo's `VERSION` file (see the
+[repo README](../../README.md) for the versioning scheme); `setup_demos.py` and the demo's
+`setup_demo.py` both support `--model-version` to pin a specific release tag and `--no-update`
+to skip model tracking entirely.
+
 This fetches the artifacts from
 [`Synaptics/LiquidAI-LFM2.5-230M`](https://huggingface.co/Synaptics/LiquidAI-LFM2.5-230M)
 into `models/Synaptics/LiquidAI-LFM2.5-230M/`:

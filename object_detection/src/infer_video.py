@@ -4,7 +4,7 @@
 import json
 from pathlib import Path
 
-from object_detection.setup_demo import ensure_object_detection_models
+from object_detection.setup_demo import default_model_path, ensure_object_detection_models
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -39,6 +39,8 @@ def main():
     parser = build_video_argparser(
         "Run YOLO object detection on video, RTSP, or camera input.",
         default_json_results="detection_results.json",
+        model_required=False,
+        model_help="Path to the model VMFB (default: the one setup_demo.py downloads for --variant)",
     )
     parser.add_argument("--labels")
     parser.add_argument(
@@ -46,6 +48,14 @@ def main():
         help="Model head variant (default: %(default)s)",
     )
     args = parser.parse_args()
+
+    if args.model is None:
+        args.model = str(default_model_path(args.variant))
+        if not Path(args.model).exists():
+            parser.error(
+                f"default model {args.model} not found; pass --model or run "
+                f"`python setup_demos.py object_detection` from torq-examples root"
+            )
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
     runtime_flags = build_runtime_flags(args.tda, args.runtime_flags)

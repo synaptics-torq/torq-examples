@@ -5,14 +5,8 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from utils.deps import MissingRequirementsError, check_requirements
-from utils.download import (
-    DownloadError,
-    default_models_dir,
-    download_from_hf,
-    verify_manifest,
-    write_manifest,
-)
+from utils.download import download_from_hf, hf_file_exists
+from utils.model_setup import demo_main, setup_demo
 
 logger = logging.getLogger("Liquid.setup")
 
@@ -20,6 +14,7 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/LiquidAI-LFM2.5-230M",
     "230m": "Synaptics/LiquidAI-LFM2.5-230M",
 }
+_DEFAULT_MODELS: Final[list[str]] = ["default"]
 _LIQUID_MODEL_FILENAMES: Final[list[str]] = [
     "body.vmfb",    # decoder minus lm_head
     "lm_head.vmfb", # standalone lm_head (skipped during prefill)
@@ -29,12 +24,6 @@ _LIQUID_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "config.json",
     "tokenizer.json",
 )
-
-
-def _hf_file_exists(repo_id: str, filename: str) -> bool:
-    from huggingface_hub import HfApi
-
-    return HfApi().file_exists(repo_id=repo_id, filename=filename)
 
 
 def _has_liquid_files(model_dir: Path) -> bool:
@@ -47,7 +36,7 @@ def _has_liquid_files(model_dir: Path) -> bool:
     return has_model and has_required
 
 
-def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
+def _download_liquid_model(repo_id: str, base_dir: Path, *, revision: str | None = None) -> list[str]:
     """Download the model vmfbs (fused model.vmfb + the split body/lm_head pair,
     whichever the repo has). Downloads each missing file individually so a
     partially-populated dir is completed rather than skipped."""
@@ -57,8 +46,8 @@ def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
         if (local_dir / filename).exists():
             present.append(filename)
             continue
-        if _hf_file_exists(repo_id, filename):
-            download_from_hf(repo_id, filename, base_dir=base_dir)
+        if hf_file_exists(repo_id, filename, revision=revision):
+            download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
             logger.info("Downloaded %s from %s", filename, repo_id)
             present.append(filename)
 
@@ -67,53 +56,44 @@ def _download_liquid_model(repo_id: str, base_dir: Path) -> list[str]:
     return present
 
 
-def setup_liquid(models: list[str]):
-    logger.info("Setting up LiquidAI-LFM2.5-230M demo with models: [%s]", ", ".join(models))
-    repos = [_HF_REPO_MAP.get(m, m) for m in models]
-    base_dir = default_models_dir()
-    for repo_id in repos:
-        model_dir = base_dir / repo_id
-        if verify_manifest(model_dir) and _has_liquid_files(model_dir):
-            logger.info("Using local liquid model files from %s", model_dir)
-            continue
+def _download_liquid(repo_id: str, base_dir: Path, *, revision: str | None = None) -> list[str]:
+    """Download all Liquid model files; return the manifest file list."""
+    manifest_files = _download_liquid_model(repo_id, base_dir, revision=revision)
+    for filename in _LIQUID_REQUIRED_FILES:
+        download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
+        manifest_files.append(filename)
+    return manifest_files
 
-        try:
-            manifest_files = _download_liquid_model(repo_id, base_dir)
-            for filename in _LIQUID_REQUIRED_FILES:
-                download_from_hf(repo_id, filename, base_dir=base_dir)
-                manifest_files.append(filename)
 
-            write_manifest(model_dir, repo_id, manifest_files)
-            logger.info("Downloaded liquid model files from %s", repo_id)
-        except Exception as e:
-            raise DownloadError(f"Unable to download model files from {repo_id}") from e
-    check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("liquid setup complete.")
+def setup_liquid(
+    models: list[str] | None = None,
+    model_version: str | None = None,
+    no_update: bool = False,
+):
+    """Set up the LiquidAI-LFM2.5-230M demo.
+
+    Version selection, ``name:version`` specs and ``no_update`` are handled by
+    :func:`utils.model_setup.setup_demo`, which checks demo requirements first,
+    then downloads/refreshes the models.
+    """
+    if models is None:
+        models = _DEFAULT_MODELS
+    return setup_demo(
+        _HF_REPO_MAP,
+        models,
+        demo_name="LiquidAI-LFM2.5-230M",
+        requirements=Path(__file__).parent / "requirements.txt",
+        files_present=_has_liquid_files,
+        download=_download_liquid,
+        model_version=model_version,
+        no_update=no_update,
+    )
 
 
 if __name__ == "__main__":
-    import argparse
-    import sys
-    from utils.log import add_logging_args, configure_logging
-
-    available_models = ", ".join(
-        f"'{model_name}' ({repo_id})" for model_name, repo_id in _HF_REPO_MAP.items()
-    )
-    parser = argparse.ArgumentParser(
+    demo_main(
+        setup_liquid,
         description="Download LFM2.5 (Liquid) model files.",
+        default_models=_DEFAULT_MODELS,
+        repo_map=_HF_REPO_MAP,
     )
-    parser.add_argument(
-        "models", nargs="*", default=["default"],
-        help=f"Model name or HF repo ID. Built-in: [{available_models}] (default: %(default)s)",
-    )
-    add_logging_args(parser)
-    args = parser.parse_args()
-    configure_logging(args.logging)
-
-    try:
-        setup_liquid(args.models)
-    except (DownloadError, MissingRequirementsError, ValueError) as e:
-        logger.error("%s", e)
-        if e.__cause__:
-            logger.error("Caused by: %s", e.__cause__)
-        sys.exit(1)
