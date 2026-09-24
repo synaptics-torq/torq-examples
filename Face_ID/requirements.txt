@@ -1,0 +1,1 @@
+opencv-python-headless  # USB camera capture and frame conversion
