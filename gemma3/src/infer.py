@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 from runner import Gemma3Static
-from gemma3.setup_demo import ensure_gemma3_models
+from gemma3.setup_demo import ensure_gemma3_models, local_gemma3_model_path
 from utils.log import add_logging_args, configure_logging
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 from utils.terminal import InferenceStopInput
@@ -112,7 +112,8 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Gemma3 VMFB inference.")
     parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Path to VMFB model"
+        "-m", "--model", type=str, default=None,
+        help="Path to VMFB model (default: the one setup_demo.py downloaded)",
     )
     lm_head_group = parser.add_mutually_exclusive_group()
     lm_head_group.add_argument(
@@ -203,4 +204,13 @@ if __name__ == "__main__":
             "Must be specified last; all remaining arguments are forwarded."
         ),
     )
-    main(parser.parse_args())
+    args = parser.parse_args()
+    if args.model is None:
+        local_model = local_gemma3_model_path()
+        if local_model is None:
+            parser.error(
+                "no local Gemma3 model found; pass -m/--model or run "
+                "`python setup_demos.py gemma3` from torq-examples root"
+            )
+        args.model = str(local_model)
+    main(args)

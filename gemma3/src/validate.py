@@ -34,6 +34,7 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
 
+from gemma3.setup_demo import local_gemma3_model_path
 from runner import Gemma3Static
 from utils.log import add_logging_args, configure_logging
 
@@ -452,7 +453,8 @@ if __name__ == "__main__":
         help="Validation mode (default: %(default)s)",
     )
     parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Path to VMFB model"
+        "-m", "--model", type=str, default=None,
+        help="Path to VMFB model (default: the one setup_demo.py downloaded)",
     )
     lm_head_group = parser.add_mutually_exclusive_group()
     lm_head_group.add_argument(
@@ -551,4 +553,13 @@ if __name__ == "__main__":
         ),
     )
     add_logging_args(parser)
-    main(parser.parse_args())
+    args = parser.parse_args()
+    if args.model is None:
+        local_model = local_gemma3_model_path()
+        if local_model is None:
+            parser.error(
+                "no local Gemma3 model found; pass -m/--model or run "
+                "`python setup_demos.py gemma3` from torq-examples root"
+            )
+        args.model = str(local_model)
+    main(args)
