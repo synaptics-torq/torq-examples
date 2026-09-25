@@ -1,12 +1,19 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+import importlib.util
+import inspect
 import json
+import logging
+import sys
 from pathlib import Path
 from unittest import mock
 
+import pytest
+
 from gemma3 import setup_demo as gemma_setup
 from moonshine import setup_demo as moonshine_setup
+from moonshine_streaming import setup_demo as moonshine_streaming_setup
 from object_detection import setup_demo as object_detection_setup
 from pose_estimation import setup_demo as pose_setup
 from utils.download import DownloadError, ModelVersionNotFoundError, write_manifest
@@ -16,6 +23,19 @@ from utils.version import examples_version
 _REVISION = "abc123"
 _PINS = "v2.0.0"
 _EXAMPLES_VERSION = examples_version()
+
+
+def _load_liquid_setup():
+    # The Liquid demo dir name has a dot + hyphen, so it is not importable as
+    # a package; load setup_demo.py by file path (as setup_demos.py does).
+    path = Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5" / "setup_demo.py"
+    spec = importlib.util.spec_from_file_location("liquid_setup_demo", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+liquid_setup = _load_liquid_setup()
 
 
 def _fake_download(default_base_dir: Path):
@@ -902,3 +922,593 @@ def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
     # The stale-refresh path must not have cleared the dir it cannot replace.
     assert (model_dir / "transformer.vmfb").exists()
     assert not (tmp_path / "models" / "Synaptics").exists()
+
+
+# ── prefill opt-in (gemma3) ─────────────────────────────────────────────────
+
+
+def _gemma_repo_with_prefill(_repo_id, filename, revision=None):
+    return filename in {
+        "transformer.vmfb",
+        "lm_head.vmfb",
+        gemma_setup._GEMMA3_PREFILL_FILENAME,
+    }
+
+
+def _run_gemma_setup(base_dir: Path, exists, *, enable_prefill: bool):
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            gemma_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        gemma_setup.setup_gemma3(["instruct"], enable_prefill=enable_prefill)
+    return download
+
+
+def test_gemma_prefill_not_downloaded_without_flag(tmp_path):
+    """The prefill model stays out of the download and the manifest by default."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=False)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in downloaded
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+
+
+def test_gemma_prefill_downloaded_and_tracked_with_flag(tmp_path):
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=True)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert downloaded[-1] == gemma_setup._GEMMA3_PREFILL_FILENAME
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
+def test_gemma_prefill_flag_is_noop_with_warning_for_repo_without_prefill(tmp_path, caplog):
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+
+    with caplog.at_level(logging.WARNING):
+        download = _run_gemma_setup(
+            base_dir,
+            lambda _r, f, revision=None: f in {"transformer.vmfb", "lm_head.vmfb"},
+            enable_prefill=True,
+        )
+
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in [
+        call.args[1] for call in download.call_args_list
+    ]
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(gemma_setup._GEMMA3_PREFILL_FILENAME in r.getMessage() for r in warnings)
+
+
+def test_gemma_prefill_untracking_persists_across_setup_runs(tmp_path):
+    """Flag on, then off: prefill leaves the manifest, the local file is kept,
+    and later runs neither check nor re-download it."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    prefill_path = base_dir / repo_id / gemma_setup._GEMMA3_PREFILL_FILENAME
+
+    _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=True)
+    assert prefill_path.exists()
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+    # Re-run without the flag: the copy is complete, so nothing downloads, but
+    # the prefill model is removed from tracking.
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=False)
+    download.assert_not_called()
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+    assert prefill_path.exists()  # local file kept, just untracked
+
+    # A further run stays excluded.
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=False)
+    download.assert_not_called()
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+
+
+def test_gemma_prefill_retracked_with_flag_when_file_present(tmp_path):
+    """Flag off, then on with the file already local: tracked, no download."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    prefill_path = base_dir / repo_id / gemma_setup._GEMMA3_PREFILL_FILENAME
+
+    _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=False)
+    assert not prefill_path.exists()
+    prefill_path.write_text("prefill")
+
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=True)
+    download.assert_not_called()
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
+def test_gemma_prefill_added_to_complete_copy_with_flag(tmp_path):
+    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+
+    _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=False)
+    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=True)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME in downloaded
+    # The intact model set is not re-fetched (the hook is incremental).
+    assert "transformer.vmfb" not in downloaded
+    assert "lm_head.vmfb" not in downloaded
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
+def test_gemma_prefill_flag_warns_on_complete_copy_when_repo_lacks_prefill(tmp_path, caplog):
+    """``--with-prefill`` on a complete copy of a repo without a prefill model:
+    warning, no download, manifest unchanged."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    no_prefill = lambda _r, f, revision=None: f in {"transformer.vmfb", "lm_head.vmfb"}
+
+    _run_gemma_setup(base_dir, no_prefill, enable_prefill=False)
+    before = _manifest(base_dir / repo_id)["files"]
+
+    with caplog.at_level(logging.WARNING):
+        download = _run_gemma_setup(base_dir, no_prefill, enable_prefill=True)
+
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in [
+        call.args[1] for call in download.call_args_list
+    ]
+    assert _manifest(base_dir / repo_id)["files"] == before
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(gemma_setup._GEMMA3_PREFILL_FILENAME in r.getMessage() for r in warnings)
+
+
+def test_inference_stale_refresh_warns_about_dropped_prefill(tmp_path, caplog):
+    """A tag move to a revision without the prefill build wipes the copy and
+    re-downloads; the previously-tracked prefill file must not be dropped
+    from tracking silently."""
+    base_dir = tmp_path
+    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
+    model_dir = _make_gemma_split_copy(
+        base_dir / repo_id, "lm_head.vmfb", "lm_head.vmfb",
+        revision="old-revision",
+    )
+    # The old revision also published and tracked a prefill build.
+    prefill_path = model_dir / gemma_setup._GEMMA3_PREFILL_FILENAME
+    prefill_path.write_text("prefill")
+    write_manifest(
+        model_dir,
+        repo_id,
+        [
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            *gemma_setup._GEMMA3_REQUIRED_FILES,
+            gemma_setup._GEMMA3_PREFILL_FILENAME,
+        ],
+        version=_EXAMPLES_VERSION,
+        revision="old-revision",
+    )
+
+    def exists(_repo_id, filename, revision=None):
+        # The new revision has no prefill build anymore.
+        return filename in {"transformer.vmfb", "lm_head.vmfb", *gemma_setup._GEMMA3_REQUIRED_FILES}
+
+    with (
+        caplog.at_level(logging.WARNING),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(gemma_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            gemma_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ),
+    ):
+        gemma_setup.ensure_gemma3_models(model_dir)
+
+    manifest = _manifest(model_dir)
+    assert manifest["revision"] == _REVISION
+    assert gemma_setup._GEMMA3_PREFILL_FILENAME not in manifest["files"]
+    assert not prefill_path.exists()  # the stale refresh wiped the dir
+    warnings = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(gemma_setup._GEMMA3_PREFILL_FILENAME in w for w in warnings)
+
+
+# ── liquid ──────────────────────────────────────────────────────────────────
+
+
+def test_liquid_w8a8_setup_downloads_prefill(tmp_path):
+    """The w8a8 repos carry a batched prefill model at the model revision:
+    the built-in names resolve and setup fetches the prefill build."""
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m-w8a8"]
+    assert repo_id == "Synaptics/LiquidAI-LFM2.5-230M-w8a8-torq"
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m-w8a8"], enable_prefill=True)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
+def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        assert revision == _EXAMPLES_VERSION
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m"], enable_prefill=True)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert downloaded == [
+        "transformer.vmfb",
+        "lm_head.vmfb",
+        *liquid_setup._LIQUID_REQUIRED_FILES,
+        liquid_setup._LIQUID_PREFILL_FILENAME,
+    ]
+    manifest = _manifest(base_dir / repo_id)
+    assert manifest["files"] == sorted(downloaded)
+    assert manifest["version"] == _EXAMPLES_VERSION
+    assert manifest["revision"] == _REVISION
+
+
+def test_liquid_falls_back_to_legacy_body_set(tmp_path):
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        return filename in {"body.vmfb", "lm_head.vmfb"}
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m"])
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert downloaded == [
+        "body.vmfb",
+        "lm_head.vmfb",
+        *liquid_setup._LIQUID_REQUIRED_FILES,
+    ]
+    # No prefill in this repo: not downloaded, not tracked.
+    manifest = _manifest(base_dir / repo_id)
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in manifest["files"]
+
+
+def _make_liquid_copy(model_dir: Path, model_files, revision=_REVISION):
+    model_dir.mkdir(parents=True, exist_ok=True)
+    files = [*model_files, *liquid_setup._LIQUID_REQUIRED_FILES]
+    for filename in files:
+        (model_dir / filename).write_text(filename)
+    write_manifest(
+        model_dir,
+        liquid_setup._HF_REPO_MAP["230m"],
+        files,
+        version=_EXAMPLES_VERSION,
+        revision=revision,
+    )
+    return model_dir
+
+
+def test_liquid_inference_accepts_alternate_model_set(tmp_path):
+    """A manifest recorded the new set, but the local dir holds the legacy set.
+
+    Both are valid decode bodies, so the tracked copy must be complete and no
+    download must happen.
+    """
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+    model_dir = _make_liquid_copy(
+        tmp_path / repo_id,
+        ["body.vmfb", "lm_head.vmfb"],
+    )
+    # Rewrite the manifest as if the new set had been downloaded.
+    write_manifest(
+        model_dir,
+        repo_id,
+        ["transformer.vmfb", "lm_head.vmfb", *liquid_setup._LIQUID_REQUIRED_FILES],
+        version=_EXAMPLES_VERSION,
+        revision=_REVISION,
+    )
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists") as exists,
+        mock.patch.object(liquid_setup, "download_from_hf") as download,
+    ):
+        liquid_setup.ensure_liquid_models(model_dir)
+
+    exists.assert_not_called()
+    download.assert_not_called()
+
+
+def test_liquid_inference_repairs_missing_recorded_prefill(tmp_path):
+    """The manifest tracked a prefill build the local dir lost: re-fetch it."""
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+    model_dir = _make_liquid_copy(
+        tmp_path / repo_id,
+        ["transformer.vmfb", "lm_head.vmfb"],
+    )
+    (model_dir / liquid_setup._LIQUID_PREFILL_FILENAME).write_text("prefill")
+    write_manifest(
+        model_dir,
+        repo_id,
+        [
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            *liquid_setup._LIQUID_REQUIRED_FILES,
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        ],
+        version=_EXAMPLES_VERSION,
+        revision=_REVISION,
+    )
+    (model_dir / liquid_setup._LIQUID_PREFILL_FILENAME).unlink()
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", return_value=True),
+        mock.patch.object(
+            liquid_setup, "download_from_hf", side_effect=_fake_download(tmp_path)
+        ) as download,
+    ):
+        liquid_setup.ensure_liquid_models(model_dir)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    # The lost prefill build is re-fetched; the intact model set is not.
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
+    assert "transformer.vmfb" not in downloaded
+    assert "lm_head.vmfb" not in downloaded
+
+
+def test_liquid_prefill_not_downloaded_without_flag(tmp_path):
+    """The prefill model stays out of the download and the manifest by default."""
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m"])
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in downloaded
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+
+
+def test_liquid_prefill_untracking_persists_across_setup_runs(tmp_path):
+    """Flag on, then off: prefill leaves the manifest, the local file is kept,
+    and later runs neither check nor re-download it."""
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+    prefill_path = base_dir / repo_id / liquid_setup._LIQUID_PREFILL_FILENAME
+
+    def exists(_repo_id, filename, revision=None):
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    def run_setup(enable_prefill: bool):
+        with (
+            mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+            mock.patch.object(model_setup, "check_requirements"),
+            mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+            mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+            mock.patch.object(
+                liquid_setup,
+                "download_from_hf",
+                side_effect=_fake_download(base_dir),
+            ) as download,
+        ):
+            liquid_setup.setup_liquid(["230m"], enable_prefill=enable_prefill)
+        return download
+
+    run_setup(True)
+    assert prefill_path.exists()
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+    download = run_setup(False)
+    download.assert_not_called()
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+    assert prefill_path.exists()  # local file kept, just untracked
+
+    download = run_setup(False)
+    download.assert_not_called()
+    assert liquid_setup._LIQUID_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
+
+
+def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
+    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m"]
+
+    def exists(_repo_id, filename, revision=None):
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    def run_setup(enable_prefill: bool):
+        with (
+            mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+            mock.patch.object(model_setup, "check_requirements"),
+            mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+            mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+            mock.patch.object(
+                liquid_setup,
+                "download_from_hf",
+                side_effect=_fake_download(base_dir),
+            ) as download,
+        ):
+            liquid_setup.setup_liquid(["230m"], enable_prefill=enable_prefill)
+        return download
+
+    run_setup(False)
+    download = run_setup(True)
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
+    # The intact model set is not re-fetched (the hook is incremental).
+    assert "transformer.vmfb" not in downloaded
+    assert "lm_head.vmfb" not in downloaded
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
+# ── prefill opt-in shape ─────────────────────────────────────────────────────
+
+
+def _load_setup_module(*path_parts):
+    """Load a demo's setup_demo.py by path (for non-importable demo dirs)."""
+    path = Path(__file__).resolve().parents[1] / Path(*path_parts) / "setup_demo.py"
+    modname = "_test_" + "_".join(path_parts).replace(".", "_").replace("-", "_")
+    spec = importlib.util.spec_from_file_location(modname, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_prefill_is_opt_in_per_demo():
+    """Only the demos with a batched prefill model (gemma3, LiquidAI-LFM2.5)
+    expose ``enable_prefill``; every other demo keeps the plain setup
+    interface."""
+    liquidvl_setup = _load_setup_module("LiquidAI", "LiquidAI-LFM2-VL-450M")
+    checks = [
+        (gemma_setup.setup_gemma3, True),
+        (liquid_setup.setup_liquid, True),
+        (moonshine_setup.setup_moonshine, False),
+        (moonshine_streaming_setup.setup_moonshine_streaming, False),
+        (liquidvl_setup.setup_liquidvl, False),
+        (object_detection_setup.setup_object_detection, False),
+        (pose_setup.setup_pose_estimation, False),
+    ]
+    for setup_fn, supports_prefill in checks:
+        params = inspect.signature(setup_fn).parameters
+        assert ("enable_prefill" in params) is supports_prefill, setup_fn.__name__
+
+
+def test_demo_main_prefill_flag_only_when_opted_in():
+    """``demo_main`` exposes ``--with-prefill`` (and forwards ``enable_prefill``)
+    only for demos that pass ``supports_prefill=True``."""
+    calls: list[dict] = []
+
+    def fake_setup(models, **kwargs):
+        calls.append(kwargs)
+
+    # Opted in: the flag is accepted and forwarded.
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+        model_setup.demo_main(
+            fake_setup,
+            description="d",
+            default_models=[],
+            repo_map={},
+            supports_prefill=True,
+        )
+    assert calls == [{"model_version": None, "no_update": False, "enable_prefill": True}]
+
+    # Not opted in: the flag is unknown and setup_fn never runs.
+    calls.clear()
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+        with pytest.raises(SystemExit):
+            model_setup.demo_main(
+                fake_setup, description="d", default_models=[], repo_map={}
+            )
+    assert not calls
+
+    # Not opted in, no flag: the plain call is unchanged.
+    with mock.patch.object(sys, "argv", ["setup_demo.py"]):
+        model_setup.demo_main(
+            fake_setup, description="d", default_models=[], repo_map={}
+        )
+    assert calls == [{"model_version": None, "no_update": False}]
+
+
+def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
+    """``setup_demos.py`` forwards ``enable_prefill`` only to the prefill-capable
+    demos; for every other demo the call is unchanged and just a warning is
+    logged."""
+    import setup_demos
+
+    with mock.patch.object(gemma_setup, "setup_gemma3") as gemma_mock:
+        setup_demos.setup_demo("gemma3", enable_prefill=True)
+    gemma_mock.assert_called_once_with(
+        ["instruct"], model_version=None, no_update=False, enable_prefill=True
+    )
+
+    with (
+        caplog.at_level(logging.WARNING),
+        mock.patch.object(moonshine_setup, "setup_moonshine") as moonshine_mock,
+    ):
+        setup_demos.setup_demo("moonshine", enable_prefill=True)
+    moonshine_mock.assert_called_once_with(
+        ["tiny-en"], model_version=None, no_update=False
+    )
+    warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
+    assert any(
+        "--with-prefill" in r.getMessage() and "moonshine" in r.getMessage()
+        for r in warnings
+    )

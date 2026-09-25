@@ -35,6 +35,7 @@ from utils.download import (
     read_manifest,
     resolve_repo_id,
     verify_manifest,
+    write_manifest,
 )
 from utils.log import add_logging_args, configure_logging
 from utils.version import parse_model_specs, resolve_model_version
@@ -45,6 +46,7 @@ __all__ = [
     "ensure_demo_models",
     "setup_demo",
     "demo_main",
+    "sync_prefill_tracking",
 ]
 
 logger = logging.getLogger(__name__)
@@ -89,6 +91,7 @@ def refresh_model(
     ``files_present`` only and never resolve or record a version.
     """
     model_dir = Path(model_dir)
+    previously_tracked: set[str] | None = None
     if record:
         if tracked_files_present is None:
             present = verify_manifest(model_dir) and files_present(model_dir)
@@ -97,10 +100,13 @@ def refresh_model(
         revision = None
         if version is not None:
             revision = get_hf_revision(repo_id, revision=version)
+        manifest = read_manifest(model_dir)
+        if manifest is not None:
+            previously_tracked = set(manifest.get("files", []))
     else:
         present = files_present(model_dir)
         revision = None
-    return ensure_model(
+    status = ensure_model(
         model_dir,
         repo_id,
         files_present=present,
@@ -109,6 +115,20 @@ def refresh_model(
         download=lambda: download(repo_id, base_dir, revision=version),
         record=record,
     )
+    if previously_tracked is not None:
+        new_manifest = read_manifest(model_dir)
+        now_tracked = set(new_manifest.get("files", [])) if new_manifest is not None else set()
+        dropped = previously_tracked - now_tracked
+        if dropped:
+            # e.g. a tag move to a revision that no longer publishes an
+            # optional file (a batched prefill build, a LUT): the refresh
+            # silently rewrites the manifest without it, so surface it.
+            logger.warning(
+                "Refresh of %s no longer tracks: %s. These files will not be "
+                "checked or re-downloaded on future refreshes.",
+                repo_id, ", ".join(sorted(dropped)),
+            )
+    return status
 
 
 def download_models(
@@ -229,6 +249,52 @@ def ensure_demo_models(
         )
 
 
+def sync_prefill_tracking(
+    model_dir: str | Path,
+    repo_id: str,
+    prefill_filename: str,
+    *,
+    enable_prefill: bool,
+) -> None:
+    """Align a tracked copy's manifest with the ``--with-prefill`` flag.
+
+    The download hooks only run when something needs to be fetched, so an
+    already-complete copy would otherwise keep its manifest as-is: this
+    removes ``prefill_filename`` from the manifest when the flag is off (the
+    local file, if any, is kept but no longer checked or re-downloaded, so
+    the exclusion persists across refreshes) and adds it back when the flag
+    is on and the file is already present, without re-downloading. Copies
+    without a manifest (``--no-update``) are left untouched.
+    """
+    model_dir = Path(model_dir)
+    manifest = read_manifest(model_dir)
+    if manifest is None:
+        return
+    files = list(manifest.get("files", []))
+    if enable_prefill:
+        if prefill_filename not in files and (model_dir / prefill_filename).exists():
+            files.append(prefill_filename)
+            write_manifest(
+                model_dir, repo_id, files,
+                version=manifest.get("version"), revision=manifest.get("revision"),
+            )
+            logger.info(
+                "Tracking existing %s in %s; run setup without --with-prefill "
+                "to stop tracking it.", prefill_filename, model_dir,
+            )
+    elif prefill_filename in files:
+        files.remove(prefill_filename)
+        write_manifest(
+            model_dir, repo_id, files,
+            version=manifest.get("version"), revision=manifest.get("revision"),
+        )
+        logger.info(
+            "No longer tracking %s in %s; the local file is kept but will not "
+            "be checked or refreshed. Run setup with --with-prefill to track "
+            "it again.", prefill_filename, model_dir,
+        )
+
+
 def setup_demo(
     repo_map: dict[str, str],
     models: list[str],
@@ -271,6 +337,7 @@ def demo_main(
     description: str,
     default_models: list[str],
     repo_map: dict[str, str],
+    supports_prefill: bool = False,
 ) -> None:
     """Shared command-line main for the demos' ``setup_demo.py`` scripts.
 
@@ -278,6 +345,11 @@ def demo_main(
     ``name:version`` specs), ``--model-version``, ``--no-update`` and the
     logging args, then calls
     ``setup_fn(models, model_version=..., no_update=...)``.
+
+    Demos with an optional batched prefill model pass
+    ``supports_prefill=True`` to also expose ``--with-prefill`` and forward it to
+    ``setup_fn`` as ``enable_prefill``; all other demos keep the plain
+    interface and never see the flag.
     """
     available = ", ".join(f"'{name}' ({repo})" for name, repo in repo_map.items())
     parser = argparse.ArgumentParser(description=description)
@@ -288,12 +360,30 @@ def demo_main(
     )
     parser.add_argument("--model-version", default=None, help=_MODEL_VERSION_HELP)
     parser.add_argument("--no-update", action="store_true", help=_NO_UPDATE_HELP)
+    if supports_prefill:
+        parser.add_argument(
+            "--with-prefill", action="store_true", default=False,
+            help=(
+                "Also download and track the optional batched prefill model "
+                "(transformer_prefill.vmfb). It is an extra model, so it uses "
+                "more memory, and its prompt-chunk size is fixed. "
+                "No-op with a warning for repos that have no prefill model; "
+                "re-running setup without the flag stops tracking it (the "
+                "local file is kept)."
+            ),
+        )
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
 
     try:
-        setup_fn(args.models, model_version=args.model_version, no_update=args.no_update)
+        kwargs: dict[str, object] = {
+            "model_version": args.model_version,
+            "no_update": args.no_update,
+        }
+        if supports_prefill:
+            kwargs["enable_prefill"] = args.with_prefill
+        setup_fn(args.models, **kwargs)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:

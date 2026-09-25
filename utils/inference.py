@@ -140,6 +140,11 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         ]
         self._kv_cache = [self.allocate_device_array(z) for z in self._kv_init]
 
+    @property
+    def n_cache_inputs(self) -> int:
+        """Number of trailing inputs that are managed caches."""
+        return self._n_kv
+
     def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
         if isinstance(inputs, Mapping):
             user_inputs = list(inputs.values())
@@ -164,7 +169,10 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
     def reset_kv(self) -> None:
         """Reset all KV caches to zeros."""
-        self._kv_cache = [self.allocate_device_array(z) for z in self._kv_init]
+        # Mutate the list in place so other runners sharing it (see
+        # share_kv_cache) observe the reset.
+        for i, z in enumerate(self._kv_init):
+            self._kv_cache[i] = self.allocate_device_array(z)
 
     def save_kv_state(self) -> list[np.ndarray]:
         """Snapshot the current KV-cache state to host NumPy arrays."""
@@ -172,7 +180,31 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
     def restore_kv_state(self, state: list[np.ndarray]) -> None:
         """Restore KV caches from a previously saved snapshot."""
-        self._kv_cache = [self.allocate_device_array(arr) for arr in state]
+        for i, arr in enumerate(state):
+            self._kv_cache[i] = self.allocate_device_array(arr)
+
+    def share_kv_cache(self, owner: "ManagedSelfAttnCacheRunner") -> None:
+        """Read/write the same cache tensors as *owner*.
+
+        A batched prefill model has the same per-layer cache layout as the
+        decode model, so both runners can use one set of on-device cache
+        buffers: a prefill chunk extends the context in place and the next
+        decode step continues from the very same buffers with no host
+        round-trip between them.
+        """
+        if len(self._kv_init) != len(owner._kv_init):
+            raise ValueError(
+                "Cannot share KV cache: model has "
+                f"{len(self._kv_init)} cache tensors, owner has {len(owner._kv_init)}."
+            )
+        for mine, theirs in zip(self._kv_init, owner._kv_init):
+            if tuple(mine.shape) != tuple(theirs.shape) or mine.dtype != theirs.dtype:
+                raise ValueError(
+                    "Cannot share KV cache: tensor mismatch "
+                    f"({tuple(mine.shape)}/{mine.dtype} vs "
+                    f"{tuple(theirs.shape)}/{theirs.dtype})."
+                )
+        self._kv_cache = owner._kv_cache
 
     def shift_kv(self, keep_last_n: int, seq_axis: int = 2, protect_first_n: int = 0) -> None:
         """Shift the last *keep_last_n* entries to just after the first
@@ -404,25 +436,35 @@ def _tensor_info_summary(info) -> str:
 class SplitLMHeadRunner:
     """
     Adapter for split body + lm_head inference.
+
+    *lm_head* may be a path to a ``.vmfb`` or an already-constructed
+    :class:`~torq.runtime.VMFBInferenceRunner` to reuse (e.g. so a batched
+    prefill body and the decode body share one compiled LM head instead of
+    each loading the head module twice).
     """
 
     def __init__(
         self,
         body: BaseManagedCacheRunner,
-        lm_head_path: str | os.PathLike,
+        lm_head: str | os.PathLike | VMFBInferenceRunner,
         **kwargs,
     ) -> None:
         self._body = body
         self._infer_time_ms = 0.0
-        lm_head_kwargs = {
-            k: kwargs[k] for k in ("n_threads", "runtime_flags") if k in kwargs
-        }
-        self._lm_head = VMFBInferenceRunner(
-            lm_head_path,
-            device_outputs=True,
-            **lm_head_kwargs,
+        if isinstance(lm_head, VMFBInferenceRunner):
+            self._lm_head = lm_head
+        else:
+            lm_head_kwargs = {
+                k: kwargs[k] for k in ("n_threads", "runtime_flags") if k in kwargs
+            }
+            self._lm_head = VMFBInferenceRunner(
+                lm_head,
+                device_outputs=True,
+                **lm_head_kwargs,
+            )
+        self._validate_lm_head_io(
+            lm_head.model_path if isinstance(lm_head, VMFBInferenceRunner) else lm_head
         )
-        self._validate_lm_head_io(lm_head_path)
 
     def _validate_lm_head_io(self, lm_head_path: str | os.PathLike) -> None:
         body_outputs = self._body.outputs_info
@@ -481,6 +523,10 @@ class SplitLMHeadRunner:
     @property
     def device(self):
         return self._body.device
+
+    @property
+    def n_cache_inputs(self) -> int:
+        return self._body.n_cache_inputs
 
     def infer(
         self,
