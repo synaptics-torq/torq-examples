@@ -921,6 +921,39 @@ def test_inference_skips_refresh_when_model_dir_is_not_under_repo_id(tmp_path):
 # ── liquid ──────────────────────────────────────────────────────────────────
 
 
+def test_liquid_w8a8_setup_downloads_prefill(tmp_path):
+    """The w8a8 repos carry a batched prefill model at the model revision:
+    the built-in names resolve and setup fetches the prefill build."""
+    base_dir = tmp_path
+    repo_id = liquid_setup._HF_REPO_MAP["230m-w8a8"]
+    assert repo_id == "Synaptics/LiquidAI-LFM2.5-230M-w8a8-torq"
+
+    def exists(_repo_id, filename, revision=None):
+        assert _repo_id == repo_id
+        return filename in {
+            "transformer.vmfb",
+            "lm_head.vmfb",
+            liquid_setup._LIQUID_PREFILL_FILENAME,
+        }
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
+        mock.patch.object(
+            liquid_setup,
+            "download_from_hf",
+            side_effect=_fake_download(base_dir),
+        ) as download,
+    ):
+        liquid_setup.setup_liquid(["230m-w8a8"])
+
+    downloaded = [call.args[1] for call in download.call_args_list]
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
+    assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
+
+
 def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
     base_dir = tmp_path
     repo_id = liquid_setup._HF_REPO_MAP["230m"]

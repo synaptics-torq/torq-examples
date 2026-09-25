@@ -14,8 +14,9 @@ pip install -r requirements.txt
 cd ..
 ```
 
-From the repo root — downloads the model from HuggingFace (230M by default,
-`350m` also available once its runtime repo is published):
+From the repo root — downloads the model from HuggingFace (230M by default;
+`350m` and the w8a8 SL2619 builds `230m-w8a8`/`350m-w8a8` are also available
+via the demo's own `setup_demo.py`):
 
 ```sh
 python setup_demos.py LiquidAI-LFM2.5
@@ -43,6 +44,13 @@ models/Synaptics/LiquidAI-LFM2.5-230M/
 > [!NOTE]
 > Legacy deployments of `body.vmfb` + `lm_head.vmfb` (or the fused
 > `model.vmfb`) still run; the demo picks whichever file set is present.
+
+> [!NOTE]
+> The `230m-w8a8`/`350m-w8a8` models come from the
+> [`LiquidAI-LFM2.5-*-w8a8-torq`](https://huggingface.co/Synaptics/models?search=LFM2.5-w8a8)
+> repos (the new exporter's SL2619 w8a8 builds). Besides `transformer.vmfb`
+> and `lm_head.vmfb` they publish a batched prefill model in
+> `transformer_prefill.vmfb`, which setup downloads when present.
 
 ## Running
 
