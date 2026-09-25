@@ -13,6 +13,7 @@ import logging
 import os
 import site
 import sys
+from typing import Final
 
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import DownloadError
@@ -30,6 +31,11 @@ DEMOS = [
     "object_detection",
     "pose_estimation",
 ]
+
+# Demos whose setup supports the --with-prefill flag (their models have a batched
+# prefill build). The flag is forwarded only to these; every other demo is
+# set up exactly as before and just gets a warning.
+_PREFILL_DEMOS: Final[frozenset[str]] = frozenset({"gemma3", "LiquidAI-LFM2.5"})
 
 
 def _site_packages_dir() -> str:
@@ -67,14 +73,35 @@ def _load_demo_module(*path_parts):
     return mod
 
 
-def setup_demo(name: str, *, model_version: str | None = None, no_update: bool = False):
+def setup_demo(
+    name: str,
+    *,
+    model_version: str | None = None,
+    no_update: bool = False,
+    enable_prefill: bool = False,
+):
+    if enable_prefill and name not in _PREFILL_DEMOS:
+        logger.warning(
+            "--with-prefill has no effect for the '%s' demo (no batched prefill "
+            "model); ignoring.", name,
+        )
     try:
         if name == "gemma3":
             from gemma3.setup_demo import setup_gemma3
-            setup_gemma3(["instruct"], model_version=model_version, no_update=no_update)
+            setup_gemma3(
+                ["instruct"],
+                model_version=model_version,
+                no_update=no_update,
+                enable_prefill=enable_prefill,
+            )
         elif name == "LiquidAI-LFM2.5":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
-            _mod.setup_liquid(["230m"], model_version=model_version, no_update=no_update)
+            _mod.setup_liquid(
+                ["230m"],
+                model_version=model_version,
+                no_update=no_update,
+                enable_prefill=enable_prefill,
+            )
         elif name == "moonshine":
             from moonshine.setup_demo import setup_moonshine
             setup_moonshine(["tiny-en"], model_version=model_version, no_update=no_update)
@@ -126,6 +153,17 @@ if __name__ == "__main__":
             "models are never checked for updates or refreshed (at your own risk)."
         ),
     )
+    parser.add_argument(
+        "--with-prefill",
+        action="store_true",
+        help=(
+            "Also download and track the optional batched prefill model "
+            "(transformer_prefill.vmfb) for the demos that have one "
+            f"({', '.join(sorted(_PREFILL_DEMOS))}). It is an extra model, so "
+            "it uses more memory, and its prompt-chunk size is fixed. "
+            "Warns and is ignored for the other demos."
+        ),
+    )
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
@@ -158,4 +196,5 @@ if __name__ == "__main__":
             name,
             model_version=args.model_version,
             no_update=args.no_update,
+            enable_prefill=args.with_prefill,
         )

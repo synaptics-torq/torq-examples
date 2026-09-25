@@ -5,8 +5,18 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from utils.download import download_from_hf, hf_file_exists, read_manifest
-from utils.model_setup import demo_main, ensure_demo_models, setup_demo
+from utils.download import (
+    download_from_hf,
+    hf_file_exists,
+    read_manifest,
+    resolve_repo_id,
+)
+from utils.model_setup import (
+    demo_main,
+    ensure_demo_models,
+    setup_demo,
+    sync_prefill_tracking,
+)
 
 logger = logging.getLogger("Liquid.setup")
 
@@ -103,19 +113,41 @@ def _download_optional_if_exists(
 
 
 def _download_liquid(
-    repo_id: str, base_dir: Path, *, revision: str | None = None
+    repo_id: str,
+    base_dir: Path,
+    *,
+    revision: str | None = None,
+    enable_prefill: bool = False,
 ) -> list[str]:
-    """Download all Liquid files; return the manifest file list."""
+    """Download all Liquid files; return the manifest file list.
+
+    The optional batched prefill model (``transformer_prefill.vmfb``) is
+    downloaded only when ``enable_prefill`` is set, or when the existing
+    manifest already tracks it, so repairing a previously enabled copy does
+    not silently drop the prefill build.
+    """
     manifest_files = _download_liquid_model(repo_id, base_dir, revision=revision)
     for filename in _LIQUID_REQUIRED_FILES:
         download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
         manifest_files.append(filename)
 
-    prefill_file = _download_optional_if_exists(
-        repo_id, _LIQUID_PREFILL_FILENAME, base_dir, revision=revision
+    manifest = read_manifest(Path(base_dir) / repo_id)
+    tracks_prefill = (
+        bool(manifest) and _LIQUID_PREFILL_FILENAME in manifest.get("files", [])
     )
-    if prefill_file is not None:
-        manifest_files.append(prefill_file)
+    if enable_prefill or tracks_prefill:
+        local_dir = Path(base_dir) / repo_id
+        if (local_dir / _LIQUID_PREFILL_FILENAME).exists():
+            manifest_files.append(_LIQUID_PREFILL_FILENAME)
+        elif _download_optional_if_exists(
+            repo_id, _LIQUID_PREFILL_FILENAME, base_dir, revision=revision
+        ):
+            manifest_files.append(_LIQUID_PREFILL_FILENAME)
+        elif enable_prefill:
+            logger.warning(
+                "--with-prefill: no %s in %s; continuing without a batched "
+                "prefill model.", _LIQUID_PREFILL_FILENAME, repo_id,
+            )
     return manifest_files
 
 
@@ -167,26 +199,61 @@ def setup_liquid(
     models: list[str] | None = None,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
     """Set up the LiquidAI-LFM2.5 demo.
 
     Version selection, ``name:version`` specs and ``no_update`` are handled by
     :func:`utils.model_setup.setup_demo`, which checks demo requirements first,
-    then downloads/refreshes the models.
+    then downloads/refreshes the models. ``enable_prefill`` additionally
+    downloads and tracks the optional batched prefill model
+    (``transformer_prefill.vmfb``): an extra model, so it uses more memory,
+    with a fixed 64-token prompt chunk size. Without it, a tracked prefill
+    model is removed from the manifest (the local file is kept but left
+    untracked), so it stays excluded on later runs.
     """
     if models is None:
         models = _DEFAULT_MODELS
-    return setup_demo(
+
+    def _tracked_complete(model_dir: Path) -> bool:
+        """A complete copy — plus, with ``--with-prefill``, a prefill model that is
+        tracked or at least present locally. The download hook is incremental
+        (``download_from_hf`` skips existing files), so marking a complete copy
+        incomplete only fetches the missing prefill build, or warns when the
+        repo has none."""
+        if not _liquid_files_present(model_dir):
+            return False
+        if enable_prefill:
+            manifest = read_manifest(model_dir)
+            files = manifest.get("files", []) if manifest else []
+            if (
+                _LIQUID_PREFILL_FILENAME not in files
+                and not (model_dir / _LIQUID_PREFILL_FILENAME).exists()
+            ):
+                return False
+        return True
+
+    result = setup_demo(
         _HF_REPO_MAP,
         models,
         demo_name="LiquidAI-LFM2.5",
         requirements=Path(__file__).parent / "requirements.txt",
         files_present=_has_liquid_files,
-        download=_download_liquid,
+        download=lambda repo_id, base_dir, *, revision=None: _download_liquid(
+            repo_id, base_dir, revision=revision, enable_prefill=enable_prefill
+        ),
         model_version=model_version,
         no_update=no_update,
-        tracked_files_present=_liquid_files_present,
+        tracked_files_present=_tracked_complete,
     )
+    for name, model_dir in result.items():
+        sync_prefill_tracking(
+            model_dir,
+            resolve_repo_id(name, _HF_REPO_MAP),
+            _LIQUID_PREFILL_FILENAME,
+            enable_prefill=enable_prefill,
+        )
+    return result
 
 
 if __name__ == "__main__":
@@ -195,4 +262,5 @@ if __name__ == "__main__":
         description="Download LFM2.5 (Liquid) model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=_HF_REPO_MAP,
+        supports_prefill=True,
     )

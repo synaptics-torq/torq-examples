@@ -32,6 +32,15 @@ python setup_demo.py --model-version v2.1.0
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
 
+By default setup does **not** download the optional batched prefill model. To also fetch and track `transformer_prefill.vmfb`, pass `--with-prefill`:
+
+```sh
+cd gemma3
+python setup_demo.py --with-prefill
+```
+
+`transformer_prefill.vmfb` is an extra model, so it uses more memory, and its prompt-chunk size is fixed to 64 tokens. It is a no-op with a warning for repos that have no prefill model. Re-running setup without the flag removes it from tracking (the local file is kept but no longer checked or refreshed).
+
 ## Running
 
 Run the demo from the `gemma3` directory:

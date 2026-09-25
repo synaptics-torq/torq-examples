@@ -25,7 +25,12 @@ python setup_demos.py LiquidAI-LFM2.5
 The model version defaults to the one matching this repo's `VERSION` file (see the
 [repo README](../../README.md) for the versioning scheme); `setup_demos.py` and the demo's
 `setup_demo.py` both support `--model-version` to pin a specific release tag and `--no-update`
-to skip model tracking entirely.
+to skip model tracking entirely. By default setup does **not** download the optional
+batched prefill model; pass `--with-prefill` to also fetch and track
+`transformer_prefill.vmfb` (an extra model, so it uses more memory, with a fixed
+64-token prompt chunk size; a no-op with a warning for repos that have no prefill
+model). Re-running setup without the flag removes it from tracking (the local file
+is kept but no longer checked or refreshed).
 
 This fetches the artifacts from
 [`Synaptics/LiquidAI-LFM2.5-230M`](https://huggingface.co/Synaptics/LiquidAI-LFM2.5-230M)
@@ -34,7 +39,7 @@ into `models/Synaptics/LiquidAI-LFM2.5-230M/`:
 ```
 models/Synaptics/LiquidAI-LFM2.5-230M/
 ├── transformer.vmfb           ← decoder body (hidden output, 256-token KV cache)
-├── transformer_prefill.vmfb   ← optional: fixed-size batched prefill build
+├── transformer_prefill.vmfb   ← optional: batched prefill build (setup only downloads it with the --with-prefill flag)
 ├── lm_head.vmfb               ← standalone lm_head (hidden -> logits; skipped during prefill)
 ├── token_embeddings.npy       ← CPU-side embedding LUT
 ├── config.json
@@ -50,7 +55,7 @@ models/Synaptics/LiquidAI-LFM2.5-230M/
 > [`LiquidAI-LFM2.5-*-w8a8-torq`](https://huggingface.co/Synaptics/models?search=LFM2.5-w8a8)
 > repos (the new exporter's SL2619 w8a8 builds). Besides `transformer.vmfb`
 > and `lm_head.vmfb` they publish a batched prefill model in
-> `transformer_prefill.vmfb`, which setup downloads when present.
+> `transformer_prefill.vmfb`, which setup downloads with the `--with-prefill` flag.
 
 ## Running
 
