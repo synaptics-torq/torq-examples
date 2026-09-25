@@ -25,11 +25,9 @@ def run_profile_if_requested(args, runtime_flags):
 
 
 def setup_npu_for_inference():
-    """Enable NPU clock and set max frequency for inference."""
-    from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
+    """Set NPU to max frequency for inference."""
+    from utils.npu import configure_npu_userspace_frequency
 
-    ok, message = enable_npu_clock()
-    print(f"[NPU] {message}")
     ok, message = configure_npu_userspace_frequency("max")
     print(f"[NPU] {message}")
 

@@ -29,7 +29,7 @@ except ImportError:
 from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
 from moonshine_streaming.setup_demo import ensure_moonshine_streaming_models
 from utils.log import add_logging_args, configure_logging
-from utils.npu import configure_npu_userspace_frequency, enable_npu_clock
+from utils.npu import configure_npu_userspace_frequency
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -203,8 +203,6 @@ def main(args: argparse.Namespace):
             args.commit_agreement, args.commit_delay,
         )
 
-    ok, message = enable_npu_clock()
-    print(f"[NPU] {message}")
     ok, message = configure_npu_userspace_frequency("max")
     print(f"[NPU] {message}")
 

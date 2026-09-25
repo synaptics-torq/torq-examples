@@ -27,7 +27,7 @@ By default the demo downloads the model version matching this repo's `VERSION` f
 
 ```sh
 cd gemma3
-python setup_demo.py --model-version v2.1.0
+python setup_demo.py --model-version v2.2.0
 ```
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.

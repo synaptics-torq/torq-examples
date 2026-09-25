@@ -44,16 +44,3 @@ def configure_npu_userspace_frequency(level: str = "max") -> tuple[bool, str]:
 
     return True, f"NPU userspace {level} frequency applied"
 
-
-def enable_npu_clock() -> tuple[bool, str]:
-    try:
-        subprocess.run(
-            ["devmem", "0xf7e104b0", "32", "0x216"],
-            capture_output=True,
-            timeout=5,
-            check=False,
-        )
-    except Exception as exc:
-        return False, f"NPU clock enable failed: {exc}"
-
-    return True, "NPU clock enabled"

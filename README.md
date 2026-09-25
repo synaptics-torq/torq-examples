@@ -26,7 +26,7 @@ Requires Python 3.
     python3 -m venv .venv --system-site-packages
    
     source .venv/bin/activate
-    pip install https://github.com/synaptics-torq/torq-compiler/releases/download/v2.1.0/torq_runtime-2.1.0-cp312-cp312-manylinux_2_28_aarch64.whl
+    pip install torq-runtime
    
    pip install -r requirements.txt
     ```
@@ -72,7 +72,7 @@ Downloaded models are stored in `./models/` by default. Override with the `$MODE
 
 ### Model versions
 
-This repo's version is recorded in the `VERSION` file at the root and tracks the torq-compiler release the demos are tested against. Built-in model repos on Hugging Face carry matching tags, so a checkout of examples `2.1.0` downloads and maintains the models at tag `v2.1.0`. Setup **fails loudly** if that version does not exist in a model repo.
+This repo's version is recorded in the `VERSION` file at the root and tracks the torq-compiler release the demos are tested against. Built-in model repos on Hugging Face carry matching tags, so a checkout of examples `2.2.0` downloads and maintains the models at tag `v2.2.0`. Setup **fails loudly** if that version does not exist in a model repo.
 
 - Re-running setup — or starting any demo — re-checks the tracked tag and refreshes the local copy if the tag moved upstream or local files went missing/corrupt.
 - A model is **never** upgraded to a newer version on its own: it stays on the version it was set up with until you explicitly change it. There is no `latest` tracking.

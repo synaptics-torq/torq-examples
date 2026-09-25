@@ -6,8 +6,8 @@
 The ``VERSION`` file at the repo root records which torq-examples release this
 checkout corresponds to. The version tracks the torq-compiler/runtime release
 the demos are tested against, and the built-in model repos on Hugging Face are
-tagged the same way: a checkout of examples ``2.1.0`` downloads (and maintains)
-the models at tag ``v2.1.0``.
+tagged the same way: a checkout of examples ``2.2.0`` downloads (and maintains)
+the models at tag ``v2.2.0``.
 
 The file must be bumped on every release of torq-examples.
 """
@@ -30,7 +30,7 @@ _VERSION_FILE: Final[Path] = Path(__file__).resolve().parent.parent / "VERSION"
 
 
 def examples_version() -> str | None:
-    """Return the torq-examples version as an HF-style tag (e.g. ``v2.1.0``).
+    """Return the torq-examples version as an HF-style tag (e.g. ``v2.2.0``).
 
     Returns ``None`` when the ``VERSION`` file is missing or empty so callers
     can report a clear error (or fall back to an explicit ``--model-version``)
