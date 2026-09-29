@@ -265,7 +265,7 @@ def check_model_status(
         files_present: Whether the demo's required files already exist locally
             (the caller's own integrity check).
         version: The version tag the copy is supposed to track (e.g.
-            ``v2.1.0``), or ``None`` for an unversioned copy.
+            ``v2.2.0``), or ``None`` for an unversioned copy.
         revision: The commit SHA *version* currently resolves to from
             :func:`get_hf_revision`, or ``None`` when the Hub is unreachable
             or *version* is ``None``.
