@@ -230,7 +230,6 @@ class DecoderOnlyLLMRunner(ABC):
         "_top_k",
         "_bos_token_id",
         "_eos_token_id",
-        "_pad_token_id",
         "_bos_token",
         "_eos_token",
         "_reset_cache_state",
@@ -325,7 +324,6 @@ class DecoderOnlyLLMRunner(ABC):
 
         self._bos_token_id = self._config["bos_token_id"]
         self._eos_token_id = self._config["eos_token_id"]
-        self._pad_token_id = self._config.get("pad_token_id") or 0
         self._tokenizer = Tokenizer.from_file(str(self._model_dir / "tokenizer.json"))
         self._bos_token = self._tokenizer.decode(
             [self._bos_token_id], skip_special_tokens=False
@@ -937,16 +935,19 @@ class DecoderOnlyLLMRunner(ABC):
         )
 
     def _apply_prompt_limit(self, tokens: list[int]) -> list[int]:
+        """Truncate the prompt to the configured maximum input length.
+
+        Prompts shorter than the limit pass through unchanged: the static
+        exports bake a causal mask into the graph, so padding tokens would
+        be attended over and make the model emit EOS immediately.
+        """
         limit = (
             self._max_user_tokens
             if self._max_user_tokens is not None
             else self._max_prompt_tokens
         )
-        if isinstance(limit, int):
-            if len(tokens) > limit:
-                return tokens[:limit]
-            if len(tokens) < limit:
-                return tokens + [self._pad_token_id] * (limit - len(tokens))
+        if isinstance(limit, int) and len(tokens) > limit:
+            return tokens[:limit]
         return tokens
 
     def run(
