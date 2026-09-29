@@ -376,6 +376,74 @@ def test_setup_no_update_reuses_existing_files(tmp_path):
     assert not (model_dir / ".manifest.json").exists()
 
 
+def test_setup_no_update_downloads_head_not_builtin_version(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+    ):
+        moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
+
+    # Untracked and unversioned: the built-in VERSION tag is not used as the
+    # download revision (untagged repos cannot resolve it); HEAD is.
+    rev.assert_not_called()
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] is None
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
+def test_setup_no_update_keeps_explicit_version(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+    ):
+        moonshine_setup.setup_moonshine(
+            ["tiny-en"], no_update=True, model_version=_PINS
+        )
+
+    # An explicitly pinned version wins over the untracked HEAD default,
+    # but nothing is resolved or recorded.
+    rev.assert_not_called()
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] == _PINS
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
+def test_setup_no_update_keeps_per_model_version_spec(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+    ):
+        moonshine_setup.setup_moonshine([f"tiny-en:{_PINS}"], no_update=True)
+
+    # A per-model 'name:version' spec wins over the untracked HEAD default.
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] == _PINS
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
 # ── inference: manifest-driven refresh ─────────────────────────────────────────
 
 

@@ -66,7 +66,9 @@ _MODEL_VERSION_HELP: Final[str] = (
 )
 _NO_UPDATE_HELP: Final[str] = (
     "Download without tracking: no .manifest.json is written, so the "
-    "models are never checked for updates or refreshed (at your own risk)."
+    "models are never checked for updates or refreshed (at your own risk). "
+    "Unless a version is pinned explicitly, the repo's latest (HEAD) "
+    "revision is downloaded."
 )
 
 
@@ -151,7 +153,8 @@ def download_models(
     values of ``repo_map``) default to the torq-examples version and custom
     repos to their latest (HEAD) revision. ``no_update=True`` downloads without
     writing a manifest, so the models are never tracked or refreshed (at your
-    own risk).
+    own risk); absent an explicit version it downloads the repo's latest
+    (HEAD) revision rather than the built-in version tag.
 
     ``label`` only appears in log messages and error text.
     """
@@ -164,9 +167,16 @@ def download_models(
     result: dict[str, Path] = {}
     for name, spec_version in parse_model_specs(models):
         repo_id = resolve_repo_id(name, repo_map)
-        version = resolve_model_version(
-            repo_id, spec_version or model_version, builtin_repos=builtin_repos
-        )
+        explicit_version = spec_version or model_version
+        if no_update and explicit_version is None:
+            # Untracked copies are not pinned to the built-in version tag
+            # (untagged repos cannot resolve it); they download the repo's
+            # latest (HEAD) revision.
+            version = None
+        else:
+            version = resolve_model_version(
+                repo_id, explicit_version, builtin_repos=builtin_repos
+            )
         model_dir = base_dir / repo_id
         try:
             refresh_model(

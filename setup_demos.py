@@ -154,7 +154,9 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "Download without tracking: no .manifest.json is written, so the "
-            "models are never checked for updates or refreshed (at your own risk)."
+            "models are never checked for updates or refreshed (at your own "
+            "risk). Unless a version is pinned explicitly, the repo's latest "
+            "(HEAD) revision is downloaded."
         ),
     )
     parser.add_argument(
