@@ -5,7 +5,7 @@
 
 partA — the text encoder and duration predictor — runs on the CPU under
 onnxruntime and yields the exact frame count; the HiFi-GAN vocoder (partB) runs
-on the NPU as one of five bf16 NSS-only vmfbs covering 1/2/4/6/8 s windows. The
+on the NPU as one of several bf16 NSS-only vmfbs, one per window length. The
 two overlap, so the CPU encodes the next sentence while the NPU vocodes the
 current one and the speaker plays the previous one. Assets download from Hugging
 Face (``Synaptics/Piper-TTS``) on first run.
@@ -43,7 +43,7 @@ def report(stats, quiet=False):
     """Print the timing line for one utterance."""
     if quiet:
         return
-    windows = "+".join(f"{w:.0f}s" for w in stats["windows"]) or "-"
+    windows = "+".join(f"{round(w, 1):g}s" for w in stats["windows"]) or "-"
     played = stats["first_sound_s"] is not None
     first = stats["first_sound_s"] if played else (stats["first_audio_s"] or 0.0)
     print(f"  audio {stats['audio_s']:.2f} s | windows {windows} | "
@@ -176,7 +176,7 @@ def main():
                    audio_device=args.audio_device, dac_rate=args.dac_rate)
     phon = Phonemizer(model_dir, voice)
     print(f"  partA {tts.load_s['partA']:.1f} s | partB {len(tts.windows)} windows "
-          f"({', '.join(f'{w * 256 / tts.sr:.0f}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
+          f"({', '.join(f'{round(w * 256 / tts.sr, 1):g}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
           f"speaker {'(silent)' if args.no_play else tts.audio_device}")
 
     try:

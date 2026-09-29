@@ -30,6 +30,7 @@ class Voice:
     speakers: int
     samples: tuple[str, ...]
     subdir: str = ""      # asset subdir under the model dir ("" = top level)
+    windows: tuple[float, ...] = (1, 2, 4, 6, 8)   # vocoder window lengths, seconds
 
     @property
     def config_name(self) -> str:
@@ -67,6 +68,8 @@ EN_US_LESSAC_LOW: Final = Voice(
     speakers=1,
     subdir="en_US-lessac-low",
     samples=EN_US_LIBRITTS_R.samples,
+    # Extra 1.5/3/5 s windows cut vocoder padding from 26% to 16% of NPU work.
+    windows=(1, 1.5, 2, 3, 4, 5, 6, 8),
 )
 
 # Latin American Spanish. The samples mirror the English ones scene for scene,

@@ -10,7 +10,7 @@ which is the point the output length becomes exact:
                      z,g -> [partB: HiFi-GAN vocoder]   (vmfb, NPU) -> audio [F*256]
 
 partA reports the exact frame count F, so the vocoder window is known before it
-runs: the smallest of the 1/2/4/6/8 s vmfbs that fits is picked and the latent is
+runs: the smallest window vmfb that fits is picked and the latent is
 edge-padded up to it. Three threads overlap so the CPU encodes sentence *n+1*
 while the NPU vocodes sentence *n* and the speaker plays sentence *n-1*.
 

@@ -43,7 +43,7 @@ Downloaded assets are stored at:
 ```sh
 models/Synaptics/Piper-TTS/
 ├── onnx/partA.onnx                       # text encoder + duration (CPU, onnxruntime)
-├── vmfb/partB_static_{1,2,4,6,8}s.vmfb   # HiFi-GAN vocoder (NPU), one per window
+├── vmfb/partB_static_<N>s.vmfb           # HiFi-GAN vocoder (NPU), one per window
 ├── voice/en_US-libritts_r-medium.onnx.json   # phoneme -> id map + voice config
 ├── en_US-lessac-low/{onnx,vmfb,voice}/       # the same three, per extra voice
 ├── es_MX-ald-medium/{onnx,vmfb,voice}/
@@ -54,8 +54,8 @@ Only the voice you ask for is downloaded, so running English never fetches the
 Spanish vocoder. The espeak dictionaries are shared — one copy covers every
 language, so a voice adds no phonemizer assets.
 
-The vocoder windows are shipped as five separate VMFBs because the NPU model is
-statically shaped; see [How it runs](#how-it-runs). The demo reads each window's
+The vocoder windows are shipped as separate VMFBs (1, 2, 4, 6 and 8 s; lessac-low
+adds 1.5, 3 and 5 s) because the NPU model is statically shaped; see [How it runs](#how-it-runs). The demo reads each window's
 frame width **from the VMFB signature itself**, so recompiling with a different
 set of windows needs no code change — just drop the new files in `vmfb/`.
 
@@ -156,10 +156,17 @@ length is `F × 256` samples, exactly, so the right window can be chosen up
 front rather than guessed.
 
 **Static windows.** The NPU model is statically shaped, so the vocoder ships as
-five VMFBs covering 1, 2, 4, 6 and 8 seconds of audio. Per sentence the demo
-picks the smallest window that fits and edge-pads the latent up to it (repeating
-the last frame), then trims the output back to `F × 256` samples. Sentences
-longer than the 8 s window are skipped with a warning — split them at a comma.
+one VMFB per window — 1, 2, 4, 6 and 8 seconds of audio, plus 1.5, 3 and 5 s for
+`en_US-lessac-low`. Per sentence the demo picks the smallest window that fits and
+edge-pads the latent up to it (repeating the last frame), then trims the output
+back to `F × 256` samples. Sentences longer than the 8 s window are skipped with a
+warning — split them at a comma.
+
+Padding is wasted NPU work. On a 34-sentence mix, lessac-low's eight windows pad
+16% of vocoder frames against 26% with five, cutting NPU vocoder time by 12.5%.
+End to end that is only 1–3% faster, because this voice's vocoder is already about
+8× real time and the CPU half (partA) sets the pace — but the NPU is left idler.
+The window list lives per voice in `piper_core/voices.py`.
 
 **Three-stage overlap.** Encoding, vocoding and playback run in separate threads
 connected by queues, so all three stay busy:
@@ -206,7 +213,7 @@ The CPU is also left free during vocoding. The vocoder alone on the NPU, per win
 The 16 kHz voice has about 27% fewer vocoder frames per second of speech, which
 is why it is the fastest.
 
-Startup, paid once: partA ~6 s (onnxruntime loading the graph), all five VMFBs
+Startup, paid once: partA ~6 s (onnxruntime loading the graph), all windows
 ~0.5–0.7 s, phonemizer ~0.3 s. The windows are kept loaded so no window switch
 costs a reload. Forty utterances back to back show no memory growth or slowdown.
 

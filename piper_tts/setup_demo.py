@@ -3,8 +3,8 @@
 
 """Download the Piper TTS demo assets from Hugging Face.
 
-Pulls, per voice, partA (the ORT/CPU text-encoder + duration predictor), the five
-NSS-only bf16 partB vocoder vmfbs (1/2/4/6/8 s windows) and the voice config that
+Pulls, per voice, partA (the ORT/CPU text-encoder + duration predictor), the
+NSS-only bf16 partB vocoder vmfbs (one per window in ``Voice.windows``) and the voice config that
 carries the phoneme->id map, plus the espeak-ng phonemizer assets shared by all
 voices, from ``Synaptics/Piper-TTS`` into the shared ``models/`` dir. The espeak
 data tarball is unpacked and the phonemizer daemon made executable on first
@@ -24,7 +24,6 @@ from utils.download import (DownloadError, base_dir_for, default_models_dir, dow
 logger = logging.getLogger("piper_tts.setup")
 
 PIPER_REPO_ID: Final[str] = "Synaptics/Piper-TTS"
-WINDOWS: Final[tuple[int, ...]] = (1, 2, 4, 6, 8)
 
 # espeak ships the daemon binary plus its dictionaries (unpacked below); one copy
 # covers every language, so a voice adds no phonemizer assets.
@@ -38,7 +37,7 @@ def voice_files(voice: Voice) -> tuple[str, ...]:
     count, so the vocoder window is known before partB runs.
     """
     return (voice.asset("onnx", "partA.onnx"),
-            *(voice.asset("vmfb", f"partB_static_{s}s.vmfb") for s in WINDOWS),
+            *(voice.asset("vmfb", f"partB_static_{s:g}s.vmfb") for s in voice.windows),
             voice.asset("voice", voice.config_name))
 
 
