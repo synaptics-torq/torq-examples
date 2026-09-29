@@ -43,6 +43,8 @@ class Gemma3Static(DecoderOnlyLLMRunner):
         sys_prompt: str | None = None,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
+        prefill_model_path: str | os.PathLike | None = None,
+        disable_prefill: bool = False,
     ):
         self._instruct_model = instruct_model
         self._sys_prompt = (sys_prompt or DEFAULT_SYS_PROMPT) if instruct_model else None
@@ -59,6 +61,8 @@ class Gemma3Static(DecoderOnlyLLMRunner):
             device_io=device_io,
             lm_head_path=lm_head_path,
             disable_lm_head=disable_lm_head,
+            prefill_model_path=prefill_model_path,
+            disable_prefill=disable_prefill,
         )
 
     @property

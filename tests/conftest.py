@@ -10,12 +10,15 @@ before pytest collects and imports the test modules:
    and ``moonshine.*`` resolve regardless of the directory pytest runs from.
 2. Lightweight stand-ins are installed for the heavy optional dependencies
    (numpy, torq, iree, tokenizers, ml_dtypes) that ``utils.llm``,
-   ``utils.inference`` and ``gemma3.src.runner`` import at module load. These
-   are unavailable on the host CI runner, and the pure-Python logic under test
-   does not exercise them. The stubs are only installed when the real package
-   is absent, so they never shadow a genuine install.
+   ``utils.inference`` and ``gemma3.src.runner`` import at module load. The
+   board-specific runtime (``torq``/``iree``) is unavailable on the host CI
+   runner and the pure-Python logic under test does not exercise it. Each
+   stub is installed only when the real package cannot be imported, so it
+   never shadows a genuine install (numpy/tokenizers/ml_dtypes run for real
+   where present).
 """
 
+import importlib
 import sys
 import types
 from pathlib import Path
@@ -25,8 +28,18 @@ if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
 
 
+def _importable(name: str) -> bool:
+    try:
+        importlib.import_module(name)
+    except Exception:
+        # Broken native extensions can raise anything at import time;
+        # for stub purposes that is equivalent to "not installed".
+        return False
+    return True
+
+
 def _install_runner_import_stubs() -> None:
-    if "numpy" not in sys.modules:
+    if not _importable("numpy"):
         numpy = types.ModuleType("numpy")
 
         class ndarray:
@@ -36,6 +49,8 @@ def _install_runner_import_stubs() -> None:
         numpy.typing = types.ModuleType("numpy.typing")
         sys.modules["numpy"] = numpy
         sys.modules["numpy.typing"] = numpy.typing
+    elif "numpy.typing" not in sys.modules:
+        import numpy.typing  # noqa: F401
 
     if "numpy.typing" not in sys.modules:
         numpy_typing = types.ModuleType("numpy.typing")
@@ -51,7 +66,7 @@ def _install_runner_import_stubs() -> None:
 
         sys.modules["numpy.typing"].NDArray = NDArray
 
-    if "torq.runtime" not in sys.modules:
+    if not _importable("torq.runtime"):
         torq = types.ModuleType("torq")
         runtime = types.ModuleType("torq.runtime")
         runtime_utils = types.ModuleType("torq.runtime.utils")
@@ -73,7 +88,7 @@ def _install_runner_import_stubs() -> None:
         sys.modules["torq.runtime"] = runtime
         sys.modules["torq.runtime.utils"] = runtime_utils
 
-    if "iree.runtime" not in sys.modules:
+    if not _importable("iree.runtime"):
         iree = types.ModuleType("iree")
         runtime = types.ModuleType("iree.runtime")
 
@@ -85,7 +100,7 @@ def _install_runner_import_stubs() -> None:
         sys.modules["iree"] = iree
         sys.modules["iree.runtime"] = runtime
 
-    if "tokenizers" not in sys.modules:
+    if not _importable("tokenizers"):
         tokenizers = types.ModuleType("tokenizers")
 
         class Tokenizer:
@@ -94,7 +109,7 @@ def _install_runner_import_stubs() -> None:
         tokenizers.Tokenizer = Tokenizer
         sys.modules["tokenizers"] = tokenizers
 
-    if "ml_dtypes" not in sys.modules:
+    if not _importable("ml_dtypes"):
         ml_dtypes = types.ModuleType("ml_dtypes")
         ml_dtypes.bfloat16 = object()
         sys.modules["ml_dtypes"] = ml_dtypes
