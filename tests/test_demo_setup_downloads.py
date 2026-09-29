@@ -1101,7 +1101,7 @@ def test_gemma_prefill_retracked_with_flag_when_file_present(tmp_path):
 
 
 def test_gemma_prefill_added_to_complete_copy_with_flag(tmp_path):
-    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    """``--with-batch-prefill`` on an already-complete copy fetches only the prefill build."""
     base_dir = tmp_path
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
 
@@ -1117,7 +1117,7 @@ def test_gemma_prefill_added_to_complete_copy_with_flag(tmp_path):
 
 
 def test_gemma_prefill_flag_warns_on_complete_copy_when_repo_lacks_prefill(tmp_path, caplog):
-    """``--with-prefill`` on a complete copy of a repo without a prefill model:
+    """``--with-batch-prefill`` on a complete copy of a repo without a prefill model:
     warning, no download, manifest unchanged."""
     base_dir = tmp_path
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
@@ -1450,7 +1450,7 @@ def test_liquid_prefill_untracking_persists_across_setup_runs(tmp_path):
 
 
 def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
-    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    """``--with-batch-prefill`` on an already-complete copy fetches only the prefill build."""
     base_dir = tmp_path
     repo_id = liquid_setup._HF_REPO_MAP["230m"]
 
@@ -1520,7 +1520,7 @@ def test_prefill_is_opt_in_per_demo():
 
 
 def test_demo_main_prefill_flag_only_when_opted_in():
-    """``demo_main`` exposes ``--with-prefill`` (and forwards ``enable_prefill``)
+    """``demo_main`` exposes ``--with-batch-prefill`` (and forwards ``enable_prefill``)
     only for demos that pass ``supports_prefill=True``."""
     calls: list[dict] = []
 
@@ -1528,7 +1528,7 @@ def test_demo_main_prefill_flag_only_when_opted_in():
         calls.append(kwargs)
 
     # Opted in: the flag is accepted and forwarded.
-    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-batch-prefill"]):
         model_setup.demo_main(
             fake_setup,
             description="d",
@@ -1540,7 +1540,7 @@ def test_demo_main_prefill_flag_only_when_opted_in():
 
     # Not opted in: the flag is unknown and setup_fn never runs.
     calls.clear()
-    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-batch-prefill"]):
         with pytest.raises(SystemExit):
             model_setup.demo_main(
                 fake_setup, description="d", default_models=[], repo_map={}
@@ -1577,6 +1577,6 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
     )
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert any(
-        "--with-prefill" in r.getMessage() and "moonshine" in r.getMessage()
+        "--with-batch-prefill" in r.getMessage() and "moonshine" in r.getMessage()
         for r in warnings
     )

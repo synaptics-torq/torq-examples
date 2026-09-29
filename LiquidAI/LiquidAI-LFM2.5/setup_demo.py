@@ -145,7 +145,7 @@ def _download_liquid(
             manifest_files.append(_LIQUID_PREFILL_FILENAME)
         elif enable_prefill:
             logger.warning(
-                "--with-prefill: no %s in %s; continuing without a batched "
+                "--with-batch-prefill: no %s in %s; continuing without a batched "
                 "prefill model.", _LIQUID_PREFILL_FILENAME, repo_id,
             )
     return manifest_files
@@ -216,7 +216,7 @@ def setup_liquid(
         models = _DEFAULT_MODELS
 
     def _tracked_complete(model_dir: Path) -> bool:
-        """A complete copy — plus, with ``--with-prefill``, a prefill model that is
+        """A complete copy — plus, with ``--with-batch-prefill``, a prefill model that is
         tracked or at least present locally. The download hook is incremental
         (``download_from_hf`` skips existing files), so marking a complete copy
         incomplete only fetches the missing prefill build, or warns when the

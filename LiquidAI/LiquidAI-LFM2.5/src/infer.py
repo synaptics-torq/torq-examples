@@ -69,8 +69,8 @@ def main(args: argparse.Namespace):
         device_io=args.device_io,
         lm_head_path=args.lm_head,
         disable_lm_head=args.no_lm_head,
-        prefill_model_path=args.prefill_model,
-        disable_prefill=args.no_prefill_model,
+        prefill_model_path=args.batch_prefill_model,
+        disable_prefill=args.no_batch_prefill_model,
     )
     try:
         while True:
@@ -143,7 +143,7 @@ if __name__ == "__main__":
     )
     prefill_group = parser.add_mutually_exclusive_group()
     prefill_group.add_argument(
-        "--prefill-model", type=str, default=None, metavar="PATH",
+        "--batch-prefill-model", type=str, default=None, metavar="PATH",
         help=(
             "Path to a batched prefill .vmfb that runs complete fixed-size "
             "prompt chunks. Overrides sibling prefill model auto-discovery. "
@@ -152,7 +152,7 @@ if __name__ == "__main__":
         ),
     )
     prefill_group.add_argument(
-        "--no-prefill-model", action="store_true", default=False,
+        "--no-batch-prefill-model", action="store_true", default=False,
         help=(
             "Disable sibling batched prefill model auto-discovery and prefill "
             "the prompt with single-token decode steps only."

@@ -113,7 +113,7 @@ def discover_prefill_model_path(model_path: str | os.PathLike) -> Path | None:
     candidate_list = ", ".join(str(path) for path in candidates)
     raise ValueError(
         "Found multiple batched prefill candidates next to model. "
-        f"Please pass --prefill-model explicitly. Candidates: {candidate_list}"
+        f"Please pass --batch-prefill-model explicitly. Candidates: {candidate_list}"
     )
 
 
@@ -127,7 +127,7 @@ def resolve_prefill_model_path(
     """Resolve explicit, disabled, or auto-discovered prefill model selection."""
     if prefill_model_path is not None and disable_prefill:
         raise ValueError(
-            "--prefill-model and --no-prefill-model cannot be used together."
+            "--batch-prefill-model and --no-batch-prefill-model cannot be used together."
         )
     if prefill_model_path is not None:
         return Path(prefill_model_path)
@@ -541,7 +541,7 @@ class DecoderOnlyLLMRunner(ABC):
                 "decode model. Pass the decode model (e.g. "
                 "'transformer.vmfb') via -m, and provide the batched build "
                 "as a sibling 'transformer_prefill.vmfb' or via "
-                "--prefill-model."
+                "--batch-prefill-model."
             )
 
     def _query_model_seq_len(self) -> int | None:

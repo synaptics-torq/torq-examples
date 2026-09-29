@@ -266,7 +266,7 @@ def sync_prefill_tracking(
     *,
     enable_prefill: bool,
 ) -> None:
-    """Align a tracked copy's manifest with the ``--with-prefill`` flag.
+    """Align a tracked copy's manifest with the ``--with-batch-prefill`` flag.
 
     The download hooks only run when something needs to be fetched, so an
     already-complete copy would otherwise keep its manifest as-is: this
@@ -289,7 +289,7 @@ def sync_prefill_tracking(
                 version=manifest.get("version"), revision=manifest.get("revision"),
             )
             logger.info(
-                "Tracking existing %s in %s; run setup without --with-prefill "
+                "Tracking existing %s in %s; run setup without --with-batch-prefill "
                 "to stop tracking it.", prefill_filename, model_dir,
             )
     elif prefill_filename in files:
@@ -300,7 +300,7 @@ def sync_prefill_tracking(
         )
         logger.info(
             "No longer tracking %s in %s; the local file is kept but will not "
-            "be checked or refreshed. Run setup with --with-prefill to track "
+            "be checked or refreshed. Run setup with --with-batch-prefill to track "
             "it again.", prefill_filename, model_dir,
         )
 
@@ -357,7 +357,7 @@ def demo_main(
     ``setup_fn(models, model_version=..., no_update=...)``.
 
     Demos with an optional batched prefill model pass
-    ``supports_prefill=True`` to also expose ``--with-prefill`` and forward it to
+    ``supports_prefill=True`` to also expose ``--with-batch-prefill`` and forward it to
     ``setup_fn`` as ``enable_prefill``; all other demos keep the plain
     interface and never see the flag.
     """
@@ -372,7 +372,7 @@ def demo_main(
     parser.add_argument("--no-update", action="store_true", help=_NO_UPDATE_HELP)
     if supports_prefill:
         parser.add_argument(
-            "--with-prefill", action="store_true", default=False,
+            "--with-batch-prefill", action="store_true", default=False,
             help=(
                 "Also download and track the optional batched prefill model "
                 "(transformer_prefill.vmfb). It is an extra model, so it uses "
@@ -392,7 +392,7 @@ def demo_main(
             "no_update": args.no_update,
         }
         if supports_prefill:
-            kwargs["enable_prefill"] = args.with_prefill
+            kwargs["enable_prefill"] = args.with_batch_prefill
         setup_fn(args.models, **kwargs)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
