@@ -6,7 +6,7 @@
 Import it, load the models once, then encode images and ask questions:
 
     import sys
-    sys.path.insert(0, "<repo>/LiquidAI/LiquidAI-LFM2-VL-450M-INT8/src")
+    sys.path.insert(0, "<repo>/LiquidAI/LiquidAI-LFM2-VL-450M/src")
     from lfm2vl import load_models
 
     vl = load_models("/path/to/models")        # dmabuf, all models co-resident,
