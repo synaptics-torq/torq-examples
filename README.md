@@ -26,11 +26,9 @@ Requires Python 3.
 
     ```sh
     python3 -m venv .venv --system-site-packages
-   
+
     source .venv/bin/activate
-    pip install torq-runtime
-   
-   pip install -r requirements.txt
+    pip install -r requirements.txt
     ```
 
 2. Additionally, install any demo-specific dependencies:
