@@ -36,7 +36,8 @@ from pathlib import Path
 
 from gemma3.setup_demo import local_gemma3_model_path
 from runner import Gemma3Static
-from utils.log import add_logging_args, configure_logging
+from utils.inference import add_llm_inference_args
+from utils.log import configure_logging
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -452,21 +453,13 @@ if __name__ == "__main__":
         choices=list(VALIDATORS),
         help="Validation mode (default: %(default)s)",
     )
-    parser.add_argument(
-        "-m", "--model", type=str, default=None,
-        help="Path to VMFB model (default: the one setup_demo.py downloaded)",
-    )
-    lm_head_group = parser.add_mutually_exclusive_group()
-    lm_head_group.add_argument(
-        "--lm-head", type=str, default=None, metavar="PATH",
-        help=(
-            "Path to a separately compiled LM head .vmfb. "
-            "Overrides sibling LM head auto-discovery."
-        ),
-    )
-    lm_head_group.add_argument(
-        "--no-lm-head", action="store_true", default=False,
-        help="Disable sibling LM head auto-discovery and run only --model.",
+    add_llm_inference_args(
+        parser,
+        with_prefill=False,
+        with_max_gen_tokens=False,
+        with_sampling=False,
+        with_allocator=False,
+        with_no_refresh=False,
     )
     parser.add_argument(
         "--dataset", type=str, default=str(DEFAULT_DATASET),
@@ -504,55 +497,6 @@ if __name__ == "__main__":
             "If omitted, uses built-in 3-shot examples (only for en-es)."
         ),
     )
-    inference_group = parser.add_argument_group("inference")
-    inference_group.add_argument(
-        "--max-seq-len", type=int, default=None,
-        help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
-    )
-    inference_group.add_argument(
-        "--max-inp-len", type=int,
-        help="Maximum prompt token length",
-    )
-    inference_group.add_argument(
-        "--instruct-model", action="store_true", default=False,
-        help="Is instruct model",
-    )
-    inference_group.add_argument(
-        "-j", "--threads", type=int,
-        help="Number of cores to use for CPU execution (default: all)",
-    )
-    inference_group.add_argument(
-        "--kv-cache-window",
-        type=int,
-        default=2,
-        metavar="N",
-        help=(
-            "Enable sliding-window KV cache: when the cache is full, keep the most "
-            "recent N entries and discard older ones before continuing generation "
-            "(default: %(default)s)"
-        ),
-    )
-    inference_group.add_argument(
-        "--no-kv-cache-window",
-        action="store_true",
-        default=False,
-        help=(
-            "Disable sliding-window KV cache behavior. "
-            "Once the KV cache reaches its maximum length, no further tokens can be generated."
-        ),
-    )
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime. "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
-    )
-    add_logging_args(parser)
     args = parser.parse_args()
     if args.model is None:
         local_model = local_gemma3_model_path()

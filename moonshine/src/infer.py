@@ -12,7 +12,8 @@ from tokenizers import Tokenizer
 
 from runner import MoonshineRunner
 from moonshine.setup_demo import ensure_moonshine_models, local_moonshine_model_dir
-from utils.log import add_logging_args, configure_logging
+from utils.inference import add_common_inference_args
+from utils.log import configure_logging
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 
 GREEN = "\033[32m"
@@ -109,42 +110,11 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Path to tokenizer.json (default: auto-detect in model dir)",
     )
-    parser.add_argument(
-        "-j",
-        "--threads",
-        type=int,
-        help="Number of cores to use for CPU execution (default: all)",
-    )
-    parser.add_argument(
-        "--no-refresh",
-        action="store_true",
-        default=False,
-        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
-    )
-    add_logging_args(parser)
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--tda",
-        type=str,
-        choices=["cpu", "dmabuf"],
-        default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    runtime_group.add_argument(
-        "--device-io",
-        action=argparse.BooleanOptionalAction,
-        default=False,
-        help="Preallocate encoder input and keep encoder outputs as device arrays (default: disabled)",
-    )
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime. "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
+    add_common_inference_args(
+        parser,
+        tda_default="cpu",
+        device_io_default=False,
+        device_io_help="Preallocate encoder input and keep encoder outputs as device arrays (default: disabled)",
     )
     args = parser.parse_args()
     if args.model_dir is None:

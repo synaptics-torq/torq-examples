@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sized
+from collections.abc import Iterator, Sized
 from pathlib import Path
 from typing import Final
 
@@ -16,18 +16,13 @@ import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
 
-from utils.inference import ManagedSelfAttnCacheRunner, SplitLMHeadRunner
-
-StopCheck = Callable[[], bool]
-
-
-class InferenceInterrupted(Exception):
-    """Raised when interactive inference is cancelled by the user."""
-
-
-def _raise_if_stopped(should_stop: StopCheck | None) -> None:
-    if should_stop is not None and should_stop():
-        raise InferenceInterrupted
+from utils.inference import (
+    InferenceInterrupted,
+    ManagedSelfAttnCacheRunner,
+    SplitLMHeadRunner,
+    StopCheck,
+    _raise_if_stopped,
+)
 
 
 _SIDECAR_SUFFIXES: Final[frozenset[str]] = frozenset(
@@ -225,6 +220,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_max_prompt_tokens",
         "_max_seq_len",
         "_max_user_tokens",
+        "_max_gen_tokens",
         "_temperature",
         "_top_p",
         "_top_k",
@@ -262,6 +258,7 @@ class DecoderOnlyLLMRunner(ABC):
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
+        max_gen_tokens: int | None = None,
         runtime_flags: list[str] | None = None,
         device_io: bool = False,
         lm_head_path: str | os.PathLike | None = None,
@@ -335,6 +332,7 @@ class DecoderOnlyLLMRunner(ABC):
         self._max_prompt_tokens = max_prompt_tokens
         self._max_seq_len = max_seq_len
         self._max_user_tokens = None
+        self._max_gen_tokens = max_gen_tokens
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
@@ -989,6 +987,11 @@ class DecoderOnlyLLMRunner(ABC):
             gen = [next_tok]
             while not self._should_stop(next_tok, gen):
                 _raise_if_stopped(should_stop)
+                if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
+                    self._logger.info(
+                        "Max generation tokens reached (%d)", self._max_gen_tokens
+                    )
+                    break
                 if pos >= self._max_seq_len:
                     if self._cache_keep_n is not None:
                         self._model.shift_kv(

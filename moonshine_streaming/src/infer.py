@@ -31,7 +31,8 @@ from moonshine_streaming.setup_demo import (
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
-from utils.log import add_logging_args, configure_logging
+from utils.inference import add_common_inference_args
+from utils.log import configure_logging
 from utils.npu import configure_npu_userspace_frequency
 
 logger = logging.getLogger("moonshine_streaming")
@@ -440,19 +441,7 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
-    parser.add_argument("--no-refresh",    action="store_true", default=False, help="Skip the Hugging Face check for updated models (offline/airgapped runs)")
-    add_logging_args(parser)
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime (e.g. --torq_hw_type=sim). "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
-    )
+    add_common_inference_args(parser, with_threads=False, with_allocator=False)
     args = parser.parse_args()
     if args.model_dir is None:
         local_dir = local_moonshine_streaming_model_dir()
