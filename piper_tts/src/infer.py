@@ -25,7 +25,7 @@ from piper_tts.piper_core.phonemize import Phonemizer
 from piper_tts.piper_core.pipeline import PiperTTS
 from piper_tts.piper_core.voices import DEFAULT_VOICE, VOICES, get_voice
 from piper_tts.setup_demo import ensure_piper_models
-from utils.npu import enable_npu_clock
+from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_for_inference
 
 
 def wrapped(text, prefix="  ", hang=None):
@@ -148,6 +148,8 @@ def main():
     p.add_argument("--model-dir", default=None, help="Asset dir (default: models/Synaptics/Piper-TTS).")
     p.add_argument("--device", default="torq", help="IREE device URI for the vocoder (default: %(default)s).")
     p.add_argument("--no-refresh", action="store_true", help="Skip the Hugging Face update check (offline).")
+    p.add_argument("--tda", choices=["cpu", "dmabuf"], default="cpu",
+                   help="Torq device allocator for the vocoder (default: %(default)s).")
     p.add_argument("--quiet", action="store_true", help="Suppress per-utterance timing lines.")
     args = p.parse_args()
 
@@ -167,13 +169,13 @@ def main():
 
     text = resolve_text(p, args, voice)   # validate input before the slow model load
     model_dir = ensure_piper_models(args.model_dir, refresh=not args.no_refresh, voice=voice)
-    ok, message = enable_npu_clock()
-    print(f"[NPU] {message}")
+    setup_npu_for_inference()
 
     print(f"Loading {voice.language} (partA on CPU, partB windows on NPU, espeak resident)...")
     tts = PiperTTS(model_dir, voice=voice, device_uri=args.device, threads=args.threads,
                    length_scale=args.length_scale, speaker=args.speaker,
-                   audio_device=args.audio_device, dac_rate=args.dac_rate)
+                   audio_device=args.audio_device, dac_rate=args.dac_rate,
+                   runtime_flags=build_runtime_flags(args.tda))
     phon = Phonemizer(model_dir, voice)
     print(f"  partA {tts.load_s['partA']:.1f} s | partB {len(tts.windows)} windows "
           f"({', '.join(f'{round(w * 256 / tts.sr, 1):g}s' for w in tts.sizes)}) {tts.load_s['partB']:.1f} s | "
@@ -190,6 +192,7 @@ def main():
                 sys.exit(1)
     finally:
         phon.close(), tts.close()
+        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":

@@ -74,7 +74,7 @@ class PiperTTS:
     """Load partA (CPU) + the partB window vmfbs (NPU) once, synthesize many times."""
 
     def __init__(self, model_dir, *, voice=None, device_uri="torq", threads=2, length_scale=1.0,
-                 speaker=0, audio_device=None, dac_rate=48000, dac_channels=2):
+                 speaker=0, audio_device=None, dac_rate=48000, dac_channels=2, runtime_flags=None):
         d = Path(model_dir)
         self.voice = voice if voice is not None else get_voice()
         config = json.loads((d / self.voice.asset("voice", self.voice.config_name)).read_text())
@@ -102,7 +102,7 @@ class PiperTTS:
         self.windows = {}
         vmfb_dir = d / self.voice.asset("vmfb")
         for p in sorted(vmfb_dir.glob("partB_static_*s.vmfb")):
-            r = VMFBInferenceRunner(str(p), device_uri=device_uri)
+            r = VMFBInferenceRunner(str(p), device_uri=device_uri, runtime_flags=runtime_flags)
             self.windows[r.inputs_info[0].shape[2]] = r
         if not self.windows:
             raise FileNotFoundError(f"no partB vmfbs found in {vmfb_dir}")

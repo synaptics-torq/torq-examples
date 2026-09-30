@@ -1512,37 +1512,56 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
         "--with-prefill" in r.getMessage() and "moonshine" in r.getMessage()
         for r in warnings
     )
-def _piper_env(base_dir, revision):
+
+
+def _piper_patches(base_dir, revision):
     from piper_tts import setup_demo as piper_setup
 
+    unpack = lambda d: (Path(d) / "espeak" / "espeak-ng-data").mkdir(parents=True, exist_ok=True)
     return piper_setup, (
-        mock.patch.object(piper_setup, "get_hf_revision", return_value=revision),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=revision),
         mock.patch.object(piper_setup, "download_from_hf", side_effect=_fake_download(base_dir)),
-        mock.patch.object(piper_setup, "_unpack_espeak",
-                          side_effect=lambda d: (d / "espeak" / "espeak-ng-data").mkdir(parents=True, exist_ok=True)),
+        mock.patch.object(piper_setup, "_unpack_espeak", side_effect=unpack),
+        mock.patch.object(piper_setup, "check_requirements"),
     )
 
 
-def test_piper_voices_accumulate_and_refresh_on_new_revision(tmp_path):
+def test_piper_voices_track_examples_version_and_accumulate(tmp_path):
     from piper_tts.piper_core.voices import get_voice
+    from utils.version import examples_version
 
     en, es = get_voice("en_US-libritts_r-medium"), get_voice("es_MX-ald-medium")
-    piper_setup, patches = _piper_env(tmp_path, "rev1")
+    piper_setup, patches = _piper_patches(tmp_path, "sha1")
     model_dir = tmp_path / piper_setup.PIPER_REPO_ID
-    with patches[0], patches[1] as download, patches[2]:
-        piper_setup.ensure_piper_models(model_dir, voice=en)
-        piper_setup.ensure_piper_models(model_dir, voice=es)   # second voice: added, not replacing
-        files = json.loads((model_dir / ".manifest.json").read_text())["files"]
-        assert set(piper_setup.voice_files(en)) | set(piper_setup.voice_files(es)) <= set(files)
+    with patches[0], patches[1] as download, patches[2], patches[3]:
+        piper_setup.download_piper([en.key], base_dir=tmp_path)
+        assert {c.kwargs["revision"] for c in download.call_args_list} == {examples_version()}
+        piper_setup.ensure_piper_models(model_dir, voice=es)      # new voice: added, not replacing
+        manifest = json.loads((model_dir / ".manifest.json").read_text())
+        assert manifest["version"] == examples_version()
+        assert set(piper_setup.voice_files(en)) | set(piper_setup.voice_files(es)) <= set(manifest["files"])
         calls = download.call_count
-        piper_setup.ensure_piper_models(model_dir, voice=en)   # up to date: nothing fetched
+        piper_setup.ensure_piper_models(model_dir, voice=en)      # up to date: nothing fetched
         assert download.call_count == calls
 
-    piper_setup, patches = _piper_env(tmp_path, "rev2")
+    piper_setup, patches = _piper_patches(tmp_path, "sha2")       # the tag moved upstream
     (model_dir / es.asset("vmfb", "partB_static_4s.vmfb")).write_text("old")
-    with patches[0], patches[1], patches[2]:
-        piper_setup.ensure_piper_models(model_dir, voice=en)   # new revision: cleared, re-fetched
+    with patches[0], patches[1], patches[2], patches[3]:
+        piper_setup.ensure_piper_models(model_dir, voice=en)
     manifest = json.loads((model_dir / ".manifest.json").read_text())
-    assert manifest["revision"] == "rev2"
+    assert manifest["revision"] == "sha2"
     assert not (model_dir / es.asset("vmfb", "partB_static_4s.vmfb")).exists()
     assert set(manifest["files"]) == set(piper_setup.voice_files(en)) | set(piper_setup.ESPEAK_FILES)
+
+
+def test_piper_first_run_downloads_the_requested_voice(tmp_path):
+    from piper_tts.piper_core.voices import get_voice
+
+    lessac = get_voice("en_US-lessac-low")
+    piper_setup, patches = _piper_patches(tmp_path, "sha1")
+    model_dir = tmp_path / piper_setup.PIPER_REPO_ID
+    with patches[0], patches[1] as download, patches[2], patches[3]:
+        piper_setup.ensure_piper_models(model_dir, voice=lessac)
+    fetched = {c.args[1] for c in download.call_args_list}
+    assert fetched == set(piper_setup.voice_files(lessac)) | set(piper_setup.ESPEAK_FILES)
+    assert "en_US-lessac-low/vmfb/partB_static_1.5s.vmfb" in fetched

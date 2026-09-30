@@ -36,7 +36,15 @@ python setup_demos.py piper_tts
 ```
 
 This verifies the demo's Python dependencies and downloads the assets from
-Hugging Face ([`Synaptics/Piper-TTS`](https://huggingface.co/Synaptics/Piper-TTS)).
+Hugging Face ([`Synaptics/Piper-TTS`](https://huggingface.co/Synaptics/Piper-TTS))
+at the tag matching this checkout's `VERSION` (e.g. `v2.2.0`), like every demo in
+this repo. To fetch only some voices or pin another version, use the demo's own
+setup script:
+
+```sh
+python piper_tts/setup_demo.py en_US-lessac-low                   # one voice
+python piper_tts/setup_demo.py --model-version v2.2.0             # all voices, pinned
+```
 
 Downloaded assets are stored at:
 
@@ -64,9 +72,9 @@ and falls back to the ALSA `default` device; override with `--audio-device`.
 
 ## Running
 
-Run the demo from the `piper_tts` directory. The first run downloads the assets
-automatically, and later runs re-download them when the Hugging Face repo has
-been updated; pass `--no-refresh` for fully offline runs.
+Run the demo from the `piper_tts` directory. A voice that isn't on disk yet is
+downloaded on first use (at this checkout's version), and downloaded voices are
+kept in sync with that version's tag; pass `--no-refresh` for fully offline runs.
 
 ```sh
 cd piper_tts
@@ -126,6 +134,10 @@ Options:
   utterance does not scale. `1.36` gives about +20% on typical text.
 - `--threads N` — onnxruntime threads for partA (default 2, the board's core count).
 - `--device URI` — IREE device for the vocoder (default `torq`).
+- `--tda {cpu,dmabuf}` — Torq device allocator for the vocoder (default `cpu`).
+  `cpu` is the validated setting; on boards whose NPU driver predates the
+  `dmabuf` allocator it is the only one that runs (`dmabuf` fails there with
+  `failed to writeXram()`).
 - `--model-dir DIR` — asset dir (default `models/Synaptics/Piper-TTS`).
 - `--no-refresh` — skip Hugging Face entirely and run against the assets already
   on disk. Anything missing is named in the error instead of being fetched, which
