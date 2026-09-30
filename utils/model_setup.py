@@ -31,6 +31,7 @@ from utils.download import (
     base_dir_for,
     default_models_dir,
     ensure_model,
+    get_hf_file_info,
     get_hf_revision,
     read_manifest,
     resolve_repo_id,
@@ -281,12 +282,23 @@ def sync_prefill_tracking(
     if manifest is None:
         return
     files = list(manifest.get("files", []))
+    file_info = manifest.get("file_info")
     if enable_prefill:
         if prefill_filename not in files and (model_dir / prefill_filename).exists():
             files.append(prefill_filename)
+            if file_info:
+                # Track the newly added file too, so a future tag move can
+                # refresh it per-file.
+                extra = get_hf_file_info(
+                    repo_id, revision=manifest.get("revision"),
+                    filenames={prefill_filename},
+                )
+                if extra:
+                    file_info = {**file_info, **extra}
             write_manifest(
                 model_dir, repo_id, files,
                 version=manifest.get("version"), revision=manifest.get("revision"),
+                file_info=file_info,
             )
             logger.info(
                 "Tracking existing %s in %s; run setup without --with-batch-prefill "
@@ -294,9 +306,12 @@ def sync_prefill_tracking(
             )
     elif prefill_filename in files:
         files.remove(prefill_filename)
+        if file_info:
+            file_info = {name: info for name, info in file_info.items() if name != prefill_filename}
         write_manifest(
             model_dir, repo_id, files,
             version=manifest.get("version"), revision=manifest.get("revision"),
+            file_info=file_info,
         )
         logger.info(
             "No longer tracking %s in %s; the local file is kept but will not "
