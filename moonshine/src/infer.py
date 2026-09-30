@@ -11,7 +11,7 @@ import soundfile as sf
 from tokenizers import Tokenizer
 
 from runner import MoonshineRunner
-from moonshine.setup_demo import ensure_moonshine_models
+from moonshine.setup_demo import ensure_moonshine_models, local_moonshine_model_dir
 from utils.log import add_logging_args, configure_logging
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 
@@ -98,9 +98,9 @@ if __name__ == "__main__":
         "-m",
         "--model-dir",
         type=str,
-        required=True,
+        default=None,
         metavar="DIR",
-        help="Path to Moonshine model directory",
+        help="Path to Moonshine model directory (default: the one setup_demo.py downloaded)",
     )
     parser.add_argument(
         "--tokenizer",
@@ -146,4 +146,13 @@ if __name__ == "__main__":
             "Must be specified last; all remaining arguments are forwarded."
         ),
     )
-    main(parser.parse_args())
+    args = parser.parse_args()
+    if args.model_dir is None:
+        local_dir = local_moonshine_model_dir()
+        if local_dir is None:
+            parser.error(
+                "no local Moonshine model found; pass -m/--model-dir or run "
+                "`python setup_demos.py moonshine` from torq-examples root"
+            )
+        args.model_dir = str(local_dir)
+    main(args)

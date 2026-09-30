@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Final
 
 from utils.download import (
+    default_models_dir,
     download_from_hf,
     hf_file_exists,
     read_manifest,
@@ -175,6 +176,47 @@ def _liquid_files_present(model_dir: Path) -> bool:
         for filename in files
         if filename not in model_filenames
     )
+
+
+#: Main model file names in setup preference order; the first one present
+#: locally is what the demo's ``-m``/``--model`` defaults to.
+_LIQUID_MAIN_MODEL_FILENAMES: Final[tuple[str, ...]] = (
+    "transformer.vmfb",
+    "body.vmfb",
+    "model.vmfb",
+)
+
+
+def local_liquid_model_path(
+    model: str | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return a local main-model VMFB path to default ``-m``/``--model`` to.
+
+    With an explicit ``model`` (a built-in name or a raw HF repo id) only that
+    repo is looked up. Without one, the built-in repos are tried in repo-map
+    order and the first directory with a complete liquid file set wins, so the
+    demo defaults to whatever the setup downloaded. The main model file is
+    picked by preference order; a sibling ``lm_head.vmfb`` is auto-discovered
+    from its directory by the runner.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    base_dir = Path(base_dir)
+    if model is not None:
+        repo_ids = [resolve_repo_id(model, _HF_REPO_MAP)]
+    else:
+        repo_ids = list(dict.fromkeys(_HF_REPO_MAP.values()))
+    for repo_id in repo_ids:
+        model_dir = base_dir / repo_id
+        if not _has_liquid_files(model_dir):
+            continue
+        for filename in _LIQUID_MAIN_MODEL_FILENAMES:
+            candidate = model_dir / filename
+            if candidate.exists():
+                return candidate
+    return None
 
 
 def ensure_liquid_models(model_dir: str | Path, *, refresh: bool = True) -> None:

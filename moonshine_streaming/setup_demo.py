@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from utils.download import download_from_hf
+from utils.download import default_models_dir, download_from_hf, resolve_repo_id
 from utils.model_setup import demo_main, download_models, ensure_demo_models, setup_demo
 
 logger = logging.getLogger("moonshine_streaming.setup")
@@ -63,6 +63,30 @@ def download_moonshine_streaming(
         model_version=model_version,
         no_update=no_update,
     )
+
+
+def local_moonshine_streaming_model_dir(
+    model: str | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the local streaming model dir to default ``-m``/``--model-dir`` to.
+
+    The runner takes a model *directory*, so this returns the dir (not a file).
+    Looks for the complete required file set; with no ``model``, tries the
+    built-in repos in repo-map order.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    if model is not None:
+        repo_ids = [resolve_repo_id(model, _HF_REPO_MAP)]
+    else:
+        repo_ids = list(dict.fromkeys(_HF_REPO_MAP.values()))
+    for repo_id in repo_ids:
+        model_dir = Path(base_dir) / repo_id
+        if _has_required_files(model_dir):
+            return model_dir
+    return None
 
 
 def ensure_moonshine_streaming_models(

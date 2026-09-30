@@ -16,9 +16,10 @@ from utils.terminal import InferenceStopInput
 # import the module directly. Guarded so a missing setup_demo never breaks inference.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from setup_demo import ensure_liquid_models
+    from setup_demo import ensure_liquid_models, local_liquid_model_path
 except Exception:
     ensure_liquid_models = None
+    local_liquid_model_path = None
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
@@ -122,7 +123,8 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run LFM2.5 (Liquid) VMFB inference.")
     parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Path to VMFB model"
+        "-m", "--model", type=str, default=None,
+        help="Path to VMFB model (default: the one setup_demo.py downloaded)",
     )
     lm_head_group = parser.add_mutually_exclusive_group()
     lm_head_group.add_argument(
@@ -230,4 +232,13 @@ if __name__ == "__main__":
             "Must be specified last; all remaining arguments are forwarded."
         ),
     )
-    main(parser.parse_args())
+    args = parser.parse_args()
+    if args.model is None:
+        local_model = local_liquid_model_path() if local_liquid_model_path else None
+        if local_model is None:
+            parser.error(
+                "no local LiquidAI-LFM2.5 model found; pass -m/--model or run "
+                "`python setup_demos.py LiquidAI-LFM2.5` from torq-examples root"
+            )
+        args.model = str(local_model)
+    main(args)
