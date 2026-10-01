@@ -21,7 +21,7 @@ both signatures off the models rather than a table, so either shape just runs.
 
 Each run **writes a `.wav` file and plays it on the speaker**.
 
-On the SL2619 board this synthesizes **2.7–3.8× faster than real time** — about
+On the SL2619 board this synthesizes **2.7–3.9× faster than real time** — about
 **2× faster** than the same voice run entirely on the CPU.
 
 ## Setup
@@ -104,12 +104,12 @@ plays; the timing line follows — audio duration, which vocoder windows were us
 the time until the first sound reached the speaker, and the synthesis speed:
 
 ```
-[NPU] NPU clock enabled
-Loading (partA on CPU, partB windows on NPU, espeak resident)...
-  partA 5.9 s | partB 5 windows (1s, 2s, 4s, 6s, 8s) 0.7 s | speaker plughw:CARD=C1,DEV=0
+[NPU] NPU userspace max frequency applied
+Loading English (US) (partA on CPU, partB windows on NPU, espeak resident)...
+  partA 5.8 s | partB 5 windows (1s, 2s, 4s, 6s, 8s) 0.7 s | speaker plughw:CARD=C1,DEV=0
 
   "The morning train was late again. Nobody on the platform seemed surprised."
-  audio 3.05 s | windows 2s+2s | first sound 0.70 s | compute 1.16 s (2.64x real time) | saved tts_out.wav
+  audio 3.05 s | windows 2s+2s | first sound 0.81 s | compute 1.33 s (2.30x real time) | saved tts_out.wav
 ```
 
 Options:
@@ -208,19 +208,25 @@ median of 5 runs:
 
 | voice | audio | all-CPU onnxruntime | **CPU (partA) ‖ NPU (partB)** | speedup | first audio (CPU / NPU) |
 |---|---|---|---|---|---|
-| `en_US-libritts_r-medium` | 7.70 s | 5.62 s (1.37× RT) | **2.82 s (2.73× RT)** | **1.99×** | 0.94 s / **0.77 s** |
-| `en_US-lessac-low` | 9.82 s | 5.21 s (1.89× RT) | **2.59 s (3.79× RT)** | **2.01×** | 0.89 s / **0.66 s** |
-| `es_MX-ald-medium` | 12.63 s | 8.84 s (1.43× RT) | **4.05 s (3.12× RT)** | **2.18×** | 1.83 s / **1.37 s** |
+| `en_US-libritts_r-medium` | 7.70 s | 5.55 s (1.39× RT) | **2.83 s (2.72× RT)** | **1.96×** | 0.95 s / **0.77 s** |
+| `en_US-lessac-low` | 9.82 s | 5.25 s (1.87× RT) | **2.51 s (3.92× RT)** | **2.09×** | 0.89 s / **0.68 s** |
+| `es_MX-ald-medium` | 12.63 s | 8.66 s (1.46× RT) | **4.07 s (3.10× RT)** | **2.13×** | 1.81 s / **1.38 s** |
 
 The CPU is also left free during vocoding. The vocoder alone on the NPU, per window:
 
 | window | libritts / Spanish (22.05 kHz) | lessac-low (16 kHz) |
 |---|---|---|
 | 1 s | 170 ms (5.9× RT) | 126 ms (7.8× RT) |
+| 1.5 s | — | 186 ms (8.1× RT) |
 | 2 s | 335 ms (6.0× RT) | 249 ms (8.0× RT) |
+| 3 s | — | 365 ms (8.2× RT) |
 | 4 s | 688 ms (5.8× RT) | 497 ms (8.0× RT) |
+| 5 s | — | 628 ms (8.0× RT) |
 | 6 s | 1032 ms (5.8× RT) | 749 ms (8.0× RT) |
-| 8 s | 1200–1356 ms (5.9–6.7× RT) | 1027 ms (7.8× RT) |
+| 8 s | 1356 ms (5.9× RT) | 1027 ms (7.8× RT) |
+
+"—" = that voice ships no window of that length; libritts and Spanish time the same
+at every window.
 
 The 16 kHz voice has about 27% fewer vocoder frames per second of speech, which
 is why it is the fastest.
