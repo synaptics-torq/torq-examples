@@ -12,7 +12,6 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | [object_detection](object_detection/) | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
 | [LiquidAI-LFM2.5](LiquidAI/LiquidAI-LFM2.5/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
 | [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M (INT8) |
-| [LiquidAI-LFM2-VL-450M-old](LiquidAI/LiquidAI-LFM2-VL-450M-old/) | *(deprecated — kept for reference)* Image captioning / VLM with LiquidAI LFM2-VL-450M (bf16) |
 | [pose_estimation](pose_estimation/) | YOLOv8n pose estimation |
 | [Face_ID](Face_ID/) | Face detection on an image file |
 

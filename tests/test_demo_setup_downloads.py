@@ -1437,14 +1437,12 @@ def test_prefill_is_opt_in_per_demo():
     expose ``enable_prefill``; every other demo keeps the plain setup
     interface."""
     liquidvl_int8_setup = _load_setup_module("LiquidAI", "LiquidAI-LFM2-VL-450M")
-    liquidvl_old_setup = _load_setup_module("LiquidAI", "LiquidAI-LFM2-VL-450M-old")
     checks = [
         (gemma_setup.setup_gemma3, True),
         (liquid_setup.setup_liquid, True),
         (moonshine_setup.setup_moonshine, False),
         (moonshine_streaming_setup.setup_moonshine_streaming, False),
         (liquidvl_int8_setup.setup_liquidvl_int8, False),
-        (liquidvl_old_setup.setup_liquidvl, False),
         (object_detection_setup.setup_object_detection, False),
         (pose_setup.setup_pose_estimation, False),
     ]

@@ -28,7 +28,6 @@ DEMOS = [
     "moonshine",
     "moonshine_streaming",
     "LiquidAI-LFM2-VL-450M",
-    "LiquidAI-LFM2-VL-450M-old",
     "object_detection",
     "pose_estimation",
     "face_id",
@@ -113,9 +112,6 @@ def setup_demo(
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl_int8(["default"])
-        elif name == "LiquidAI-LFM2-VL-450M-old":
-            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M-old", "setup_demo.py")
-            _mod.setup_liquidvl(["default"], model_version=model_version, no_update=no_update)
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
             setup_object_detection(model_version=model_version, no_update=no_update)
