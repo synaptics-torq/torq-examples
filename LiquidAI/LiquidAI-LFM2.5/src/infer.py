@@ -6,41 +6,24 @@ import logging
 import sys
 from pathlib import Path
 
-from runner import LiquidStatic, InferenceInterrupted
-from utils.log import add_logging_args, configure_logging
-from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
-from utils.terminal import InferenceStopInput
+from runner import LiquidStatic
+from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
+from utils.log import configure_logging
+from utils.runtime import (
+    build_runtime_flags,
+    cleanup_npu_after_inference,
+    setup_npu_for_inference,
+)
 
 # The model-refresh helper lives one level up (the demo dir's setup_demo.py). The demo
 # dir name has a hyphen, so it is not importable as a package; add it to the path and
 # import the module directly. Guarded so a missing setup_demo never breaks inference.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from setup_demo import ensure_liquid_models
+    from setup_demo import ensure_liquid_models, local_liquid_model_path
 except Exception:
     ensure_liquid_models = None
-
-YELLOW = "\033[33m"
-RESET = "\033[0m"
-
-
-def _finish_interrupted_output(started_output: bool) -> None:
-    marker = f"{YELLOW}[Interrupt]{RESET}"
-    if started_output:
-        sys.stdout.write(f" {marker} \n")
-    else:
-        sys.stdout.write("\r" + " " * 80 + f"\r{marker} \n")
-    sys.stdout.flush()
-
-
-def _print_inference_stats(liquid: LiquidStatic) -> None:
-    decode_ms = liquid.last_infer_time - liquid.time_to_first_token
-    tps = liquid.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
-    print(
-        f"  ({liquid.last_infer_time:.0f} ms, "
-        f"TTFT: {liquid.time_to_first_token:.0f} ms, "
-        f"{tps:.1f} tok/s)\n"
-    )
+    local_liquid_model_path = None
 
 
 def main(args: argparse.Namespace):
@@ -54,7 +37,6 @@ def main(args: argparse.Namespace):
 
     setup_npu_for_inference()
 
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
     liquid = LiquidStatic(
         args.model,
         args.max_seq_len,
@@ -65,169 +47,35 @@ def main(args: argparse.Namespace):
         temperature=args.temperature,
         top_p=args.top_p,
         top_k=args.top_k,
-        runtime_flags=runtime_flags,
+        max_gen_tokens=args.max_gen_tokens,
+        runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
         device_io=args.device_io,
         lm_head_path=args.lm_head,
         disable_lm_head=args.no_lm_head,
-        prefill_model_path=args.prefill_model,
-        disable_prefill=args.no_prefill_model,
+        prefill_model_path=args.batch_prefill_model,
+        disable_prefill=args.no_batch_prefill_model,
     )
     try:
-        while True:
-            try:
-                inp = input("You (type 'exit' or 'quit' to stop): ").strip()
-            except EOFError:
-                break
-            if not inp:
-                continue
-            if inp.lower() in ("exit", "quit"):
-                break
-
-            if args.logging.upper() == "DEBUG":
-                started_output = False
-                try:
-                    with InferenceStopInput(sys.stdin) as should_stop:
-                        answer = liquid.run(inp, should_stop=should_stop)
-                    sys.stdout.write(f"Agent: {answer}")
-                    started_output = True
-                except (InferenceInterrupted, KeyboardInterrupt):
-                    _finish_interrupted_output(started_output)
-                    _print_inference_stats(liquid)
-                    continue
-            else:
-                sys.stdout.write('\033[2m[thinking...]\033[0m')
-                sys.stdout.flush()
-                first = True
-                started_output = False
-                try:
-                    with InferenceStopInput(sys.stdin) as should_stop:
-                        for chunk in liquid.run_stream(inp, should_stop=should_stop):
-                            if first:
-                                sys.stdout.write('\r' + ' ' * 40 + '\rAgent: ')
-                                first = False
-                                started_output = True
-                            sys.stdout.write(chunk)
-                            sys.stdout.flush()
-                except (InferenceInterrupted, KeyboardInterrupt):
-                    _finish_interrupted_output(started_output)
-                    _print_inference_stats(liquid)
-                    continue
-            _print_inference_stats(liquid)
-    except KeyboardInterrupt:
-        print()
+        run_chat_loop(
+            lambda text, should_stop: liquid.run(text, should_stop=should_stop),
+            liquid.run_stream,
+            lambda: print_llm_stats(liquid),
+            debug=args.logging.upper() == "DEBUG",
+        )
     finally:
         cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run LFM2.5 (Liquid) VMFB inference.")
-    parser.add_argument(
-        "-m", "--model", type=str, required=True, help="Path to VMFB model"
-    )
-    lm_head_group = parser.add_mutually_exclusive_group()
-    lm_head_group.add_argument(
-        "--lm-head", type=str, default=None, dest="lm_head", metavar="PATH",
-        help=(
-            "Path to a separately compiled LM head .vmfb. When set, -m is the "
-            "decoder body (hidden output) and the lm_head runs only when "
-            "sampling, so prefill tokens skip it. Overrides sibling LM head "
-            "auto-discovery."
-        ),
-    )
-    lm_head_group.add_argument(
-        "--no-lm-head", action="store_true", default=False,
-        help=(
-            "Disable sibling LM head auto-discovery and run only --model. "
-            "The model must then emit logits directly (fused build)."
-        ),
-    )
-    prefill_group = parser.add_mutually_exclusive_group()
-    prefill_group.add_argument(
-        "--prefill-model", type=str, default=None, metavar="PATH",
-        help=(
-            "Path to a batched prefill .vmfb that runs complete fixed-size "
-            "prompt chunks. Overrides sibling prefill model auto-discovery. "
-            "Requires a split LM head (--lm-head or sibling lm_head) unless "
-            "the prefill build has the head baked in."
-        ),
-    )
-    prefill_group.add_argument(
-        "--no-prefill-model", action="store_true", default=False,
-        help=(
-            "Disable sibling batched prefill model auto-discovery and prefill "
-            "the prompt with single-token decode steps only."
-        ),
-    )
-    parser.add_argument(
-        "--max-seq-len", type=int, default=None,
-        help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
-    )
-    parser.add_argument(
-        "--max-inp-len", type=int, help="Maximum input length"
-    )
-    parser.add_argument(
-        "--instruct-model", action="store_true", default=False,
-        help="Is instruct model",
-    )
-    parser.add_argument(
-        "-j", "--threads", type=int,
-        help="Number of cores to use for CPU execution (default: all)",
-    )
-    parser.add_argument(
-        "--no-refresh", action="store_true", default=False,
-        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
-    )
-    runtime_group = parser.add_argument_group("runtime")
-    add_logging_args(parser)
-    inference_group = parser.add_argument_group("inference")
-    inference_group.add_argument(
-        "--kv-cache-window", type=int, default=2, metavar="N",
-        help=(
-            "Enable sliding-window KV cache: when the cache is full, keep the most "
-            "recent N entries and discard older ones before continuing generation "
-            "(default: %(default)s)"
-        ),
-    )
-    inference_group.add_argument(
-        "--no-kv-cache-window", action="store_true", default=False,
-        help=(
-            "Disable sliding-window KV cache behavior. "
-            "Once the KV cache reaches its maximum length, no further tokens can be generated."
-        ),
-    )
-    inference_group.add_argument(
-        "--temperature", type=float, default=0.0,
-        help="Sampling temperature (0.0 = greedy) (default: %(default)s)",
-    )
-    inference_group.add_argument(
-        "--top-p", type=float, default=1.0,
-        help="Top-p (nucleus) sampling threshold (default: %(default)s)",
-    )
-    inference_group.add_argument(
-        "--top-k", type=int, default=64,
-        help="Top-k pre-filter size for sampling (default: %(default)s)",
-    )
-    runtime_group.add_argument(
-        "--tda",
-        type=str,
-        choices=["cpu", "dmabuf"],
-        default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    runtime_group.add_argument(
-        "--device-io",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
-    )
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime. "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
-    )
-    main(parser.parse_args())
+    add_llm_inference_args(parser)
+    args = parser.parse_args()
+    if args.model is None:
+        local_model = local_liquid_model_path() if local_liquid_model_path else None
+        if local_model is None:
+            parser.error(
+                "no local LiquidAI-LFM2.5 model found; pass -m/--model or run "
+                "`python setup_demos.py LiquidAI-LFM2.5` from torq-examples root"
+            )
+        args.model = str(local_model)
+    main(args)

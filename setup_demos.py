@@ -33,9 +33,9 @@ DEMOS = [
     "face_id",
 ]
 
-# Demos whose setup supports the --with-prefill flag (their models have a batched
-# prefill build). The flag is forwarded only to these; every other demo is
-# set up exactly as before and just gets a warning.
+# Demos whose setup supports the --with-batch-prefill flag (their models have a
+# batched prefill build). The flag is forwarded only to these; every other demo
+# is set up exactly as before and just gets a warning.
 _PREFILL_DEMOS: Final[frozenset[str]] = frozenset({"gemma3", "LiquidAI-LFM2.5"})
 
 
@@ -83,7 +83,7 @@ def setup_demo(
 ):
     if enable_prefill and name not in _PREFILL_DEMOS:
         logger.warning(
-            "--with-prefill has no effect for the '%s' demo (no batched prefill "
+            "--with-batch-prefill has no effect for the '%s' demo (no batched prefill "
             "model); ignoring.", name,
         )
     try:
@@ -117,7 +117,7 @@ def setup_demo(
             setup_object_detection(model_version=model_version, no_update=no_update)
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
-            setup_pose_estimation()
+            setup_pose_estimation(model_version=model_version, no_update=no_update)
         elif name == "face_id":
             from Face_ID.setup_demo import setup_face_id
             setup_face_id()
@@ -154,11 +154,13 @@ if __name__ == "__main__":
         action="store_true",
         help=(
             "Download without tracking: no .manifest.json is written, so the "
-            "models are never checked for updates or refreshed (at your own risk)."
+            "models are never checked for updates or refreshed (at your own "
+            "risk). Unless a version is pinned explicitly, the repo's latest "
+            "(HEAD) revision is downloaded."
         ),
     )
     parser.add_argument(
-        "--with-prefill",
+        "--with-batch-prefill",
         action="store_true",
         help=(
             "Also download and track the optional batched prefill model "
@@ -200,5 +202,5 @@ if __name__ == "__main__":
             name,
             model_version=args.model_version,
             no_update=args.no_update,
-            enable_prefill=args.with_prefill,
+            enable_prefill=args.with_batch_prefill,
         )

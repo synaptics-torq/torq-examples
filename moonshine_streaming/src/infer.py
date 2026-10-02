@@ -27,8 +27,12 @@ except ImportError:
     sys.exit(1)
 
 from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
-from moonshine_streaming.setup_demo import ensure_moonshine_streaming_models
-from utils.log import add_logging_args, configure_logging
+from moonshine_streaming.setup_demo import (
+    ensure_moonshine_streaming_models,
+    local_moonshine_streaming_model_dir,
+)
+from utils.inference import add_common_inference_args
+from utils.log import configure_logging
 from utils.npu import configure_npu_userspace_frequency
 
 logger = logging.getLogger("moonshine_streaming")
@@ -428,7 +432,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
     parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
-    parser.add_argument("-m", "--model-dir", type=str, required=True, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir")
+    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (default: the one setup_demo.py downloaded)")
     parser.add_argument("--vad-threshold", type=float, default=0.01,           help="VAD trigger threshold: RMS floor for the energy VAD (default: 0.010)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
@@ -437,17 +441,14 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
-    parser.add_argument("--no-refresh",    action="store_true", default=False, help="Skip the Hugging Face check for updated models (offline/airgapped runs)")
-    add_logging_args(parser)
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime (e.g. --torq_hw_type=sim). "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
-    )
-    main(parser.parse_args())
+    add_common_inference_args(parser, with_threads=False, with_allocator=False)
+    args = parser.parse_args()
+    if args.model_dir is None:
+        local_dir = local_moonshine_streaming_model_dir()
+        if local_dir is None:
+            parser.error(
+                "no local Moonshine streaming model found; pass -m/--model-dir or run "
+                "`python setup_demos.py moonshine_streaming` from torq-examples root"
+            )
+        args.model_dir = str(local_dir)
+    main(args)

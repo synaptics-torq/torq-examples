@@ -8,7 +8,7 @@ import logging
 import os
 import time
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterator, Sized
+from collections.abc import Iterator, Sized
 from pathlib import Path
 from typing import Final
 
@@ -16,18 +16,13 @@ import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
 
-from utils.inference import ManagedSelfAttnCacheRunner, SplitLMHeadRunner
-
-StopCheck = Callable[[], bool]
-
-
-class InferenceInterrupted(Exception):
-    """Raised when interactive inference is cancelled by the user."""
-
-
-def _raise_if_stopped(should_stop: StopCheck | None) -> None:
-    if should_stop is not None and should_stop():
-        raise InferenceInterrupted
+from utils.inference import (
+    InferenceInterrupted,
+    ManagedSelfAttnCacheRunner,
+    SplitLMHeadRunner,
+    StopCheck,
+    _raise_if_stopped,
+)
 
 
 _SIDECAR_SUFFIXES: Final[frozenset[str]] = frozenset(
@@ -113,7 +108,7 @@ def discover_prefill_model_path(model_path: str | os.PathLike) -> Path | None:
     candidate_list = ", ".join(str(path) for path in candidates)
     raise ValueError(
         "Found multiple batched prefill candidates next to model. "
-        f"Please pass --prefill-model explicitly. Candidates: {candidate_list}"
+        f"Please pass --batch-prefill-model explicitly. Candidates: {candidate_list}"
     )
 
 
@@ -127,7 +122,7 @@ def resolve_prefill_model_path(
     """Resolve explicit, disabled, or auto-discovered prefill model selection."""
     if prefill_model_path is not None and disable_prefill:
         raise ValueError(
-            "--prefill-model and --no-prefill-model cannot be used together."
+            "--batch-prefill-model and --no-batch-prefill-model cannot be used together."
         )
     if prefill_model_path is not None:
         return Path(prefill_model_path)
@@ -225,12 +220,12 @@ class DecoderOnlyLLMRunner(ABC):
         "_max_prompt_tokens",
         "_max_seq_len",
         "_max_user_tokens",
+        "_max_gen_tokens",
         "_temperature",
         "_top_p",
         "_top_k",
         "_bos_token_id",
         "_eos_token_id",
-        "_pad_token_id",
         "_bos_token",
         "_eos_token",
         "_reset_cache_state",
@@ -263,6 +258,7 @@ class DecoderOnlyLLMRunner(ABC):
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
+        max_gen_tokens: int | None = None,
         runtime_flags: list[str] | None = None,
         device_io: bool = False,
         lm_head_path: str | os.PathLike | None = None,
@@ -325,7 +321,6 @@ class DecoderOnlyLLMRunner(ABC):
 
         self._bos_token_id = self._config["bos_token_id"]
         self._eos_token_id = self._config["eos_token_id"]
-        self._pad_token_id = self._config.get("pad_token_id") or 0
         self._tokenizer = Tokenizer.from_file(str(self._model_dir / "tokenizer.json"))
         self._bos_token = self._tokenizer.decode(
             [self._bos_token_id], skip_special_tokens=False
@@ -337,6 +332,7 @@ class DecoderOnlyLLMRunner(ABC):
         self._max_prompt_tokens = max_prompt_tokens
         self._max_seq_len = max_seq_len
         self._max_user_tokens = None
+        self._max_gen_tokens = max_gen_tokens
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
@@ -543,7 +539,7 @@ class DecoderOnlyLLMRunner(ABC):
                 "decode model. Pass the decode model (e.g. "
                 "'transformer.vmfb') via -m, and provide the batched build "
                 "as a sibling 'transformer_prefill.vmfb' or via "
-                "--prefill-model."
+                "--batch-prefill-model."
             )
 
     def _query_model_seq_len(self) -> int | None:
@@ -937,16 +933,19 @@ class DecoderOnlyLLMRunner(ABC):
         )
 
     def _apply_prompt_limit(self, tokens: list[int]) -> list[int]:
+        """Truncate the prompt to the configured maximum input length.
+
+        Prompts shorter than the limit pass through unchanged: the static
+        exports bake a causal mask into the graph, so padding tokens would
+        be attended over and make the model emit EOS immediately.
+        """
         limit = (
             self._max_user_tokens
             if self._max_user_tokens is not None
             else self._max_prompt_tokens
         )
-        if isinstance(limit, int):
-            if len(tokens) > limit:
-                return tokens[:limit]
-            if len(tokens) < limit:
-                return tokens + [self._pad_token_id] * (limit - len(tokens))
+        if isinstance(limit, int) and len(tokens) > limit:
+            return tokens[:limit]
         return tokens
 
     def run(
@@ -988,6 +987,11 @@ class DecoderOnlyLLMRunner(ABC):
             gen = [next_tok]
             while not self._should_stop(next_tok, gen):
                 _raise_if_stopped(should_stop)
+                if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
+                    self._logger.info(
+                        "Max generation tokens reached (%d)", self._max_gen_tokens
+                    )
+                    break
                 if pos >= self._max_seq_len:
                     if self._cache_keep_n is not None:
                         self._model.shift_kv(

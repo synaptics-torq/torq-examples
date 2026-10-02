@@ -15,6 +15,7 @@ from utils.download import (
     ensure_model,
     get_hf_revision,
     read_manifest,
+    resolve_repo_id,
     verify_manifest,
 )
 
@@ -63,6 +64,29 @@ def _refresh(repo_id: str, model_dir: Path, base_dir: Path) -> ModelStatus:
         revision=revision,
         download=lambda: _download(repo_id, base_dir),
     )
+
+
+def local_lfm2vl_model_dir(
+    model: str | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the local W8 model dir to default ``--model-dir`` to.
+
+    Looks for a complete LFM2-VL file set (per :func:`_has_files`) in the
+    repo's model directory; the demo's runner takes the dir, not a file.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    if model is not None:
+        repo_ids = [resolve_repo_id(model, _HF_REPO_MAP)]
+    else:
+        repo_ids = list(dict.fromkeys(_HF_REPO_MAP.values()))
+    for repo_id in repo_ids:
+        model_dir = Path(base_dir) / repo_id
+        if _has_files(model_dir):
+            return model_dir
+    return None
 
 
 def ensure_lfm2vl_int8_models(model_dir: str | Path, *, refresh: bool = True) -> None:

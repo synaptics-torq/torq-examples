@@ -19,6 +19,16 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from lfm2vl import LFM2VL  # noqa: E402
 
+# The default-model-dir helper lives one level up (the demo dir's
+# setup_demo.py). The demo dir name has a hyphen, so it is not importable as
+# a package; add it to the path and import the module directly. Guarded so a
+# missing setup_demo never breaks inference.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+try:
+    from setup_demo import local_lfm2vl_model_dir
+except Exception:
+    local_lfm2vl_model_dir = None  # type: ignore[assignment]
+
 from utils.log import add_logging_args, configure_logging  # noqa: E402
 from utils.terminal import InferenceStopInput  # noqa: E402
 
@@ -137,11 +147,11 @@ def main(args: argparse.Namespace) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="Run LFM2-VL-450M W8 (all-NPU) image Q&A with the Torq NPU.")
-    parser.add_argument("--model-dir", type=str, required=True,
+    parser.add_argument("--model-dir", type=str, default=None,
                         help="Directory with the W8 model set (decoder_nolm.vmfb, "
                              "vision_encoder_256.vmfb, lm_head.vmfb, "
                              "decoder_image_2part_*.vmfb, config.json, tokenizer.json, "
-                             "token_embeddings.npy)")
+                             "token_embeddings.npy) (default: the one setup_demo.py downloaded)")
     parser.add_argument("--model", type=str, default=None,
                         help="Decoder body vmfb (default: <model-dir>/decoder_nolm.vmfb)")
     parser.add_argument("--vision", type=str, default=None,
@@ -170,4 +180,13 @@ if __name__ == "__main__":
                      help="Top-p (nucleus) sampling threshold (default: %(default)s)")
     gen.add_argument("--top-k", type=int, default=64,
                      help="Top-k pre-filter size for sampling (default: %(default)s)")
-    main(parser.parse_args())
+    args = parser.parse_args()
+    if args.model_dir is None:
+        local_dir = local_lfm2vl_model_dir() if local_lfm2vl_model_dir else None
+        if local_dir is None:
+            parser.error(
+                "no local LFM2-VL-450M model set found; pass --model-dir or run "
+                "`python setup_demos.py LiquidAI-LFM2-VL-450M` from torq-examples root"
+            )
+        args.model_dir = str(local_dir)
+    main(args)

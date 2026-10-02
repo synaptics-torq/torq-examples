@@ -26,7 +26,7 @@ The model version defaults to the one matching this repo's `VERSION` file (see t
 [repo README](../../README.md) for the versioning scheme); `setup_demos.py` and the demo's
 `setup_demo.py` both support `--model-version` to pin a specific release tag and `--no-update`
 to skip model tracking entirely. By default setup does **not** download the optional
-batched prefill model; pass `--with-prefill` to also fetch and track
+batched prefill model; pass `--with-batch-prefill` to also fetch and track
 `transformer_prefill.vmfb` (an extra model, so it uses more memory, with a fixed
 64-token prompt chunk size; a no-op with a warning for repos that have no prefill
 model). Re-running setup without the flag removes it from tracking (the local file
@@ -39,7 +39,7 @@ into `models/Synaptics/LiquidAI-LFM2.5-230M/`:
 ```
 models/Synaptics/LiquidAI-LFM2.5-230M/
 ├── transformer.vmfb           ← decoder body (hidden output, 256-token KV cache)
-├── transformer_prefill.vmfb   ← optional: batched prefill build (setup only downloads it with the --with-prefill flag)
+├── transformer_prefill.vmfb   ← optional: batched prefill build (setup only downloads it with the --with-batch-prefill flag)
 ├── lm_head.vmfb               ← standalone lm_head (hidden -> logits; skipped during prefill)
 ├── token_embeddings.npy       ← CPU-side embedding LUT
 ├── config.json
@@ -55,7 +55,7 @@ models/Synaptics/LiquidAI-LFM2.5-230M/
 > [`LiquidAI-LFM2.5-*-w8a8-torq`](https://huggingface.co/Synaptics/models?search=LFM2.5-w8a8)
 > repos (the new exporter's SL2619 w8a8 builds). Besides `transformer.vmfb`
 > and `lm_head.vmfb` they publish a batched prefill model in
-> `transformer_prefill.vmfb`, which setup downloads with the `--with-prefill` flag.
+> `transformer_prefill.vmfb`, which setup downloads with the `--with-batch-prefill` flag.
 
 ## Running
 
@@ -91,8 +91,8 @@ format + system-prompt warm-up (drop it for a base/completion model). Run
 > only the final prompt unit samples a token, so time-to-first-token drops
 > sharply. The prefill build has the lm_head baked in for its final position.
 > Any prompt remainder and all generated tokens still use `transformer.vmfb`,
-> and both paths share the same KV cache. Use `--prefill-model PATH` to point
-> at a specific prefill model, or `--no-prefill-model` to force single-token
+> and both paths share the same KV cache. Use `--batch-prefill-model PATH` to point
+> at a specific prefill model, or `--no-batch-prefill-model` to force single-token
 > prompt prefill.
 
 ## Model notes

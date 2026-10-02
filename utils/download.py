@@ -11,6 +11,11 @@ and refresh the local copy when the tag moved upstream or local files went
 missing/corrupt. A model is never upgraded to a newer version on its own: the
 version it was set up with is the one it stays on until the user changes it.
 
+When the tag moves, the manifest's per-file hashes (``file_info``) let a
+refresh re-download only the files whose content actually changed instead of
+wiping the whole directory; copies whose manifest predates per-file tracking
+fall back to a full re-download once, then upgrade their manifest.
+
 Models downloaded with ``--no-update`` have no manifest and are excluded from
 the tracking system altogether.
 """
@@ -33,6 +38,7 @@ __all__ = [
     "download_from_url",
     "download_from_hf",
     "get_hf_revision",
+    "get_hf_file_info",
     "hf_file_exists",
     "list_hf_files",
     "write_manifest",
@@ -167,6 +173,43 @@ def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
         return None
 
 
+def get_hf_file_info(
+    repo_id: str,
+    *,
+    revision: str | None = None,
+    filenames: set[str] | None = None,
+) -> dict[str, dict] | None:
+    """Return ``{filename: {"size", "sha256"}}`` for *repo_id* at *revision*.
+
+    Uses the Hub's repo-tree metadata: ``sha256`` is the LFS sha256 (set for
+    LFS files such as the ``.vmfb`` models, ``None`` for regular git files).
+    ``filenames`` limits the result to the given paths. Returns ``None`` when
+    the Hub cannot be reached (or the revision does not exist) so callers fall
+    back to their untracked behaviour instead of failing.
+    """
+    from huggingface_hub import HfApi
+
+    logger.debug("Fetching file info for %s (revision=%r)...", repo_id, revision)
+    try:
+        tree = HfApi().list_repo_tree(repo_id, revision=revision)
+    except Exception as exc:
+        logger.debug("Could not fetch file info for %s (%s): %s", repo_id, revision, exc)
+        return None
+    file_info = {}
+    for item in tree:
+        if getattr(item, "type", "file") != "file":
+            continue
+        name = item.path
+        if filenames is not None and name not in filenames:
+            continue
+        lfs = getattr(item, "lfs", None)
+        file_info[name] = {
+            "size": getattr(item, "size", None),
+            "sha256": lfs.sha256 if lfs else None,
+        }
+    return file_info
+
+
 def hf_file_exists(repo_id: str, filename: str, *, revision: str | None = None) -> bool:
     """Whether ``filename`` exists in the HF repo at *revision* (default HEAD)."""
     from huggingface_hub import HfApi
@@ -195,13 +238,16 @@ def write_manifest(
     *,
     version: str | None = None,
     revision: str | None = None,
+    file_info: dict[str, dict] | None = None,
 ) -> Path:
     """Write a manifest after a successful model setup.
 
     ``version`` records the version tag the copy tracks (``None`` =
     unversioned, i.e. the repo's latest at download time); ``revision`` records
     the upstream commit the files were downloaded from, so later runs can
-    detect when the local copy is out of date.
+    detect when the local copy is out of date. ``file_info`` (optional) records
+    per-file ``{size, sha256}`` from the Hub metadata so a later refresh can
+    re-download only the files that changed instead of the whole directory.
     """
     model_dir = Path(model_dir)
     model_dir.mkdir(parents=True, exist_ok=True)
@@ -212,6 +258,8 @@ def write_manifest(
         "files": sorted(files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
+    if file_info:
+        manifest["file_info"] = {name: file_info[name] for name in sorted(file_info) if name in set(files)}
     manifest_path = model_dir / _MANIFEST_FILENAME
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
     logger.debug("Wrote manifest to %s", manifest_path)
@@ -273,8 +321,9 @@ def check_model_status(
     Returns one of:
         ``ModelStatus.STALE``: the tracked version resolves to a different
             commit than the one recorded in the local manifest (including a
-            local copy that predates version tracking). Clear the directory
-            and re-download.
+            local copy that predates version tracking). Refresh re-downloads
+            the files that changed (all of them when the manifest has no
+            per-file hashes).
         ``ModelStatus.INCOMPLETE``: required files are missing; fetch what's
             absent.
         ``ModelStatus.UP_TO_DATE``: local files are present and current. Also
@@ -359,6 +408,47 @@ def local_model_dir(
     return model_dir if verify_manifest(model_dir) else None
 
 
+def _refresh_stale_files(
+    model_dir: Path,
+    repo_id: str,
+    revision: str | None,
+    tracked_files: list[str],
+    old_file_info: dict[str, dict] | None,
+) -> bool:
+    """Delete only the tracked files whose upstream content changed.
+
+    Per-file refresh needs the manifest's recorded ``file_info`` and the Hub's
+    metadata at the new *revision*. Returns ``False`` when either is missing
+    (legacy manifest, offline) so the caller falls back to clearing the whole
+    directory. Files that no longer exist upstream are kept on disk; they fall
+    out of the manifest and the dropped-file warning surfaces them.
+    """
+    if not old_file_info:
+        return False
+    new_file_info = get_hf_file_info(repo_id, revision=revision)
+    if new_file_info is None:
+        return False
+    stale = []
+    for filename, info in old_file_info.items():
+        if filename not in set(tracked_files):
+            continue
+        upstream = new_file_info.get(filename)
+        if upstream is None:
+            continue  # dropped upstream: keep locally, untrack
+        if upstream != info:
+            stale.append(filename)
+        elif info.get("sha256") is None:
+            # Non-LFS file: no content hash recorded, so it cannot be proven
+            # identical; re-fetch it (they are small text/JSON assets).
+            stale.append(filename)
+    for filename in stale:
+        path = model_dir / filename
+        if path.exists():
+            path.unlink()
+            logger.info("Refreshing changed file %s in %s", filename, model_dir)
+    return True
+
+
 def ensure_model(
     model_dir: Path,
     repo_id: str,
@@ -376,8 +466,11 @@ def ensure_model(
 
     Shared by setup and inference so both apply identical refresh semantics.
     ``download`` fetches the required files and returns the filenames to record
-    in the manifest; it is invoked only for stale/incomplete states. Stale dirs
-    are cleared first so updated same-named files are not skipped on re-download.
+    in the manifest; it is invoked only for stale/incomplete states. For a
+    stale dir with per-file hashes, only the files whose upstream content
+    changed are removed before re-downloading; otherwise (legacy manifest or
+    offline) the dir is cleared first so updated same-named files are not
+    skipped on re-download.
 
     When ``record`` is False (``--no-update``) the copy is untracked: only file
     completeness is verified, no version check is performed, and no manifest is
@@ -403,6 +496,7 @@ def ensure_model(
                     manifest.get("files", []),
                     version=version,
                     revision=manifest.get("revision") or revision,
+                    file_info=manifest.get("file_info"),
                 )
     else:
         status = ModelStatus.UP_TO_DATE if files_present else ModelStatus.INCOMPLETE
@@ -410,10 +504,27 @@ def ensure_model(
     if status is ModelStatus.UP_TO_DATE:
         return status
     if status is ModelStatus.STALE:
-        clear_model_dir(model_dir)
+        manifest = read_manifest(model_dir)
+        if not _refresh_stale_files(
+            model_dir,
+            repo_id,
+            revision,
+            manifest.get("files", []) if manifest else [],
+            manifest.get("file_info") if manifest else None,
+        ):
+            clear_model_dir(model_dir)
     files = download()
     if record:
-        write_manifest(model_dir, repo_id, files, version=version, revision=revision)
+        write_manifest(
+            model_dir,
+            repo_id,
+            files,
+            version=version,
+            revision=revision,
+            file_info=get_hf_file_info(
+                repo_id, revision=revision, filenames=set(files)
+            ),
+        )
     else:
         logger.info(
             "Untracked model in %s (--no-update): no manifest written, so this "
