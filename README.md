@@ -103,6 +103,8 @@ Each demo lives in its own directory. To run a demo, `cd` into its directory and
 python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
 ```
 
+The `-m`/`--model` (or `--model-dir`) flag is optional in every demo: it defaults to the model the demo's setup downloaded, and fails with a pointer to `setup_demos.py` when no local model is present.
+
 Run `python src/infer.py -h` to see all available inference options.
 
 ## Profiling
