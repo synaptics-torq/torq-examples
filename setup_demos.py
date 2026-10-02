@@ -111,7 +111,7 @@ def setup_demo(
             setup_moonshine_streaming(["streaming-tiny-en"], model_version=model_version, no_update=no_update)
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
-            _mod.setup_liquidvl(["default"], model_version=model_version, no_update=no_update)
+            _mod.setup_liquidvl_int8(["default"])
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
             setup_object_detection(model_version=model_version, no_update=no_update)

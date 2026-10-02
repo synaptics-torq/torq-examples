@@ -11,7 +11,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
 | [object_detection](object_detection/) | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
 | [LiquidAI-LFM2.5](LiquidAI/LiquidAI-LFM2.5/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
-| [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M |
+| [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M (INT8) |
 | [pose_estimation](pose_estimation/) | YOLOv8n pose estimation |
 | [Face_ID](Face_ID/) | Face detection on an image file |
 
