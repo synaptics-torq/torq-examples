@@ -117,7 +117,7 @@ def setup_demo(
             setup_object_detection(model_version=model_version, no_update=no_update)
         elif name == "pose_estimation":
             from pose_estimation.setup_demo import setup_pose_estimation
-            setup_pose_estimation()
+            setup_pose_estimation(model_version=model_version, no_update=no_update)
         elif name == "face_id":
             from Face_ID.setup_demo import setup_face_id
             setup_face_id()

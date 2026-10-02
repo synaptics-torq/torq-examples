@@ -1580,3 +1580,18 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
         "--with-batch-prefill" in r.getMessage() and "moonshine" in r.getMessage()
         for r in warnings
     )
+
+
+def test_setup_demos_pose_forwards_version_flags():
+    """The root dispatch forwards ``--model-version``/``--no-update`` to
+    ``pose_estimation`` like every other tracked demo (the pose branch used to
+    call ``setup_pose_estimation()`` bare, silently dropping both flags)."""
+    import setup_demos
+
+    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+        setup_demos.setup_demo("pose_estimation", model_version="v2.2.1", no_update=True)
+    pose_mock.assert_called_once_with(model_version="v2.2.1", no_update=True)
+
+    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+        setup_demos.setup_demo("pose_estimation")
+    pose_mock.assert_called_once_with(model_version=None, no_update=False)
