@@ -376,6 +376,74 @@ def test_setup_no_update_reuses_existing_files(tmp_path):
     assert not (model_dir / ".manifest.json").exists()
 
 
+def test_setup_no_update_downloads_head_not_builtin_version(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+    ):
+        moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
+
+    # Untracked and unversioned: the built-in VERSION tag is not used as the
+    # download revision (untagged repos cannot resolve it); HEAD is.
+    rev.assert_not_called()
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] is None
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
+def test_setup_no_update_keeps_explicit_version(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+    ):
+        moonshine_setup.setup_moonshine(
+            ["tiny-en"], no_update=True, model_version=_PINS
+        )
+
+    # An explicitly pinned version wins over the untracked HEAD default,
+    # but nothing is resolved or recorded.
+    rev.assert_not_called()
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] == _PINS
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
+def test_setup_no_update_keeps_per_model_version_spec(tmp_path):
+    base_dir = tmp_path
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(
+            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
+        ) as download,
+    ):
+        moonshine_setup.setup_moonshine([f"tiny-en:{_PINS}"], no_update=True)
+
+    # A per-model 'name:version' spec wins over the untracked HEAD default.
+    assert download.called
+    for call in download.call_args_list:
+        assert call.kwargs["revision"] == _PINS
+    assert not (base_dir / repo_id / ".manifest.json").exists()
+
+
 # ── inference: manifest-driven refresh ─────────────────────────────────────────
 
 
@@ -1033,7 +1101,7 @@ def test_gemma_prefill_retracked_with_flag_when_file_present(tmp_path):
 
 
 def test_gemma_prefill_added_to_complete_copy_with_flag(tmp_path):
-    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    """``--with-batch-prefill`` on an already-complete copy fetches only the prefill build."""
     base_dir = tmp_path
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
 
@@ -1049,7 +1117,7 @@ def test_gemma_prefill_added_to_complete_copy_with_flag(tmp_path):
 
 
 def test_gemma_prefill_flag_warns_on_complete_copy_when_repo_lacks_prefill(tmp_path, caplog):
-    """``--with-prefill`` on a complete copy of a repo without a prefill model:
+    """``--with-batch-prefill`` on a complete copy of a repo without a prefill model:
     warning, no download, manifest unchanged."""
     base_dir = tmp_path
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
@@ -1382,7 +1450,7 @@ def test_liquid_prefill_untracking_persists_across_setup_runs(tmp_path):
 
 
 def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
-    """``--with-prefill`` on an already-complete copy fetches only the prefill build."""
+    """``--with-batch-prefill`` on an already-complete copy fetches only the prefill build."""
     base_dir = tmp_path
     repo_id = liquid_setup._HF_REPO_MAP["230m"]
 
@@ -1452,7 +1520,7 @@ def test_prefill_is_opt_in_per_demo():
 
 
 def test_demo_main_prefill_flag_only_when_opted_in():
-    """``demo_main`` exposes ``--with-prefill`` (and forwards ``enable_prefill``)
+    """``demo_main`` exposes ``--with-batch-prefill`` (and forwards ``enable_prefill``)
     only for demos that pass ``supports_prefill=True``."""
     calls: list[dict] = []
 
@@ -1460,7 +1528,7 @@ def test_demo_main_prefill_flag_only_when_opted_in():
         calls.append(kwargs)
 
     # Opted in: the flag is accepted and forwarded.
-    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-batch-prefill"]):
         model_setup.demo_main(
             fake_setup,
             description="d",
@@ -1472,7 +1540,7 @@ def test_demo_main_prefill_flag_only_when_opted_in():
 
     # Not opted in: the flag is unknown and setup_fn never runs.
     calls.clear()
-    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-prefill"]):
+    with mock.patch.object(sys, "argv", ["setup_demo.py", "--with-batch-prefill"]):
         with pytest.raises(SystemExit):
             model_setup.demo_main(
                 fake_setup, description="d", default_models=[], repo_map={}
@@ -1509,6 +1577,21 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
     )
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert any(
-        "--with-prefill" in r.getMessage() and "moonshine" in r.getMessage()
+        "--with-batch-prefill" in r.getMessage() and "moonshine" in r.getMessage()
         for r in warnings
     )
+
+
+def test_setup_demos_pose_forwards_version_flags():
+    """The root dispatch forwards ``--model-version``/``--no-update`` to
+    ``pose_estimation`` like every other tracked demo (the pose branch used to
+    call ``setup_pose_estimation()`` bare, silently dropping both flags)."""
+    import setup_demos
+
+    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+        setup_demos.setup_demo("pose_estimation", model_version="v2.2.1", no_update=True)
+    pose_mock.assert_called_once_with(model_version="v2.2.1", no_update=True)
+
+    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+        setup_demos.setup_demo("pose_estimation")
+    pose_mock.assert_called_once_with(model_version=None, no_update=False)

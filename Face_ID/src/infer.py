@@ -14,6 +14,7 @@ from torq.runtime import VMFBInferenceRunner
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from Face_ID.src.postprocess import decode_face_outputs
+from Face_ID.setup_demo import local_face_id_model_path
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
 
 MODEL_WIDTH = 1280
@@ -72,7 +73,10 @@ def prepare_outputs(outputs):
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Detect faces in an image with a Face ID VMFB.")
-    parser.add_argument("--model", required=True, help="Path to face_detection.vmfb")
+    parser.add_argument(
+        "--model", default=None,
+        help="Path to face_detection.vmfb (default: the one setup_demo.py downloaded)",
+    )
     parser.add_argument("--image", required=True, help="Input image file")
     parser.add_argument("--output", default="face_detection.jpg", help="Annotated output image")
     parser.add_argument("--json-results", default="face_detection_results.json")
@@ -90,6 +94,14 @@ def main() -> None:
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
     args = parser.parse_args()
+    if args.model is None:
+        local_model = local_face_id_model_path()
+        if local_model is None:
+            parser.error(
+                "no local Face ID model found; pass --model or run "
+                "`python setup_demos.py face_id` from torq-examples root"
+            )
+        args.model = str(local_model)
     device_io = args.device_io or args.tda == "dmabuf"
 
     model_path = resolve_input_path(args.model)

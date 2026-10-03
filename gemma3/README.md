@@ -32,11 +32,11 @@ python setup_demo.py --model-version v2.2.0
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
 
-By default setup does **not** download the optional batched prefill model. To also fetch and track `transformer_prefill.vmfb`, pass `--with-prefill`:
+By default setup does **not** download the optional batched prefill model. To also fetch and track `transformer_prefill.vmfb`, pass `--with-batch-prefill`:
 
 ```sh
 cd gemma3
-python setup_demo.py --with-prefill
+python setup_demo.py --with-batch-prefill
 ```
 
 `transformer_prefill.vmfb` is an extra model, so it uses more memory, and its prompt-chunk size is fixed to 64 tokens. It is a no-op with a warning for repos that have no prefill model. Re-running setup without the flag removes it from tracking (the local file is kept but no longer checked or refreshed).
@@ -57,7 +57,7 @@ python src/infer.py --instruct-model
 
 > [!TIP]
 > When the model directory contains a `transformer_prefill.vmfb` (a fixed-size batched prefill model exported alongside `transformer.vmfb`), the demo picks it up automatically: complete prompt chunks run through the prefill model and only the final prompt unit uses the LM head, so time-to-first-token drops sharply.
-> Any prompt remainder and all generated tokens still use `transformer.vmfb`, and both paths share the same KV cache. Use `--prefill-model PATH` to point at a specific prefill model, or `--no-prefill-model` to force single-token prompt prefill.
+> Any prompt remainder and all generated tokens still use `transformer.vmfb`, and both paths share the same KV cache. Use `--batch-prefill-model PATH` to point at a specific prefill model, or `--no-batch-prefill-model` to force single-token prompt prefill.
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 

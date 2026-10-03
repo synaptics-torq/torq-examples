@@ -3,7 +3,7 @@
 
 from pathlib import Path
 
-from pose_estimation.setup_demo import ensure_pose_estimation_models
+from pose_estimation.setup_demo import ensure_pose_estimation_models, local_pose_model_path
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -35,8 +35,19 @@ def main():
     parser = build_video_argparser(
         "Run YOLOv8 Pose estimation on video, RTSP, or camera input.",
         default_json_results="pose_results.json",
+        model_required=False,
+        model_help="Path to the model VMFB (default: the one setup_demo.py downloaded)",
     )
     args = parser.parse_args()
+
+    if args.model is None:
+        local_model = local_pose_model_path()
+        if local_model is None:
+            parser.error(
+                "no local pose model found; pass --model or run "
+                "`python setup_demos.py pose_estimation` from torq-examples root"
+            )
+        args.model = str(local_model)
 
     ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
     runtime_flags = build_runtime_flags(args.tda, args.runtime_flags)

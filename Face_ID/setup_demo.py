@@ -31,6 +31,26 @@ FACE_DETECTOR_FILES: Final[tuple[str, ...]] = (
 )
 
 
+def local_face_id_model_path(
+    model: str | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the local detector VMFB path to default ``--model`` to.
+
+    Looks for ``face_detection.vmfb`` in the repo's model directory; with no
+    ``model`` that is the built-in repo, an explicit value is a raw HF repo
+    id.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    repo_id = model if model is not None else FACE_ID_HF_REPO
+    model_dir = Path(base_dir) / repo_id
+    if (model_dir / "face_detection.vmfb").exists():
+        return model_dir / "face_detection.vmfb"
+    return None
+
+
 def _download_face_id_files(
     repo_id: str,
     base_dir: Path,

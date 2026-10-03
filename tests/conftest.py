@@ -3,12 +3,15 @@
 
 """Shared pytest configuration for torq-examples tests.
 
-Two things are set up here, both at conftest import time so they take effect
-before pytest collects and imports the test modules:
+Three things are set up here, all at conftest import/fixture time so they
+take effect before any test runs:
 
 1. The repository root is added to ``sys.path`` so ``utils.*``, ``gemma3.*``
    and ``moonshine.*`` resolve regardless of the directory pytest runs from.
-2. Lightweight stand-ins are installed for the heavy optional dependencies
+2. ``utils.download.get_hf_file_info`` is stubbed to return ``None`` for
+   every test by default, so the manifest-write path never touches the
+   network (tests that exercise per-file tracking patch it themselves).
+3. Lightweight stand-ins are installed for the heavy optional dependencies
    (numpy, torq, iree, tokenizers, ml_dtypes) that ``utils.llm``,
    ``utils.inference`` and ``gemma3.src.runner`` import at module load. The
    board-specific runtime (``torq``/``iree``) is unavailable on the host CI
@@ -22,10 +25,20 @@ import importlib
 import sys
 import types
 from pathlib import Path
+from unittest import mock
+
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(_REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(_REPO_ROOT))
+
+
+@pytest.fixture(autouse=True)
+def _stub_hf_file_info():
+    """Keep the suite network-free by default (see module docstring)."""
+    with mock.patch("utils.download.get_hf_file_info", return_value=None):
+        yield
 
 
 def _importable(name: str) -> bool:

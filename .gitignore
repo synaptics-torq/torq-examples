@@ -20,3 +20,5 @@ temp/
 
 # Local board handoff notes — internal IPs/ssh details, do not commit
 RUN_ON_BOARD.md
+# agentic AI
+AGENTS.md

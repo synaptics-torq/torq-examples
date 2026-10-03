@@ -5,7 +5,7 @@ import logging
 from pathlib import Path
 from typing import Final
 
-from utils.download import download_from_hf, hf_file_exists, list_hf_files
+from utils.download import default_models_dir, download_from_hf, hf_file_exists, list_hf_files, resolve_repo_id
 from utils.model_setup import demo_main, download_models, ensure_demo_models, setup_demo
 
 logger = logging.getLogger("pose_estimation.setup")
@@ -71,6 +71,29 @@ def download_pose_estimation(
         model_version=model_version,
         no_update=no_update,
     )
+
+
+def local_pose_model_path(
+    model: str | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> Path | None:
+    """Return the local pose model VMFB path to default ``--model`` to.
+
+    Looks for the model file in the repo's model directory; with no ``model``,
+    tries the built-in repos in repo-map order.
+    """
+    if base_dir is None:
+        base_dir = default_models_dir()
+    if model is not None:
+        repo_ids = [resolve_repo_id(model, _POSE_HF_REPO_MAP)]
+    else:
+        repo_ids = list(dict.fromkeys(_POSE_HF_REPO_MAP.values()))
+    for repo_id in repo_ids:
+        model_dir = Path(base_dir) / repo_id
+        if _has_pose_estimation_files(model_dir):
+            return model_dir / _MODEL_FILENAME
+    return None
 
 
 def ensure_pose_estimation_models(

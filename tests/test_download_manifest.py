@@ -16,6 +16,7 @@ from utils.download import (
     check_model_status,
     clear_model_dir,
     ensure_model,
+    get_hf_file_info as real_get_hf_file_info,
     get_hf_revision,
     read_manifest,
     verify_manifest,
@@ -315,3 +316,251 @@ def test_ensure_model_untracked_complete_skips_download(tmp_path):
     assert status is ModelStatus.UP_TO_DATE
     clear.assert_not_called()
     assert not (model_dir / ".manifest.json").exists()
+
+
+# ── per-file tracking ───────────────────────────────────────────────────
+#
+# tests/conftest.py stubs utils.download.get_hf_file_info to return None for
+# every test by default (network-free); the tests below patch it explicitly.
+
+
+def _make_tracked(model_dir, files, file_info, *, version="v2.1.0", revision="old-sha"):
+    model_dir.mkdir(parents=True, exist_ok=True)
+    for filename in files:
+        (model_dir / filename).write_text(filename)
+    write_manifest(
+        model_dir, "org/repo", list(files),
+        version=version, revision=revision, file_info=file_info,
+    )
+    return model_dir
+
+
+def _fake_download(model_dir, files):
+    """Stand-in for the demos' download hooks: fetch what's missing only."""
+    def download():
+        for filename in files:
+            path = model_dir / filename
+            if not path.exists():
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(filename + "@new")
+        return list(files)
+    return download
+
+
+def test_write_manifest_records_file_info_for_tracked_files(tmp_path):
+    model_dir = tmp_path / "m"
+    model_dir.mkdir()
+    (model_dir / "a.vmfb").write_text("a")
+    (model_dir / "b.json").write_text("b")
+
+    write_manifest(
+        model_dir, "org/repo", ["a.vmfb", "b.json"],
+        version="v2.1.0", revision="sha",
+        file_info={
+            "a.vmfb": {"size": 1, "sha256": "aaa"},
+            "b.json": {"size": 2, "sha256": None},
+            "untracked.bin": {"size": 9, "sha256": "zzz"},  # not tracked -> dropped
+        },
+    )
+
+    assert read_manifest(model_dir)["file_info"] == {
+        "a.vmfb": {"size": 1, "sha256": "aaa"},
+        "b.json": {"size": 2, "sha256": None},
+    }
+
+
+def test_write_manifest_omits_file_info_when_not_given(tmp_path):
+    model_dir = tmp_path / "m"
+    model_dir.mkdir()
+    (model_dir / "a.vmfb").write_text("a")
+
+    write_manifest(model_dir, "org/repo", ["a.vmfb"])
+
+    assert "file_info" not in read_manifest(model_dir)
+
+
+def test_get_hf_file_info_parses_tree_items():
+    pytest.importorskip("huggingface_hub")
+
+    lfs_file = mock.Mock(path="a.vmfb", type="file", size=10)
+    lfs_file.lfs = mock.Mock(sha256="aaa")
+    plain_file = mock.Mock(path="b.json", type="file", size=2)
+    plain_file.lfs = None
+    subdir = mock.Mock(path="samples", type="directory", size=None)
+    api = mock.Mock()
+    api.list_repo_tree.return_value = [lfs_file, plain_file, subdir]
+
+    with mock.patch("huggingface_hub.HfApi", return_value=api):
+        info = real_get_hf_file_info("org/repo", revision="sha")
+    assert info == {
+        "a.vmfb": {"size": 10, "sha256": "aaa"},
+        "b.json": {"size": 2, "sha256": None},
+    }
+
+    with mock.patch("huggingface_hub.HfApi", return_value=api):
+        info = real_get_hf_file_info("org/repo", revision="sha", filenames={"a.vmfb"})
+    assert set(info) == {"a.vmfb"}
+
+
+def test_get_hf_file_info_returns_none_when_offline():
+    pytest.importorskip("huggingface_hub")
+
+    with mock.patch("huggingface_hub.HfApi") as api:
+        api.return_value.list_repo_tree.side_effect = ConnectionError("offline")
+        assert real_get_hf_file_info("org/repo", revision="sha") is None
+
+
+def test_ensure_model_stale_refreshes_only_changed_files(tmp_path):
+    model_dir = _make_tracked(
+        tmp_path / "m", ["a.vmfb", "b.vmfb"],
+        {"a.vmfb": {"size": 1, "sha256": "aaa"}, "b.vmfb": {"size": 2, "sha256": "bbb"}},
+    )
+    new_info = {
+        "a.vmfb": {"size": 1, "sha256": "aaa"},   # unchanged upstream
+        "b.vmfb": {"size": 9, "sha256": "ccc"},   # changed upstream
+    }
+
+    with mock.patch("utils.download.get_hf_file_info", return_value=dict(new_info)):
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="new-sha",
+            download=_fake_download(model_dir, ["a.vmfb", "b.vmfb"]),
+        )
+
+    assert status is ModelStatus.STALE
+    assert (model_dir / "a.vmfb").read_text() == "a.vmfb"      # unchanged: kept
+    assert (model_dir / "b.vmfb").read_text() == "b.vmfb@new"  # changed: re-fetched
+    manifest = read_manifest(model_dir)
+    assert manifest["revision"] == "new-sha"
+    assert manifest["file_info"] == new_info
+
+
+def test_ensure_model_stale_refetches_non_lfs_files_without_hashes(tmp_path):
+    # Non-LFS files (no sha256) cannot be proven identical on a tag move, so
+    # they are re-fetched even when the size is unchanged.
+    model_dir = _make_tracked(
+        tmp_path / "m", ["a.vmfb", "b.json"],
+        {"a.vmfb": {"size": 1, "sha256": "aaa"}, "b.json": {"size": 2, "sha256": None}},
+    )
+    new_info = {
+        "a.vmfb": {"size": 1, "sha256": "aaa"},
+        "b.json": {"size": 2, "sha256": None},
+    }
+
+    with mock.patch("utils.download.get_hf_file_info", return_value=dict(new_info)):
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="new-sha",
+            download=_fake_download(model_dir, ["a.vmfb", "b.json"]),
+        )
+
+    assert status is ModelStatus.STALE
+    assert (model_dir / "a.vmfb").read_text() == "a.vmfb"
+    assert (model_dir / "b.json").read_text() == "b.json@new"
+
+
+def test_ensure_model_stale_keeps_files_dropped_upstream(tmp_path):
+    model_dir = _make_tracked(
+        tmp_path / "m", ["a.vmfb", "gone.vmfb"],
+        {"a.vmfb": {"size": 1, "sha256": "aaa"}, "gone.vmfb": {"size": 3, "sha256": "ggg"}},
+    )
+
+    with mock.patch("utils.download.get_hf_file_info", return_value={
+        "a.vmfb": {"size": 1, "sha256": "aaa"},  # gone.vmfb no longer published
+    }):
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="new-sha",
+            download=_fake_download(model_dir, ["a.vmfb"]),
+        )
+
+    assert status is ModelStatus.STALE
+    assert (model_dir / "a.vmfb").read_text() == "a.vmfb"
+    assert (model_dir / "gone.vmfb").read_text() == "gone.vmfb"  # kept on disk
+    assert read_manifest(model_dir)["files"] == ["a.vmfb"]       # but untracked
+
+
+def test_ensure_model_stale_legacy_manifest_clears_everything(tmp_path):
+    # A manifest without file_info (pre-T7 copy) falls back to the old
+    # behaviour: clear the directory and re-download everything.
+    model_dir = _make_copy(tmp_path / "m", "org/repo", ["a.vmfb"], version="v2.1.0", revision="old-sha")
+
+    with mock.patch("utils.download.get_hf_file_info", return_value=None) as gi:
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="new-sha",
+            download=_fake_download(model_dir, ["a.vmfb"]),
+        )
+
+    assert status is ModelStatus.STALE
+    assert (model_dir / "a.vmfb").read_text() == "a.vmfb@new"  # full re-download
+    # No API call for the stale check (legacy manifest short-circuits it); the
+    # single call is the post-download manifest write, which records per-file
+    # hashes when the Hub is reachable (offline here -> manifest stays legacy).
+    assert gi.call_count == 1
+    assert gi.call_args.kwargs == {"revision": "new-sha", "filenames": {"a.vmfb"}}
+    assert "file_info" not in read_manifest(model_dir)
+
+
+def test_ensure_model_stale_offline_clears_everything(tmp_path):
+    # Tracked hashes but the Hub unreachable: cannot verify per-file, so
+    # fall back to the full re-download.
+    model_dir = _make_tracked(
+        tmp_path / "m", ["a.vmfb"],
+        {"a.vmfb": {"size": 1, "sha256": "aaa"}},
+    )
+
+    with mock.patch("utils.download.get_hf_file_info", return_value=None):
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="new-sha",
+            download=_fake_download(model_dir, ["a.vmfb"]),
+        )
+
+    assert status is ModelStatus.STALE
+    assert (model_dir / "a.vmfb").read_text() == "a.vmfb@new"
+    assert "file_info" not in read_manifest(model_dir)
+
+
+def test_ensure_model_incomplete_records_file_info(tmp_path):
+    # A repair (same revision, missing file) also upgrades the manifest with
+    # per-file hashes.
+    model_dir = tmp_path / "m"
+    model_dir.mkdir()
+    (model_dir / "a.vmfb").write_text("a")
+    write_manifest(model_dir, "org/repo", ["a.vmfb", "b.vmfb"], version="v2.1.0", revision="sha")
+    new_info = {
+        "a.vmfb": {"size": 1, "sha256": "aaa"},
+        "b.vmfb": {"size": 2, "sha256": "bbb"},
+    }
+
+    with mock.patch("utils.download.get_hf_file_info", return_value=dict(new_info)):
+        status = ensure_model(
+            model_dir, "org/repo", files_present=False,
+            version="v2.1.0", revision="sha",
+            download=_fake_download(model_dir, ["a.vmfb", "b.vmfb"]),
+        )
+
+    assert status is ModelStatus.INCOMPLETE
+    assert (model_dir / "a.vmfb").read_text() == "a"           # untouched
+    assert (model_dir / "b.vmfb").read_text() == "b.vmfb@new"  # repaired
+    assert read_manifest(model_dir)["file_info"] == new_info
+
+
+def test_ensure_model_version_adopt_keeps_file_info(tmp_path):
+    model_dir = _make_tracked(
+        tmp_path / "m", ["a.vmfb"],
+        {"a.vmfb": {"size": 1, "sha256": "aaa"}},
+        version="v2.0.0", revision="sha",
+    )
+
+    with mock.patch("utils.download.get_hf_file_info") as gi:
+        status = ensure_model(
+            model_dir, "org/repo", files_present=True,
+            version="v2.1.0", revision="sha",
+            download=_fake_download(model_dir, ["a.vmfb"]),
+        )
+
+    assert status is ModelStatus.UP_TO_DATE
+    gi.assert_not_called()
+    assert read_manifest(model_dir)["file_info"] == {"a.vmfb": {"size": 1, "sha256": "aaa"}}

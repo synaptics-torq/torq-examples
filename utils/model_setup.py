@@ -31,6 +31,7 @@ from utils.download import (
     base_dir_for,
     default_models_dir,
     ensure_model,
+    get_hf_file_info,
     get_hf_revision,
     read_manifest,
     resolve_repo_id,
@@ -66,7 +67,9 @@ _MODEL_VERSION_HELP: Final[str] = (
 )
 _NO_UPDATE_HELP: Final[str] = (
     "Download without tracking: no .manifest.json is written, so the "
-    "models are never checked for updates or refreshed (at your own risk)."
+    "models are never checked for updates or refreshed (at your own risk). "
+    "Unless a version is pinned explicitly, the repo's latest (HEAD) "
+    "revision is downloaded."
 )
 
 
@@ -151,7 +154,8 @@ def download_models(
     values of ``repo_map``) default to the torq-examples version and custom
     repos to their latest (HEAD) revision. ``no_update=True`` downloads without
     writing a manifest, so the models are never tracked or refreshed (at your
-    own risk).
+    own risk); absent an explicit version it downloads the repo's latest
+    (HEAD) revision rather than the built-in version tag.
 
     ``label`` only appears in log messages and error text.
     """
@@ -164,9 +168,16 @@ def download_models(
     result: dict[str, Path] = {}
     for name, spec_version in parse_model_specs(models):
         repo_id = resolve_repo_id(name, repo_map)
-        version = resolve_model_version(
-            repo_id, spec_version or model_version, builtin_repos=builtin_repos
-        )
+        explicit_version = spec_version or model_version
+        if no_update and explicit_version is None:
+            # Untracked copies are not pinned to the built-in version tag
+            # (untagged repos cannot resolve it); they download the repo's
+            # latest (HEAD) revision.
+            version = None
+        else:
+            version = resolve_model_version(
+                repo_id, explicit_version, builtin_repos=builtin_repos
+            )
         model_dir = base_dir / repo_id
         try:
             refresh_model(
@@ -256,7 +267,7 @@ def sync_prefill_tracking(
     *,
     enable_prefill: bool,
 ) -> None:
-    """Align a tracked copy's manifest with the ``--with-prefill`` flag.
+    """Align a tracked copy's manifest with the ``--with-batch-prefill`` flag.
 
     The download hooks only run when something needs to be fetched, so an
     already-complete copy would otherwise keep its manifest as-is: this
@@ -271,26 +282,40 @@ def sync_prefill_tracking(
     if manifest is None:
         return
     files = list(manifest.get("files", []))
+    file_info = manifest.get("file_info")
     if enable_prefill:
         if prefill_filename not in files and (model_dir / prefill_filename).exists():
             files.append(prefill_filename)
+            if file_info:
+                # Track the newly added file too, so a future tag move can
+                # refresh it per-file.
+                extra = get_hf_file_info(
+                    repo_id, revision=manifest.get("revision"),
+                    filenames={prefill_filename},
+                )
+                if extra:
+                    file_info = {**file_info, **extra}
             write_manifest(
                 model_dir, repo_id, files,
                 version=manifest.get("version"), revision=manifest.get("revision"),
+                file_info=file_info,
             )
             logger.info(
-                "Tracking existing %s in %s; run setup without --with-prefill "
+                "Tracking existing %s in %s; run setup without --with-batch-prefill "
                 "to stop tracking it.", prefill_filename, model_dir,
             )
     elif prefill_filename in files:
         files.remove(prefill_filename)
+        if file_info:
+            file_info = {name: info for name, info in file_info.items() if name != prefill_filename}
         write_manifest(
             model_dir, repo_id, files,
             version=manifest.get("version"), revision=manifest.get("revision"),
+            file_info=file_info,
         )
         logger.info(
             "No longer tracking %s in %s; the local file is kept but will not "
-            "be checked or refreshed. Run setup with --with-prefill to track "
+            "be checked or refreshed. Run setup with --with-batch-prefill to track "
             "it again.", prefill_filename, model_dir,
         )
 
@@ -347,7 +372,7 @@ def demo_main(
     ``setup_fn(models, model_version=..., no_update=...)``.
 
     Demos with an optional batched prefill model pass
-    ``supports_prefill=True`` to also expose ``--with-prefill`` and forward it to
+    ``supports_prefill=True`` to also expose ``--with-batch-prefill`` and forward it to
     ``setup_fn`` as ``enable_prefill``; all other demos keep the plain
     interface and never see the flag.
     """
@@ -362,7 +387,7 @@ def demo_main(
     parser.add_argument("--no-update", action="store_true", help=_NO_UPDATE_HELP)
     if supports_prefill:
         parser.add_argument(
-            "--with-prefill", action="store_true", default=False,
+            "--with-batch-prefill", action="store_true", default=False,
             help=(
                 "Also download and track the optional batched prefill model "
                 "(transformer_prefill.vmfb). It is an extra model, so it uses "
@@ -382,7 +407,7 @@ def demo_main(
             "no_update": args.no_update,
         }
         if supports_prefill:
-            kwargs["enable_prefill"] = args.with_prefill
+            kwargs["enable_prefill"] = args.with_batch_prefill
         setup_fn(args.models, **kwargs)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)

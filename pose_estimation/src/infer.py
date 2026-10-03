@@ -6,7 +6,7 @@ import os
 import sys
 from pathlib import Path
 
-from pose_estimation.setup_demo import ensure_pose_estimation_models
+from pose_estimation.setup_demo import ensure_pose_estimation_models, local_pose_model_path
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
 from utils.pose_estimation import (
@@ -42,7 +42,10 @@ def maybe_save_and_display(args, results):
 
 def main():
     parser = argparse.ArgumentParser(description="Run YOLOv8 Pose estimation on an image.")
-    parser.add_argument("--model", required=True)
+    parser.add_argument(
+        "--model", default=None,
+        help="Path to the model VMFB (default: the one setup_demo.py downloaded)",
+    )
     parser.add_argument("--image", required=True)
     parser.add_argument("--device", default="torq")
     parser.add_argument(
@@ -62,6 +65,15 @@ def main():
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
     args = parser.parse_args()
+
+    if args.model is None:
+        local_model = local_pose_model_path()
+        if local_model is None:
+            parser.error(
+                "no local pose model found; pass --model or run "
+                "`python setup_demos.py pose_estimation` from torq-examples root"
+            )
+        args.model = str(local_model)
 
     ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
 
