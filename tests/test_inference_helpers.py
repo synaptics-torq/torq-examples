@@ -143,10 +143,10 @@ def test_common_inference_args_tda_default():
     add_common_inference_args(parser)
     assert parser.parse_args([]).tda == "dmabuf"
 
-    # The moonshine models run with a CPU device-allocator default.
+    # Moonshine and the other demos use the dmabuf allocator by default.
     parser = argparse.ArgumentParser()
-    add_common_inference_args(parser, tda_default="cpu")
-    assert parser.parse_args([]).tda == "cpu"
+    add_common_inference_args(parser, tda_default="dmabuf")
+    assert parser.parse_args([]).tda == "dmabuf"
 
 
 # ── chat loop ────────────────────────────────────────────────────────────────
