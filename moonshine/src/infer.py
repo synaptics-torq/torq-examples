@@ -63,11 +63,12 @@ def main(args: argparse.Namespace):
     setup_npu_for_inference()
 
     runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
+    device_io = args.device_io or args.tda == "dmabuf"
     runner = MoonshineRunner(
         args.model_dir,
         n_threads=args.threads,
         runtime_flags=runtime_flags,
-        device_io=args.device_io,
+        device_io=device_io,
     )
 
     tokenizer_path = args.tokenizer
@@ -112,9 +113,9 @@ if __name__ == "__main__":
     )
     add_common_inference_args(
         parser,
-        tda_default="cpu",
+        tda_default="dmabuf",
         device_io_default=False,
-        device_io_help="Preallocate encoder input and keep encoder outputs as device arrays (default: disabled)",
+        device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
     )
     args = parser.parse_args()
     if args.model_dir is None:
