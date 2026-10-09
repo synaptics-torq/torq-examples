@@ -8,6 +8,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
 | [qwen2_5](qwen2_5/) | Interactive chat with Qwen2.5 0.5B Instruct, GPTQ INT4 (experimental) |
+| [qwen3](qwen3/) | Interactive chat with Qwen3 0.6B (non-thinking mode), GPTQ INT4 (experimental) |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
 | [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
 | [object_detection](object_detection/) | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
