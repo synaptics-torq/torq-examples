@@ -14,6 +14,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M (INT8) |
 | [pose_estimation](pose_estimation/) | YOLOv8n pose estimation |
 | [Face_ID](Face_ID/) | Face detection on an image file |
+| [Google-EmbeddingGemma-2](Google/Google-EmbeddingGemma-2/) | Multimodal embeddings (text, image, video, audio) with Google EmbeddingGemma-2, and search over a media folder |
 
 
 ## Setup

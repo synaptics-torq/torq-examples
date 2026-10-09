@@ -31,6 +31,7 @@ DEMOS = [
     "object_detection",
     "pose_estimation",
     "face_id",
+    "Google-EmbeddingGemma-2",
 ]
 
 # Demos whose setup supports the --with-batch-prefill flag (their models have a
@@ -112,6 +113,9 @@ def setup_demo(
         elif name == "LiquidAI-LFM2-VL-450M":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
             _mod.setup_liquidvl_int8(["default"])
+        elif name == "Google-EmbeddingGemma-2":
+            _mod = _load_demo_module("Google", "Google-EmbeddingGemma-2", "setup_demo.py")
+            _mod.setup_embeddinggemma2(["default"], model_version=model_version, no_update=no_update)
         elif name == "object_detection":
             from object_detection.setup_demo import setup_object_detection
             setup_object_detection(model_version=model_version, no_update=no_update)
