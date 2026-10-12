@@ -24,6 +24,7 @@ logger = logging.getLogger("setup")
 
 DEMOS = [
     "gemma3",
+    "qwen2_5",
     "LiquidAI-LFM2.5",
     "moonshine",
     "moonshine_streaming",
@@ -95,6 +96,9 @@ def setup_demo(
                 no_update=no_update,
                 enable_prefill=enable_prefill,
             )
+        elif name == "qwen2_5":
+            from qwen2_5.setup_demo import setup_qwen25
+            setup_qwen25(["instruct"], model_version=model_version, no_update=no_update)
         elif name == "LiquidAI-LFM2.5":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
             _mod.setup_liquid(
