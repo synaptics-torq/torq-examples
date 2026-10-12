@@ -102,11 +102,7 @@ def setup_qwen3(
     model_version: str | None = None,
     no_update: bool = False,
 ):
-    """Set up the Qwen3 demo.
-
-    The model repo is private while the export is experimental: log in with
-    ``huggingface-cli login`` (an account with access to the Synaptics org) first.
-    """
+    """Set up the Qwen3 demo."""
     if models is None:
         models = _DEFAULT_MODELS
     if model_version is None and not no_update:

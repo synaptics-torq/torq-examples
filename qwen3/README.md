@@ -1,27 +1,12 @@
-# Qwen3 Demo (experimental)
+# Qwen3 Demo
 
 Interactive chat with [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) on the
 Torq NPU, in non-thinking mode (the assistant turn starts with an empty
 `<think></think>` block). The weights are INT4, calibrated with GPTQ.
 
-> [!WARNING]
-> Experimental. The model was compiled with a development Torq compiler and has not
-> been validated on hardware yet. Its INT4 accuracy is below the Gemma 3 demo's
-> (see the [model card](https://huggingface.co/Synaptics/Qwen3-0.6B-GPTQ-int4-torq)).
-> The output vocabulary is trimmed to Latin text, punctuation and digits.
-
 ## Setup
 
 See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
-
-The model repo `Synaptics/Qwen3-0.6B-GPTQ-int4-torq` is **private**
-for now. Log in once with a Hugging Face account that can read the Synaptics org:
-
-```sh
-huggingface-cli login     # huggingface-hub 0.31 (requirements.txt); `hf auth login` on newer versions
-```
-
-Alternatively, export `HF_TOKEN=<token>` in the shell that runs setup.
 
 Then enter the demo directory, install its dependencies, and jump back to the repo root:
 
