@@ -30,7 +30,7 @@ By default the demo downloads the model version matching this repo's `VERSION` f
 
 ```sh
 cd qwen2_5
-python setup_demo.py --model-version v2.2.1
+python setup_demo.py --model-version v2.3.0
 ```
 
 ## Running
