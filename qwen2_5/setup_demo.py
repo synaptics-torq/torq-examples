@@ -20,13 +20,9 @@ from utils.model_setup import (
 logger = logging.getLogger("Qwen2.5.setup")
 
 QWEN25_HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/Qwen2.5-0.5B-Instruct-GPTQ-int4-torq",
     "instruct": "Synaptics/Qwen2.5-0.5B-Instruct-GPTQ-int4-torq",
 }
 _DEFAULT_MODELS: Final[list[str]] = ["instruct"]
-# The Qwen repo is not released under torq-examples version tags yet, so the
-# built-in default (the VERSION tag) cannot resolve; track its main branch.
-_DEFAULT_MODEL_VERSION: Final[str] = "main"
 _QWEN25_FILES: Final[tuple[str, ...]] = (
     "transformer.vmfb",
     "lm_head.vmfb",
@@ -105,8 +101,6 @@ def setup_qwen25(
     """Set up the Qwen2.5 demo."""
     if models is None:
         models = _DEFAULT_MODELS
-    if model_version is None and not no_update:
-        model_version = _DEFAULT_MODEL_VERSION
 
     return setup_demo(
         QWEN25_HF_REPO_MAP,

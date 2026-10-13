@@ -26,12 +26,12 @@ This downloads the model files to `models/Synaptics/Qwen3-0.6B-GPTQ-int4-torq/`:
 `transformer.vmfb`, `lm_head.vmfb`, `token_embeddings.npy`, `token_id_lut.npy`,
 `config.json` and `tokenizer.json`.
 
-The repo has no release tags yet, so setup tracks its `main` branch. You can pin a
-specific commit or tag with `--model-version` instead:
+By default the demo downloads the model version matching this repo's `VERSION` file (see the
+[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
 
 ```sh
 cd qwen3
-python setup_demo.py --model-version <commit-or-tag>
+python setup_demo.py --model-version v2.2.1
 ```
 
 ## Running

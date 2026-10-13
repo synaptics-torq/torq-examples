@@ -7,7 +7,7 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | Demo | Description |
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
-| [qwen2_5](qwen2_5/) | Interactive chat with Qwen2.5 0.5B Instruct |
+| [qwen2.5](qwen2_5/) | Interactive chat with Qwen2.5 0.5B Instruct |
 | [qwen3](qwen3/) | Interactive chat with Qwen3 0.6B (non-thinking mode) |
 | [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
 | [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
