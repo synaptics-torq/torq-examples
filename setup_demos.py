@@ -26,6 +26,7 @@ DEMOS = [
     "gemma3",
     "qwen2_5",
     "qwen3",
+    "qwen3_5",
     "LiquidAI-LFM2.5",
     "moonshine",
     "moonshine_streaming",
@@ -103,6 +104,9 @@ def setup_demo(
         elif name == "qwen3":
             from qwen3.setup_demo import setup_qwen3
             setup_qwen3(["instruct"], model_version=model_version, no_update=no_update)
+        elif name == "qwen3_5":
+            from qwen3_5.setup_demo import setup_qwen35
+            setup_qwen35(["instruct"], model_version=model_version, no_update=no_update)
         elif name == "LiquidAI-LFM2.5":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
             _mod.setup_liquid(
