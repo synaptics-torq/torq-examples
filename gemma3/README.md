@@ -41,6 +41,17 @@ python setup_demo.py --with-batch-prefill
 
 `transformer_prefill.vmfb` is an extra model, so it uses more memory, and its prompt-chunk size is fixed to 64 tokens. It is a no-op with a warning for repos that have no prefill model. Re-running setup without the flag removes it from tracking (the local file is kept but no longer checked or refreshed).
 
+PTD (Progressive Tree Drafting) speculative decode builds are published as their own model repos (`<repo>-ptd`), with the same file layout as the base model: the `transformer.vmfb` there is a fixed-row PTD body that does prompt prefill and decode itself. Set one up like any other model, e.g.:
+
+```sh
+cd gemma3
+python setup_demo.py instruct-ptd
+# or, to fetch it alongside the base model:
+python setup_demo.py --with-ptd
+```
+
+They are separate models, so they use more memory, and their row budget (the `N` in the `--ptd-rows N` export) is fixed by the build. It is a no-op with a warning for repos that have no PTD build.
+
 ## Running
 
 Run the demo from the `gemma3` directory:
@@ -58,6 +69,9 @@ python src/infer.py --instruct-model
 > [!TIP]
 > When the model directory contains a `transformer_prefill.vmfb` (a fixed-size batched prefill model exported alongside `transformer.vmfb`), the demo picks it up automatically: complete prompt chunks run through the prefill model and only the final prompt unit uses the LM head, so time-to-first-token drops sharply.
 > Any prompt remainder and all generated tokens still use `transformer.vmfb`, and both paths share the same KV cache. Use `--batch-prefill-model PATH` to point at a specific prefill model, or `--no-batch-prefill-model` to force single-token prompt prefill.
+
+> [!TIP]
+> A standalone PTD (Progressive Tree Drafting) model directory is run exactly like a regular one (`-m` it directly): its fixed-row `transformer.vmfb` body is detected by its `tree_vis` input and used for every phase — prompt prefill runs packed causal chains through it, and generated tokens are decoded in PTD rounds that verify multiple draft tokens per forward pass. Greedy output stays token-identical to single-token decoding of the same model, and near the end of the cache the rounds shrink to the rows that fit (no separate decode model is needed). PTD builds are greedy-only: run them with the default `--temperature 0`.
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 

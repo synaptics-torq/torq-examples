@@ -225,7 +225,7 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
     def shift_kv(self, keep_last_n: int, seq_axis: int = 2, protect_first_n: int = 0) -> None:
         """Shift the last *keep_last_n* entries to just after the first
         *protect_first_n* positions, zeroing the rest."""
-        for i in range(self._n_kv):
+        for i in range(len(self._kv_init)):
             host = self._kv_cache[i].to_host()
             seq_len = host.shape[seq_axis]
             dest_start = protect_first_n
@@ -244,6 +244,93 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
             dst[seq_axis] = slice(dest_start, dest_start + keep_last_n)
             new[tuple(dst)] = host[tuple(src)]
             self._kv_cache[i] = self.allocate_device_array(new)
+
+
+class ManagedPTDCacheRunner(ManagedSelfAttnCacheRunner):
+    """VMFB runner for a standalone fixed-row PTD body.
+
+    Output layout: ``[first, committed_0, ..., committed_{L-1}, kv_scratch_0,
+    ..., kv_scratch_{L-1}]`` — per-row hidden states (or logits for a fused
+    body) first, then the committed per-layer cache (anchor blended in at the
+    round position), then per-layer combined key/value scratch rows for the
+    packed tree slots.
+
+    Unlike the decode layout, the body's committed-cache *inputs* are not the
+    trailing inputs: the ``tree_vis`` input follows them, and the trailing
+    output count includes the scratch rows. The cache bookkeeping is therefore
+    derived from the ``past_key_values.*`` input names, only the committed
+    caches are managed, and the present/scratch outputs are returned as-is:
+    the PTD decoding loop owns the cache-update policy (scratch promotion on
+    accepted paths).
+    """
+
+    def __init__(self, model_path: str | os.PathLike, device_io: bool = False, **kwargs):
+        super().__init__(model_path, device_io=device_io, **kwargs)
+        in_info = self.inputs_info
+        # The committed cache inputs are the 4-D [1, H, M, D] inputs; M is the
+        # largest key dim among the 4-D inputs (the tree_vis input is
+        # [1, 1, R, R-1] with R << M, so it is never swept in). Input names
+        # are not reflected by the runtime, so identification is by shape.
+        m4_idx = [
+            j for j, info in enumerate(in_info)
+            if len(info.shape) == 4 and info.shape[0] == 1
+        ]
+        if not m4_idx:
+            raise ValueError(
+                f"PTD body '{model_path}' has no 4-D inputs; not a standalone "
+                "PTD build."
+            )
+        kv_len = max(
+            in_info[j].shape[2] for j in m4_idx
+            if isinstance(in_info[j].shape[2], int) and in_info[j].shape[2] > 1
+        )
+        cache_idx = [
+            j for j in m4_idx
+            if isinstance(in_info[j].shape[2], int) and in_info[j].shape[2] == kv_len
+        ]
+        if not cache_idx:
+            raise ValueError(
+                f"PTD body '{model_path}' has no [1, H, M, D] cache inputs; not "
+                "a standalone PTD build."
+            )
+        self._cache_input_idx = cache_idx
+        # Replace the trailing-derived cache state (wrong for PTD bodies: it
+        # counted committed + scratch outputs and swept tree_vis in as a
+        # "cache") with the committed caches only, in model input order.
+        self._kv_init = [
+            np.zeros(in_info[i].shape, dtype=np.dtype(in_info[i].dtype))
+            for i in cache_idx
+        ]
+        self._kv_cache = [self.allocate_device_array(z) for z in self._kv_init]
+
+    @property
+    def n_cache_inputs(self) -> int:
+        """Number of managed (committed) cache inputs."""
+        return len(self._cache_input_idx)
+
+    def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
+        if isinstance(inputs, Mapping):
+            user_inputs = list(inputs.values())
+        else:
+            user_inputs = list(inputs)
+        if self._device_io:
+            user_inputs = [
+                self.allocate_device_array(x) if isinstance(x, np.ndarray) else x
+                for x in user_inputs
+            ]
+        n_user = len(self.inputs_info) - self.n_cache_inputs
+        if len(user_inputs) != n_user:
+            raise ValueError(
+                f"PTD body expects {n_user} user inputs "
+                "(tokens, position_ids, tree_vis in model order), got "
+                f"{len(user_inputs)}."
+            )
+        # Reinsert the managed caches at their model-input positions (the
+        # user inputs occupy the remaining positions, in the same order).
+        full_inputs = list(user_inputs)
+        for j, i in enumerate(self._cache_input_idx):
+            full_inputs.insert(i, self._kv_cache[j])
+        return super(ManagedSelfAttnCacheRunner, self)._infer(full_inputs)
 
 
 class ManagedEncDecCacheRunner(BaseManagedCacheRunner):
@@ -802,14 +889,24 @@ def print_llm_stats(runner) -> None:
 
     Uses the runner's ``last_infer_time`` (total ms), ``time_to_first_token``
     (ms) and ``generated_tokens`` — the same fields every LLM demo reports.
+    Runners that decoded with PTD (``ptd_stats`` property) also get a short
+    PTD summary appended.
     """
     decode_ms = runner.last_infer_time - runner.time_to_first_token
     tps = runner.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
-    print(
+    line = (
         f"  ({runner.last_infer_time:.0f} ms, "
         f"TTFT: {runner.time_to_first_token:.0f} ms, "
-        f"{tps:.1f} tok/s)\n"
+        f"{tps:.1f} tok/s)"
     )
+    ptd = getattr(runner, "ptd_stats", None)
+    if ptd:
+        line += (
+            f", PTD: {ptd['rounds']} rounds, "
+            f"{ptd['hit_rate']:.0%} hit, "
+            f"+{ptd['avg_accept']:.2f} accept"
+        )
+    print(line + "\n")
 
 
 def run_chat_loop(

@@ -10,14 +10,17 @@ import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sized
 from pathlib import Path
+from time import perf_counter_ns
 from typing import Final
 
 import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
 
+from utils import ptd as ptd_core
 from utils.inference import (
     InferenceInterrupted,
+    ManagedPTDCacheRunner,
     ManagedSelfAttnCacheRunner,
     SplitLMHeadRunner,
     StopCheck,
@@ -207,6 +210,62 @@ def _tensor_info(info) -> str:
     return f"shape={shape}, dtype={dtype}"
 
 
+def _ptd_user_inputs(in_info) -> dict | None:
+    """Identify the (tok, pos, vis) user inputs of a PTD body by shape.
+
+    Input names are not reflected by the runtime, so identification is by
+    shape: the KV caches are the 4-D [1, H, M, D] inputs (M = the largest
+    key dim among the 4-D inputs); the tree_vis input is the 4-D
+    [1, 1, R, R-1] input; position_ids the 2-D [1, R] input; the token
+    input the remaining [1, R, ...] input (the extracted-embeddings
+    layout every PTD export uses). Returns None when no unambiguous
+    (token, positions, tree_vis) triple exists.
+    """
+    m4_idx = [
+        j for j, i in enumerate(in_info)
+        if len(i.shape) == 4 and i.shape[0] == 1
+    ]
+    if not m4_idx:
+        return None
+    kv_len = max(
+        (in_info[j].shape[2] for j in m4_idx
+         if isinstance(in_info[j].shape[2], int) and in_info[j].shape[2] > 1),
+        default=None,
+    )
+    if kv_len is None:
+        return None
+    cache = {j for j in m4_idx if in_info[j].shape[2] == kv_len}
+    vis = next(
+        (
+            j for j in m4_idx
+            if j not in cache
+            and in_info[j].shape[1] == 1
+            and isinstance(in_info[j].shape[2], int)
+            and in_info[j].shape[2] >= 2
+            and in_info[j].shape[3] == in_info[j].shape[2] - 1
+        ),
+        None,
+    )
+    if vis is None:
+        return None
+    R = in_info[vis].shape[2]
+    user = [j for j in range(len(in_info)) if j not in cache and j != vis]
+    if len(user) != 2:
+        return None
+    pos = [j for j in user if list(in_info[j].shape) == [1, R]]
+    tok = [
+        j for j in user
+        if j not in pos and in_info[j].shape[:2] == [1, R]
+    ]
+    if not tok and len(pos) == 2:
+        # 2-D ids token input + 2-D positions: the token input comes first.
+        tok = [user[0]]
+        pos = [j for j in pos if j != user[0]]
+    if len(pos) != 1 or len(tok) != 1:
+        return None
+    return {"tok": in_info[tok[0]], "pos": in_info[pos[0]], "vis": in_info[vis]}
+
+
 class DecoderOnlyLLMRunner(ABC):
     """Shared runner for decoder-only LLM VMFBs with managed KV cache."""
 
@@ -245,6 +304,24 @@ class DecoderOnlyLLMRunner(ABC):
         "_prefill_size",
         "_prefill_emb_buf",
         "_prefill_id_buf",
+        "_ptd_model",
+        "_ptd_body",
+        "_ptd_cache",
+        "_ptd_rows",
+        "_ptd_width",
+        "_ptd_depth",
+        "_ptd_pool_max_nodes",
+        "_ptd_pool_max_entries",
+        "_ptd_min_draft_rows",
+        "_ptd_pad_token",
+        "_ptd_tok_buf",
+        "_ptd_pos_buf",
+        "_ptd_vis_buf",
+        "_ptd_feed_order",
+        "_ptd_tree",
+        "_ptd_pool",
+        "_ptd_log",
+        "_ptd_rounds",
     )
 
     def __init__(
@@ -265,6 +342,11 @@ class DecoderOnlyLLMRunner(ABC):
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
         disable_prefill: bool = False,
+        ptd_width: int = 4,
+        ptd_depth: int = 6,
+        ptd_pool_max_nodes: int = 16,
+        ptd_pool_max_entries: int = 64,
+        ptd_min_draft_rows: int = 1,
     ) -> None:
         self._logger = logging.getLogger(self.__class__.__name__)
         self._debug_logging = self._logger.isEnabledFor(logging.DEBUG)
@@ -294,6 +376,34 @@ class DecoderOnlyLLMRunner(ABC):
                 n_threads=n_threads,
                 runtime_flags=runtime_flags,
             )
+
+        # PTD state (both modes); _setup_standalone_ptd fills in the rest
+        # when the model is a standalone fixed-row PTD body.
+        self._ptd_model = None
+        self._ptd_body = None
+        self._ptd_cache = None
+        self._ptd_rows = None
+        self._ptd_width = ptd_width
+        self._ptd_depth = ptd_depth
+        self._ptd_pool_max_nodes = ptd_pool_max_nodes
+        self._ptd_pool_max_entries = ptd_pool_max_entries
+        self._ptd_min_draft_rows = ptd_min_draft_rows
+        self._ptd_pad_token = 0
+        self._ptd_tok_buf = None
+        self._ptd_pos_buf = None
+        self._ptd_vis_buf = None
+        self._ptd_tree = None
+        self._ptd_pool = None
+        self._ptd_log = []
+        self._ptd_rounds = 0
+
+        # A standalone PTD export is a fixed-row body that *is* the model:
+        # the same file names, but the body takes per-row tokens, positions,
+        # and a tree_vis input. Detect it before any single-token-specific
+        # validation runs; the setup itself happens after the config, the
+        # embedding LUT, and the token ID LUT are loaded.
+        if self._is_ptd_body():
+            self._check_ptd_compat(prefill_path, temperature, top_p)
 
         self._validate_decode_model()
         model_seq_len = self._query_model_seq_len()
@@ -353,6 +463,9 @@ class DecoderOnlyLLMRunner(ABC):
                 len(self._token_id_lut),
             )
 
+        if self._is_ptd_body():
+            self._setup_standalone_ptd(n_threads, runtime_flags, device_io)
+
         self._init_step_buffers()
 
         self._prefill_model = None
@@ -371,7 +484,7 @@ class DecoderOnlyLLMRunner(ABC):
                 self._prefill_id_buf = np.zeros(
                     prefill_token_info.shape, dtype=np.dtype(prefill_token_info.dtype)
                 )
-        else:
+        elif self._ptd_rows is None:
             self._logger.debug(
                 "No batched prefill model available; prompts will be "
                 "prefilled with single-token decode steps."
@@ -463,6 +576,13 @@ class DecoderOnlyLLMRunner(ABC):
         (e.g. the fixed ``attention_mask`` of newer static exports) are
         constant per step and are built by :meth:`_build_extra_step_inputs`.
         """
+        if getattr(self, "_ptd_rows", None) is not None:
+            # The standalone PTD path feeds its own per-row buffers
+            # (_ptd_tok_buf/_ptd_pos_buf/_ptd_vis_buf); the single-token
+            # buffers are unused.
+            self._emb_buf = self._id_buf = self._pos_buf = None
+            self._extra_step_inputs = []
+            return
         in_info = self._model.inputs_info
         if not in_info or len(in_info) < 2:
             raise ValueError(
@@ -521,6 +641,8 @@ class DecoderOnlyLLMRunner(ABC):
         token deep inside the runtime with an opaque shape assertion. Catch
         it at load time and say how to fix the deployment.
         """
+        if getattr(self, "_ptd_rows", None) is not None or self._is_ptd_body():
+            return  # a standalone PTD body is fixed-row by design
         info = self._model.inputs_info
         if not info or not info[0].shape:
             return
@@ -543,14 +665,27 @@ class DecoderOnlyLLMRunner(ABC):
             )
 
     def _query_model_seq_len(self) -> int | None:
-        """Extract max sequence length from the KV cache input shape."""
+        """Extract max sequence length from a KV cache input shape.
+
+        Input names are not reflected by the runtime: the KV caches are the
+        4-D [1, H, M, D] inputs, so M is the largest key dim among the 4-D
+        inputs (the PTD body's tree_vis input [1, 1, R, R-1] is smaller).
+        """
         info = self._model.inputs_info
-        if info is None or len(info) < 3:
+        if info is None:
             return None
-        kv_shape = info[2].shape
-        if len(kv_shape) >= 3 and isinstance(kv_shape[2], int):
-            return kv_shape[2]
-        return None
+        kv_len = None
+        for i in info:
+            s = i.shape
+            if (
+                len(s) == 4
+                and s[0] == 1
+                and isinstance(s[2], int)
+                and s[2] > 1
+                and (kv_len is None or s[2] > kv_len)
+            ):
+                kv_len = s[2]
+        return kv_len
 
     def _query_logits_size(self) -> int | None:
         info = self._model.outputs_info
@@ -799,6 +934,378 @@ class DecoderOnlyLLMRunner(ABC):
             )
         return shape[1]
 
+    # -- PTD (Progressive Tree Drafting) ------------------------------------
+    #
+    # Standalone speculative decode: the fixed-row body (the ``--ptd-rows``
+    # ONNX export of the torq pipeline, compiled to ``transformer.vmfb`` +
+    # ``lm_head.vmfb``) is the model for every phase. Prompt prefill packs
+    # causal chains into the row budget; every generation round runs the
+    # anchor plus packed draft/verification tree rows in one forward. PTD
+    # greedy output is token-identical to ordinary greedy decoding (anchor
+    # row = the ordinary step; accepted continuations are the ordinary
+    # greedy predictions for their prefix; the stop rule is scanned per
+    # emitted token, including the padded anchor-only pass near cache
+    # capacity).
+    #
+    # Progressive Tree Drafting: Gao et al. 2026,
+    # https://arxiv.org/abs/2607.10661 (attribution and static-graph
+    # adaptations: utils/ptd.py).
+
+    def _check_ptd_compat(
+        self,
+        prefill_path: str | os.PathLike | None,
+        temperature: float,
+        top_p: float,
+    ) -> None:
+        """Standalone PTD bodies are incompatible with a batched prefill model
+        (they prefill themselves) and with sampling (PTD verification is
+        greedy-only)."""
+        if prefill_path is not None:
+            raise ValueError(
+                "The model is a standalone PTD body: it prefills prompts "
+                "itself with packed causal chains, so a batched prefill "
+                "model (--batch-prefill-model) cannot be used with it."
+            )
+        if temperature != 0.0 or top_p != 1.0:
+            raise ValueError(
+                "PTD supports greedy decoding only (temperature=0, top_p=1)."
+            )
+
+    def _is_ptd_body(self) -> bool:
+        """Whether the main model is a standalone fixed-row PTD body.
+
+        A PTD body's user inputs (the non-KV-cache ones) are exactly
+        (tokens [1, R, ...], position_ids [1, R], tree_vis [1, 1, R, R-1])
+        with R >= 2; ordinary decode/prefill bodies have two user inputs
+        and a one-token sequence dimension.
+        """
+        body = self._model._body if isinstance(self._model, SplitLMHeadRunner) else self._model
+        in_info = body.inputs_info
+        if not in_info or len(in_info) < 4:
+            return False
+        user = _ptd_user_inputs(in_info)
+        if user is None:
+            return False
+        tok_shape = user["tok"].shape
+        return (
+            len(tok_shape) >= 2
+            and isinstance(tok_shape[1], int)
+            and tok_shape[1] >= 2
+        )
+
+    def _setup_standalone_ptd(
+        self,
+        n_threads: int | None,
+        runtime_flags: list[str] | None,
+        device_io: bool,
+    ) -> None:
+        """Adopt the PTD execution path: the body does prompt prefill and
+        every generation round, so it is swapped for a cache-owning runner
+        and per-row input buffers are built."""
+        body = self._model._body if isinstance(self._model, SplitLMHeadRunner) else self._model
+        ptd_body = ManagedPTDCacheRunner(
+            body.model_path,
+            n_threads=n_threads,
+            runtime_flags=runtime_flags,
+            device_io=device_io,
+        )
+        user = _ptd_user_inputs(ptd_body.inputs_info)
+        if user is None:
+            raise ValueError(
+                f"PTD body '{ptd_body.model_path}' has no identifiable "
+                "(token, position_ids, tree_vis) user inputs."
+            )
+        tok_info, pos_info, vis_info = user["tok"], user["pos"], user["vis"]
+        rows = self._ptd_rows = tok_info.shape[1]
+        # User-input order in the model (the caches are interleaved among
+        # them); the feed helper expands this to the full input list.
+        self._ptd_feed_order = [
+            key
+            for i in ptd_body.inputs_info
+            for key in ("vis", "pos", "tok")
+            if i is user[key]
+        ]
+        self._validate_ptd_outputs(ptd_body, rows)
+        # The PTD loop owns the cache-update policy (scratch promotion on
+        # hits), so the body must not roll the present caches back itself.
+        if isinstance(self._model, SplitLMHeadRunner):
+            # Reuse the same compiled head: the split head projects the full
+            # [1, rows, hidden] stack in one call.
+            self._model = SplitLMHeadRunner(ptd_body, self._model._lm_head)
+        else:
+            self._model = ptd_body
+        self._ptd_body = ptd_body
+        self._ptd_cache = ptd_body._kv_cache
+        self._ptd_model = self._model
+
+        tok_shape = tuple(tok_info.shape)
+        if self._token_embeddings is not None:
+            emb_hidden = self._token_embeddings.shape[-1]
+            if (
+                len(tok_shape) >= 3
+                and isinstance(tok_shape[-1], int)
+                and tok_shape[-1] != emb_hidden
+            ):
+                raise ValueError(
+                    f"token_embeddings.npy has hidden size {emb_hidden} but the "
+                    f"PTD body's token input expects {tok_shape[-1]} "
+                    f"(shape {tok_shape})."
+                )
+            self._ptd_tok_buf = np.zeros(
+                (1, rows, emb_hidden),
+                dtype=np.dtype(tok_info.dtype),
+            )
+        else:
+            self._ptd_tok_buf = np.zeros(tok_shape, dtype=np.dtype(tok_info.dtype))
+        self._ptd_pos_buf = np.zeros(pos_info.shape, dtype=np.dtype(pos_info.dtype))
+        self._ptd_vis_buf = np.zeros(vis_info.shape, dtype=np.dtype(vis_info.dtype))
+        self._ptd_pad_token = self._config.get("pad_token_id") or 0
+        self._logger.info(
+            "Standalone PTD mode: '%s' is the model for prefill and decode "
+            "(%d rows, width=%d, depth=%d)",
+            str(body.model_path), rows, self._ptd_width, self._ptd_depth,
+        )
+
+    def _validate_ptd_outputs(self, ptd_body, rows: int) -> None:
+        """Standalone PTD body outputs: (first, committed per layer, combined
+        key/value scratch per layer), with the committed layout of the body's
+        own cache inputs."""
+        n_layers = ptd_body.n_cache_inputs
+        out_info = ptd_body.outputs_info
+        if len(out_info) != 1 + 2 * n_layers:
+            raise ValueError(
+                f"PTD body '{ptd_body.model_path}' output layout is not "
+                "(first, committed per layer, combined key/value scratch per "
+                f"layer): {len(out_info)} outputs for {n_layers} layers. Rebuild "
+                "with the current torq-tools PTD export (combined scratch K/V)."
+            )
+        cache_input = ptd_body.inputs_info[ptd_body._cache_input_idx[0]]
+        cache_sig = _tensor_signature(cache_input)
+        for i in range(1, 1 + n_layers):
+            if _tensor_signature(out_info[i]) != cache_sig:
+                raise ValueError(
+                    f"PTD body committed output {i} {_tensor_info(out_info[i])} "
+                    f"does not match the cache layout {_tensor_info(cache_input)}."
+                )
+        scratch_sig = (
+            (1, cache_sig[0][1], rows - 1, cache_sig[0][-1]),
+            cache_sig[1],
+        )
+        for i in range(1 + n_layers, 1 + 2 * n_layers):
+            if _tensor_signature(out_info[i]) != scratch_sig:
+                raise ValueError(
+                    f"PTD body scratch output {i} {_tensor_info(out_info[i])} "
+                    f"does not match the expected {scratch_sig[0]}."
+                )
+
+    def _ptd_reset_request_state(self) -> None:
+        """Per-request PTD state: a fresh draft tree; the candidate pool
+        warms up from the first round (same request-local semantics as the
+        torq-tools PTD runner)."""
+        if self._ptd_model is None:
+            return
+        self._ptd_tree = ptd_core.PTDTree(
+            width=self._ptd_width, max_depth=self._ptd_depth
+        )
+        self._ptd_pool = ptd_core.PTDPool(
+            max_entry_nodes=self._ptd_pool_max_nodes,
+            max_entries=self._ptd_pool_max_entries,
+            width=self._ptd_width,
+        )
+        self._ptd_log = []
+        self._ptd_rounds = 0
+
+    def _ptd_fill_inputs(self, packing) -> None:
+        if self._token_embeddings is not None:
+            self._ptd_tok_buf[0] = self._token_embeddings[packing.tokens]
+        else:
+            self._ptd_tok_buf[0] = packing.tokens
+        self._ptd_pos_buf[0] = packing.positions
+        self._ptd_vis_buf[0, 0] = packing.vis
+
+    def _ptd_feed(self) -> list:
+        """The PTD user inputs in the body's model input order (the
+        cache-owning runner reinserts the managed caches)."""
+        return [
+            {"tok": self._ptd_tok_buf, "pos": self._ptd_pos_buf, "vis": self._ptd_vis_buf}[k]
+            for k in self._ptd_feed_order
+        ]
+
+    def _ptd_prefill(
+        self,
+        tokens: list[int],
+        start: int,
+        should_stop: StopCheck | None,
+        produce_next_token: bool,
+    ) -> tuple[int, int]:
+        """Prompt prefill with packed causal chains: chunk the prompt into
+        row-budget chains (anchor = the chunk's first token), promote every
+        real row into the committed cache, and run the head only on the
+        final chain (and only when its token is wanted)."""
+        rows = self._ptd_rows
+        if start + len(tokens) > self._max_seq_len:
+            raise ValueError("PTD prompt exceeds the remaining cache capacity")
+        if not tokens:
+            return 0, start
+        pos = start
+        next_token = 0
+        for offset in range(0, len(tokens), rows):
+            chunk = tokens[offset:offset + rows]
+            nodes = []
+            for depth, token in enumerate(chunk[1:], start=1):
+                nodes.append(ptd_core.PTDNode(token, depth, parent=nodes[-1] if nodes else None))
+            packing = ptd_core.pack_round(
+                pos, chunk[0], nodes, [], rows, self._ptd_pad_token
+            )
+            self._ptd_fill_inputs(packing)
+            want_logits = offset + len(chunk) == len(tokens) and produce_next_token
+            step_inputs = self._ptd_feed()
+            if isinstance(self._ptd_model, SplitLMHeadRunner):
+                results = self._ptd_model.infer(step_inputs, skip_lm_head=not want_logits)
+            else:
+                results = self._ptd_model.infer(step_inputs)
+            self._ptd_commit_cache(results, packing, nodes, pos)
+            pos += len(chunk)
+            if want_logits:
+                first = self._host(results[0])
+                row = np.asarray(first).reshape(rows, -1)[len(chunk) - 1]
+                compact = int(np.argmax(row))
+                next_token = (
+                    int(self._token_id_lut[compact])
+                    if self._token_id_lut is not None
+                    else compact
+                )
+            _raise_if_stopped(should_stop)
+        return next_token, pos
+
+    def _ptd_round(
+        self, anchor_token: int, L: int, gen: list[int], max_emit: int | None
+    ) -> tuple[list[int], bool]:
+        """One PTD round. Returns (emitted tokens, stopped) and commits the
+        round's KVs into the body's cache. Near capacity the round shrinks to
+        as many rows as fit (anchor-only at L = M-1); there is no ordinary
+        decode fallback."""
+        rows = self._ptd_rows
+        free = min(rows, self._max_seq_len - L) - 1
+
+        # 1. Retrieve candidates (key = this round's anchor = the last emitted
+        # token) and allocate the row budget: candidates first, keeping at
+        # least one draft row while the draft tree is non-empty.
+        candidate_tree = self._ptd_pool.retrieve(anchor_token) if self._ptd_pool else None
+        cand_nodes = candidate_tree.bfs_nodes() if candidate_tree is not None else []
+        draft_nodes = self._ptd_tree.bfs_nodes()
+        if draft_nodes and self._ptd_min_draft_rows > 0:
+            n_cand = min(len(cand_nodes), free - self._ptd_min_draft_rows)
+        else:
+            n_cand = min(len(cand_nodes), free)
+        n_draft = min(len(draft_nodes), free - max(n_cand, 0))
+        cand_nodes = cand_nodes[: max(n_cand, 0)]
+        draft_nodes = draft_nodes[:n_draft]
+
+        # 2. Pack the round (slot 0 = anchor; candidate rows; draft rows;
+        # invalid slots padded with zero visibility).
+        packing = ptd_core.pack_round(
+            L, anchor_token, cand_nodes, draft_nodes, rows, self._ptd_pad_token
+        )
+
+        # 3. Body (+ block head): per-row tokens.
+        self._ptd_fill_inputs(packing)
+        t0 = perf_counter_ns()
+        results = self._ptd_model.infer(self._ptd_feed())
+        body_ms = (perf_counter_ns() - t0) / 1e6
+        first = self._host(results[0])
+        row_tokens = np.argmax(np.asarray(first).reshape(rows, -1), axis=-1)
+        if self._token_id_lut is not None:
+            row_tokens = self._token_id_lut[row_tokens]
+
+        # 4. Greedy verification. The stop adapter matches ordinary greedy:
+        # _should_stop expects the candidate included as the last element of
+        # the generated-token list; the PTD scan hands over the tokens
+        # committed *before* the candidate. The accepted budget is the lesser
+        # of the cache room and the --max-gen-tokens remainder.
+        max_accepted = min(free, (max_emit - 1) if max_emit is not None else free)
+        result = ptd_core.greedy_verify(
+            row_tokens,
+            cand_nodes,
+            packing.candidate_slots,
+            gen,
+            lambda token, committed: self._should_stop(token, list(committed) + [token]),
+            max_accepted,
+        )
+
+        # 5. Commit: the present caches carry the anchor at L; promote the
+        # accepted path's scratch rows to L+1.. before rolling them into the
+        # cache.
+        self._ptd_commit_cache(results, packing, result.accepted, L)
+
+        # 6. Evolve the draft tree and pool (bounded, request-local):
+        # packed draft nodes grow their argmax children, the tree steps and
+        # re-anchors on the round's first emitted token, and the pool absorbs
+        # the packed nodes' subtrees keyed by token value.
+        for node in packing.draft_slots:
+            self._ptd_tree.add_child(node, int(row_tokens[packing.draft_slots[node]]))
+        self._ptd_tree.step_and_prune()
+        self._ptd_tree.reroot(result.emitted[0])
+        for node in packing.draft_slots:
+            self._ptd_pool.merge_node(node)
+
+        self._ptd_rounds += 1
+        self._ptd_log.append({
+            "round": self._ptd_rounds,
+            "L": L,
+            "rows": rows,
+            "n_candidates": packing.n_candidates,
+            "n_drafts": packing.n_drafts,
+            "emitted": len(result.emitted),
+            "accepted": len(result.accepted),
+            "hit": result.hit,
+            "pool_entries": len(self._ptd_pool) if self._ptd_pool else 0,
+            "body_ms": body_ms,
+        })
+        return result.emitted, result.stopped
+
+    def _ptd_commit_cache(self, results: list, packing, accepted: list, L: int) -> None:
+        """Roll the round's present caches into the body's KV cache.
+
+        Miss (no accepted nodes): the present outputs *are* the new committed
+        state (only row L changed), so they replace the cache entries in
+        place — no host transfer. Hit: the accepted path's combined scratch
+        rows are spliced into rows L+1.. on the host, then the merged cache
+        is uploaded (the only per-round cache transfer, and only on hits).
+        """
+        n_layers = self._ptd_body.n_cache_inputs
+        if not accepted:
+            for i in range(n_layers):
+                self._ptd_cache[i] = results[1 + i]
+            return
+        for l in range(n_layers):
+            committed = self._host(results[1 + l])
+            scratch = self._host(results[1 + n_layers + l])
+            for j, node in enumerate(accepted):
+                s = packing.candidate_slots[node] - 1  # scratch row index
+                committed[0, :, L + 1 + j, :] = scratch[0, :, s, :]
+            self._ptd_cache[l] = self._ptd_body.allocate_device_array(committed)
+
+    @staticmethod
+    def _host(x):
+        """Host view of an inference output (DeviceArray -> NumPy)."""
+        return x.to_host() if hasattr(x, "to_host") else np.asarray(x)
+
+    @property
+    def ptd_stats(self) -> dict | None:
+        """Per-answer PTD summary (None when no PTD round ran)."""
+        if not self._ptd_log:
+            return None
+        rounds = len(self._ptd_log)
+        hits = sum(1 for e in self._ptd_log if e["hit"])
+        accept = sum(e["accepted"] for e in self._ptd_log)
+        return {
+            "rounds": rounds,
+            "committed": sum(e["emitted"] for e in self._ptd_log),
+            "hit_rate": hits / rounds,
+            "avg_accept": accept / rounds,
+        }
+
     def _sample(self, logits: np.ndarray) -> int:
         st = time.perf_counter_ns()
         logits = logits.astype(np.float32, copy=False)
@@ -839,6 +1346,8 @@ class DecoderOnlyLLMRunner(ABC):
         *,
         produce_next_token: bool = True,
     ) -> tuple[int, int]:
+        if self._ptd_rows is not None:
+            return self._ptd_prefill(tokens, start, should_stop, produce_next_token)
         pos = start
         if self._prefill_model is not None and len(tokens) >= self._prefill_size:
             chunk = self._prefill_size
@@ -985,6 +1494,7 @@ class DecoderOnlyLLMRunner(ABC):
             yield_ns += time.perf_counter_ns() - yield_start_ns
 
             gen = [next_tok]
+            self._ptd_reset_request_state()
             while not self._should_stop(next_tok, gen):
                 _raise_if_stopped(should_stop)
                 if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
@@ -1008,6 +1518,30 @@ class DecoderOnlyLLMRunner(ABC):
                     else:
                         self._logger.warning("Max generation tokens reached")
                         break
+                remaining = (
+                    self._max_gen_tokens - len(gen)
+                    if self._max_gen_tokens is not None
+                    else None
+                )
+                # Standalone PTD: every step is a PTD round; near capacity
+                # the round shrinks to the rows that fit (anchor-only at the
+                # last slot), so there is no plain-step fallback.
+                if self._ptd_model is not None:
+                    emitted, stopped = self._ptd_round(next_tok, pos, gen, remaining)
+                    next_tok = emitted[-1]
+                    for tok in emitted:
+                        _raise_if_stopped(should_stop)
+                        gen.append(tok)
+                        pos += 1
+                        full_text = self._tokenizer.decode(gen)
+                        chunk = full_text[len(prev_text) :]
+                        yield_start_ns = time.perf_counter_ns()
+                        yield chunk
+                        yield_ns += time.perf_counter_ns() - yield_start_ns
+                        prev_text = full_text
+                    if stopped:
+                        break
+                    continue
                 next_tok = self.llm_step(next_tok, pos)
                 _raise_if_stopped(should_stop)
                 gen.append(next_tok)

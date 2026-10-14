@@ -18,6 +18,7 @@ class RecordingGemma(Gemma3Static):
         # _prefill() branches on these; RecordingGemma skips __init__.()
         self._prefill_model = None
         self._prefill_size = None
+        self._ptd_rows = None
 
     def llm_step(
         self,

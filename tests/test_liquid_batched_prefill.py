@@ -334,6 +334,7 @@ class RecordingPrefill(LiquidStatic):
         # _prefill() branches on these.
         self._prefill_model = None
         self._prefill_size = None
+        self._ptd_rows = None
 
     def _llm_tokens_step(self, model, tokens, seq_pos, **kwargs):
         self.calls.append(("chunk", tuple(tokens), seq_pos, kwargs))

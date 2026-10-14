@@ -270,6 +270,8 @@ class _GenProbe(DecoderOnlyLLMRunner):
         self._reset_cache_state = []
         self._tokenizer = _FakeTokenizer()
         self._eos_token_id = 99
+        self._ptd_model = None
+        self._ptd_rows = None
 
     def tokenize(self, text: str, role: str | None = None) -> list[int]:
         raise NotImplementedError
