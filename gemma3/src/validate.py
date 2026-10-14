@@ -39,6 +39,7 @@ from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
+from utils.runtime import build_runtime_flags
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -419,7 +420,8 @@ def main(args: argparse.Namespace) -> None:
         instruct_model=args.instruct_model,
         cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
         temperature=0.0,   # greedy decoding for reproducibility
-        runtime_flags=args.runtime_flags,
+        runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
+        device_io=args.device_io,
         lm_head_path=args.lm_head,
         disable_lm_head=args.no_lm_head,
     )
@@ -458,7 +460,6 @@ if __name__ == "__main__":
         with_prefill=False,
         with_max_gen_tokens=False,
         with_sampling=False,
-        with_allocator=False,
         with_no_refresh=False,
     )
     parser.add_argument(
