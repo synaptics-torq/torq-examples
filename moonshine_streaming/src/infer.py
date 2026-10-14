@@ -28,11 +28,13 @@ except ImportError:
 
 from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
 from moonshine_streaming.setup_demo import (
+    download_moonshine_streaming,
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.npu import configure_npu_userspace_frequency
 
 logger = logging.getLogger("moonshine_streaming")
@@ -186,7 +188,6 @@ class _Stats:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace):
-    configure_logging(args.logging)
 
     model_dir = args.model_dir
 
@@ -443,12 +444,18 @@ if __name__ == "__main__":
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
     add_common_inference_args(parser, with_threads=False, with_allocator=False)
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model_dir is None:
-        local_dir = local_moonshine_streaming_model_dir()
-        if local_dir is None:
-            parser.error(
-                "no local Moonshine streaming model found; pass -m/--model-dir or run "
-                "`python setup_demos.py moonshine_streaming` from torq-examples root"
+        args.model_dir = str(
+            resolve_default_model(
+                parser,
+                local_moonshine_streaming_model_dir,
+                download=download_moonshine_streaming,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local Moonshine streaming model found; pass -m/--model-dir or run "
+                    "`python setup_demos.py moonshine_streaming` from torq-examples root"
+                ),
             )
-        args.model_dir = str(local_dir)
+        )
     main(args)

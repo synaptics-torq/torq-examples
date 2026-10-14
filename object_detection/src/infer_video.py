@@ -4,7 +4,12 @@
 import json
 from pathlib import Path
 
-from object_detection.setup_demo import default_model_path, ensure_object_detection_models
+from object_detection.setup_demo import (
+    default_model_path,
+    download_object_detection,
+    ensure_object_detection_models,
+    VARIANT_MODEL_FILES,
+)
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -19,6 +24,8 @@ from utils.object_detection import (
     postprocess,
     preprocess_frame_cv,
 )
+from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 
 
 
@@ -48,14 +55,22 @@ def main():
         help="Model head variant (default: %(default)s)",
     )
     args = parser.parse_args()
+    configure_logging("INFO")
 
     if args.model is None:
-        args.model = str(default_model_path(args.variant))
-        if not Path(args.model).exists():
-            parser.error(
-                f"default model {args.model} not found; pass --model or run "
-                f"`python setup_demos.py object_detection` from torq-examples root"
+        expected = default_model_path(args.variant)
+        args.model = str(
+            resolve_default_model(
+                parser,
+                lambda: expected if expected.exists() else None,
+                download=lambda: download_object_detection([VARIANT_MODEL_FILES[args.variant][0]]),
+                no_refresh=args.no_refresh,
+                message=(
+                    f"default model {expected} not found; pass --model or run "
+                    f"`python setup_demos.py object_detection` from torq-examples root"
+                ),
             )
+        )
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
     runtime_flags = build_runtime_flags(args.tda, args.runtime_flags)

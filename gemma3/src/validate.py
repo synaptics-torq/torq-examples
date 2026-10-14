@@ -34,10 +34,11 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
 
-from gemma3.setup_demo import local_gemma3_model_path
+from gemma3.setup_demo import download_gemma3, local_gemma3_model_path
 from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -410,7 +411,6 @@ class TeacherForcedValidator(BaseValidator):
 
 
 def main(args: argparse.Namespace) -> None:
-    configure_logging(args.logging)
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
@@ -498,12 +498,17 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model is None:
-        local_model = local_gemma3_model_path()
-        if local_model is None:
-            parser.error(
-                "no local Gemma3 model found; pass -m/--model or run "
-                "`python setup_demos.py gemma3` from torq-examples root"
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_gemma3_model_path,
+                download=download_gemma3,
+                message=(
+                    "no local Gemma3 model found; pass -m/--model or run "
+                    "`python setup_demos.py gemma3` from torq-examples root"
+                ),
             )
-        args.model = str(local_model)
+        )
     main(args)

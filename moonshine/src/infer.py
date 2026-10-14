@@ -11,9 +11,14 @@ import soundfile as sf
 from tokenizers import Tokenizer
 
 from runner import MoonshineRunner
-from moonshine.setup_demo import ensure_moonshine_models, local_moonshine_model_dir
+from moonshine.setup_demo import (
+    download_moonshine,
+    ensure_moonshine_models,
+    local_moonshine_model_dir,
+)
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 
 GREEN = "\033[32m"
@@ -54,7 +59,6 @@ def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
 
 
 def main(args: argparse.Namespace):
-    configure_logging(args.logging)
     logger = logging.getLogger("Moonshine")
     logger.info("Starting demo...")
 
@@ -118,12 +122,18 @@ if __name__ == "__main__":
         device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
     )
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model_dir is None:
-        local_dir = local_moonshine_model_dir()
-        if local_dir is None:
-            parser.error(
-                "no local Moonshine model found; pass -m/--model-dir or run "
-                "`python setup_demos.py moonshine` from torq-examples root"
+        args.model_dir = str(
+            resolve_default_model(
+                parser,
+                local_moonshine_model_dir,
+                download=download_moonshine,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local Moonshine model found; pass -m/--model-dir or run "
+                    "`python setup_demos.py moonshine` from torq-examples root"
+                ),
             )
-        args.model_dir = str(local_dir)
+        )
     main(args)

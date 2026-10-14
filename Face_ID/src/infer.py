@@ -14,7 +14,9 @@ from torq.runtime import VMFBInferenceRunner
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from Face_ID.src.postprocess import decode_face_outputs
-from Face_ID.setup_demo import local_face_id_model_path
+from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
+from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
 
 MODEL_WIDTH = 1280
@@ -94,14 +96,19 @@ def main() -> None:
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
     args = parser.parse_args()
+    configure_logging("INFO")
     if args.model is None:
-        local_model = local_face_id_model_path()
-        if local_model is None:
-            parser.error(
-                "no local Face ID model found; pass --model or run "
-                "`python setup_demos.py face_id` from torq-examples root"
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_face_id_model_path,
+                download=download_face_detector,
+                message=(
+                    "no local Face ID model found; pass --model or run "
+                    "`python setup_demos.py face_id` from torq-examples root"
+                ),
             )
-        args.model = str(local_model)
+        )
     device_io = args.device_io or args.tda == "dmabuf"
 
     model_path = resolve_input_path(args.model)
