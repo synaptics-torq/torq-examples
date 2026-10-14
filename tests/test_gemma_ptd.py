@@ -27,6 +27,7 @@ from utils.inference import (
     SplitLMHeadRunner,
     print_llm_stats,
 )
+from utils import llm
 
 VOCAB = 4
 EOS = 3
@@ -655,3 +656,54 @@ def test_ptd_stats_and_summary_line(capsys):
 def test_ptd_stats_none_without_rounds():
     runner = _PtdGemma(_cycle, eos=1, prompt=[0])  # prefill token is EOS: no rounds
     assert runner.ptd_stats is None
+
+
+@pytest.mark.parametrize("ptd", [False, True])
+@pytest.mark.parametrize("explicit_prefill", [False, True])
+def test_constructor_selects_prefill_from_runtime_metadata(tmp_path, monkeypatch, ptd, explicit_prefill):
+    model_path = tmp_path / "transformer.vmfb"
+    model_path.touch()
+    prefill_path = tmp_path / "transformer_prefill.vmfb"
+    prefill_path.touch()
+    body = _PtdGemma(_cycle)._model
+    if not ptd:
+        body.inputs_info = body.inputs_info[:-1]  # Ordinary body has no tree visibility.
+    monkeypatch.setattr(llm, "ManagedSelfAttnCacheRunner", lambda *a, **kw: body)
+
+    class SelectionChecked(Exception):
+        pass
+
+    resolve_prefill = llm.resolve_prefill_model_path
+
+    def check_selection(*args, **kwargs):
+        selected = resolve_prefill(*args, **kwargs)
+        assert selected == (prefill_path if explicit_prefill or not ptd else None)
+        return selected
+
+    def stop_after_selection(self):
+        raise SelectionChecked
+
+    monkeypatch.setattr(llm, "resolve_prefill_model_path", check_selection)
+    monkeypatch.setattr(llm.DecoderOnlyLLMRunner, "_validate_decode_model", stop_after_selection)
+    error = ValueError if ptd and explicit_prefill else SelectionChecked
+    with pytest.raises(error, match="standalone PTD body" if error is ValueError else None):
+        llm.DecoderOnlyLLMRunner.__init__(
+            Gemma3Static.__new__(Gemma3Static),
+            model_path,
+            disable_lm_head=True,
+            prefill_model_path=prefill_path if explicit_prefill else None,
+        )
+
+
+@pytest.mark.parametrize("head_rows", [1, ROWS])
+def test_ptd_split_head_requires_matching_runtime_rows(head_rows):
+    runner = SplitLMHeadRunner.__new__(SplitLMHeadRunner)
+    runner._body = _PtdGemma(_cycle, split=True)._model._body
+    runner._lm_head = type("Head", (), {
+        "inputs_info": [_TensorInfo((1, head_rows, HIDDEN), "float32", "hidden")],
+    })()
+    if head_rows == ROWS:
+        runner._validate_lm_head_io("lm_head.vmfb")
+    else:
+        with pytest.raises(ValueError, match="input shape"):
+            runner._validate_lm_head_io("lm_head.vmfb")

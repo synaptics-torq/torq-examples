@@ -41,16 +41,7 @@ python setup_demo.py --with-batch-prefill
 
 `transformer_prefill.vmfb` is an extra model, so it uses more memory, and its prompt-chunk size is fixed to 64 tokens. It is a no-op with a warning for repos that have no prefill model. Re-running setup without the flag removes it from tracking (the local file is kept but no longer checked or refreshed).
 
-PTD (Progressive Tree Drafting) speculative decode builds are published as their own model repos (`<repo>-ptd`), with the same file layout as the base model: the `transformer.vmfb` there is a fixed-row PTD body that does prompt prefill and decode itself. Set one up like any other model, e.g.:
-
-```sh
-cd gemma3
-python setup_demo.py instruct-ptd
-# or, to fetch it alongside the base model:
-python setup_demo.py --with-ptd
-```
-
-They are separate models, so they use more memory, and their row budget (the `N` in the `--ptd-rows N` export) is fixed by the build. It is a no-op with a warning for repos that have no PTD build.
+PTD (Progressive Tree Drafting) builds use the same model repositories and filenames (`transformer.vmfb` plus `lm_head.vmfb` or `lm_head.vmfb.trim`). Use the ordinary setup command and version selection. At runtime, the demo detects a PTD body from its tensor inputs and checks that the head's shape and dtype match the body output. The row budget is fixed by the compiled build. PTD bodies handle prompt prefill themselves, so a sibling `transformer_prefill.vmfb` is ignored automatically; explicitly passing `--batch-prefill-model` with PTD is an error.
 
 ## Running
 

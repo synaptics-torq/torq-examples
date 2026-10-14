@@ -357,12 +357,6 @@ class DecoderOnlyLLMRunner(ABC):
             disable_lm_head=disable_lm_head,
             logger=self._logger,
         )
-        prefill_path = resolve_prefill_model_path(
-            model_path,
-            prefill_model_path,
-            disable_prefill=disable_prefill,
-            logger=self._logger,
-        )
         self._model = ManagedSelfAttnCacheRunner(
             model_path,
             n_threads=n_threads,
@@ -402,7 +396,14 @@ class DecoderOnlyLLMRunner(ABC):
         # and a tree_vis input. Detect it before any single-token-specific
         # validation runs; the setup itself happens after the config, the
         # embedding LUT, and the token ID LUT are loaded.
-        if self._is_ptd_body():
+        is_ptd_body = self._is_ptd_body()
+        prefill_path = resolve_prefill_model_path(
+            model_path,
+            prefill_model_path,
+            disable_prefill=disable_prefill or (is_ptd_body and prefill_model_path is None),
+            logger=self._logger,
+        )
+        if is_ptd_body:
             self._check_ptd_compat(prefill_path, temperature, top_p)
 
         self._validate_decode_model()
@@ -463,7 +464,7 @@ class DecoderOnlyLLMRunner(ABC):
                 len(self._token_id_lut),
             )
 
-        if self._is_ptd_body():
+        if is_ptd_body:
             self._setup_standalone_ptd(n_threads, runtime_flags, device_io)
 
         self._init_step_buffers()
