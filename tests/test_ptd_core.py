@@ -13,8 +13,29 @@ from utils.ptd import (
     PTDTree,
     PTDPool,
     greedy_verify,
+    lookup_continuation,
     pack_round,
 )
+
+
+@pytest.mark.parametrize("tokens,budget,ngram,expected", [
+    ([], 4, 4, []),
+    ([1], 4, 4, []),
+    ([1, 2, 3], 4, 4, []),
+    ([1, 2, 3, 4, 1, 2], 2, 4, [3, 4]),
+    ([1, 2, 3, 4, 1, 2], 0, 4, []),
+    ([1, 2, 3, 4, 1, 2], 4, 0, []),
+    ([1, 2, 8, 2, 9, 1, 2], 1, 4, [8]),
+    ([1, 2, 8, 2, 9, 1, 2], 1, 1, [9]),
+    ([1, 2, 1, 3, 1], 2, 4, [3, 1]),
+])
+def test_lookup_continuation(tokens, budget, ngram, expected):
+    assert lookup_continuation(tokens, budget, ngram) == expected
+
+
+def test_lookup_minimum_match_length():
+    assert lookup_continuation([2, 1, 2], 4, min_ngram=2) == []
+    assert lookup_continuation([2, 1, 2], 4) == [1, 2]
 
 
 # ---------------------------------------------------------------------------

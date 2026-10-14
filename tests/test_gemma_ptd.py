@@ -21,6 +21,7 @@ import pytest
 
 from gemma3.src.runner import Gemma3Static
 from utils import ptd as ptd_core
+from utils.llm import DecoderOnlyLLMRunner
 from utils.inference import (
     BaseManagedCacheRunner,
     ManagedPTDCacheRunner,
@@ -336,6 +337,20 @@ def test_detects_standalone_ptd_body():
     assert split._is_ptd_body()
 
 
+def test_gemma_forwards_ptd_options(monkeypatch):
+    options = {}
+    monkeypatch.setattr(DecoderOnlyLLMRunner, "__init__", lambda self, *args, **kwargs: options.update(kwargs))
+    Gemma3Static("unused.vmfb", ptd_width=2, ptd_min_draft_rows=0, ptd_lookup_ngram=4)
+    assert options["ptd_width"] == 2
+    assert options["ptd_min_draft_rows"] == 0
+    assert options["ptd_lookup_ngram"] == 4
+
+
+def test_gemma_rejects_negative_lookup_before_loading_model():
+    with pytest.raises(ValueError, match="ptd_lookup_ngram"):
+        Gemma3Static("unused.vmfb", ptd_lookup_ngram=-1)
+
+
 def test_detection_rejects_ordinary_and_malformed_bodies():
     runner = _PtdGemma(_cycle, ptd=False)
     cache = _TensorInfo(runner._cache[0].shape, "float32", "past_key_values.0")
@@ -624,6 +639,41 @@ def test_ptd_max_gen_tokens_caps_generation():
     one = _PtdGemma(_cycle, max_gen_tokens=2)
     one.run("x")
     assert one._ptd_log and all(e["emitted"] == 1 and e["accepted"] == 0 for e in one._ptd_log)
+
+
+@pytest.mark.parametrize("ngram", [1, 4])
+@pytest.mark.parametrize("capacity", [8, 20])
+def test_ptd_lookup_verifies_prompt_continuations(ngram, capacity):
+    prompt = [0, 1, 2, 0, 1]
+    runner = _PtdGemma(_cycle, prompt=prompt, max_seq_len=capacity, max_gen_tokens=8)
+    runner._ptd_lookup_ngram = ngram
+    runner._ptd_min_draft_rows = 0
+    expected = _plain_greedy(_cycle, prompt, EOS, capacity, max_gen_tokens=8)
+    assert runner.run("x") == " ".join(str(t) for t in expected)
+    assert runner._ptd_log[0]["accepted"] > 0
+    for i, token in enumerate(prompt + expected[:-1]):
+        assert runner._cache[0][0, 0, i, 0] == token
+
+
+def test_ptd_lookup_rejects_wrong_prompt_continuation():
+    runner = _PtdGemma(_cycle, prompt=[1, 1], max_gen_tokens=4)
+    runner._ptd_lookup_ngram = 4
+    expected = _plain_greedy(_cycle, [1, 1], EOS, M, max_gen_tokens=4)
+    assert runner.run("x") == " ".join(str(t) for t in expected)
+    assert runner._ptd_log[0]["accepted"] == 0
+
+
+def test_ptd_lookup_keeps_pool_over_unigram_guess():
+    runner = _PtdGemma(_cycle)
+    runner._ptd_lookup_ngram = 4
+    runner._ptd_reset_request_state([2, 1])
+    tree = ptd_core.PTDTree()
+    anchor = tree.add_first_level(2)
+    tree.add_child(anchor, 0)
+    runner._ptd_pool.merge_node(anchor)
+    emitted, stopped = runner._ptd_round(2, 3, [2], None)
+    assert emitted == [0, 1] and not stopped
+    assert runner._ptd_log[0]["accepted"] == 1
 
 
 def test_ptd_lut_remaps_row_tokens():

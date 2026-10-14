@@ -46,6 +46,9 @@ class Gemma3Static(DecoderOnlyLLMRunner):
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
         disable_prefill: bool = False,
+        ptd_width: int = 4,
+        ptd_min_draft_rows: int = 1,
+        ptd_lookup_ngram: int = 0,
     ):
         self._instruct_model = instruct_model
         self._sys_prompt = (sys_prompt or DEFAULT_SYS_PROMPT) if instruct_model else None
@@ -65,6 +68,9 @@ class Gemma3Static(DecoderOnlyLLMRunner):
             disable_lm_head=disable_lm_head,
             prefill_model_path=prefill_model_path,
             disable_prefill=disable_prefill,
+            ptd_width=ptd_width,
+            ptd_min_draft_rows=ptd_min_draft_rows,
+            ptd_lookup_ngram=ptd_lookup_ngram,
         )
 
     @property

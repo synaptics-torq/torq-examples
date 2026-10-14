@@ -41,6 +41,9 @@ def main(args: argparse.Namespace):
         disable_lm_head=args.no_lm_head,
         prefill_model_path=args.batch_prefill_model,
         disable_prefill=args.no_batch_prefill_model,
+        ptd_width=args.ptd_width,
+        ptd_min_draft_rows=args.ptd_min_draft_rows,
+        ptd_lookup_ngram=args.ptd_lookup_ngram,
     )
     try:
         run_chat_loop(
@@ -56,6 +59,9 @@ def main(args: argparse.Namespace):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Gemma3 VMFB inference.")
     add_llm_inference_args(parser)
+    parser.add_argument("--ptd-width", type=int, default=4, help="Maximum children per PTD tree node")
+    parser.add_argument("--ptd-min-draft-rows", type=int, default=1, help="Rows reserved for PTD draft growth")
+    parser.add_argument("--ptd-lookup-ngram", type=int, default=0, help="Maximum token suffix for prompt/history lookup (0 disables)")
     args = parser.parse_args()
     if args.model is None:
         local_model = local_gemma3_model_path()

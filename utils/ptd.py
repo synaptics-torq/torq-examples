@@ -50,6 +50,8 @@ Domain-specific adaptations (vs. the paper/reference):
    that promotes the earliest non-duplicate child, re-rooting on the
    round's committed token, a request-local pool keyed by the single last
    emitted token, and pool updates from packed draft nodes only.
+5. Optional prompt/history suffix lookup supplies additional candidate chains
+   from observed tokens; each proposal is still verified by the target model.
 
 The fixed-row PTD body this core drives (the standalone ``--ptd-rows``
 export of the torq pipeline, compiled to ``transformer.vmfb`` together with
@@ -70,6 +72,25 @@ from typing import Callable, Sequence
 import numpy as np
 
 StopCheck = Callable[[int, Sequence[int]], bool]
+
+
+def lookup_continuation(
+    tokens: Sequence[int], budget: int, max_ngram: int = 4, min_ngram: int = 1
+) -> list[int]:
+    """Propose an earlier continuation of the longest matching token suffix.
+
+    Prefer the most recent match of equal length. Proposals contain only
+    observed tokens; the target model must still verify the entire path.
+    """
+    if budget <= 0:
+        return []
+    history = list(tokens)
+    for size in range(min(max_ngram, len(history) - 1), max(min_ngram, 1) - 1, -1):
+        suffix = history[-size:]
+        for start in range(len(history) - size - 1, -1, -1):
+            if history[start:start + size] == suffix:
+                return history[start + size:start + size + budget]
+    return []
 
 
 @dataclass(eq=False)

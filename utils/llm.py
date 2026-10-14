@@ -322,6 +322,8 @@ class DecoderOnlyLLMRunner(ABC):
         "_ptd_pool",
         "_ptd_log",
         "_ptd_rounds",
+        "_ptd_lookup_ngram",
+        "_ptd_prompt_tokens",
     )
 
     def __init__(
@@ -347,9 +349,12 @@ class DecoderOnlyLLMRunner(ABC):
         ptd_pool_max_nodes: int = 16,
         ptd_pool_max_entries: int = 64,
         ptd_min_draft_rows: int = 1,
+        ptd_lookup_ngram: int = 0,
     ) -> None:
         self._logger = logging.getLogger(self.__class__.__name__)
         self._debug_logging = self._logger.isEnabledFor(logging.DEBUG)
+        if ptd_lookup_ngram < 0:
+            raise ValueError("ptd_lookup_ngram must be >= 0 (0 disables lookup)")
 
         lm_head_path = resolve_lm_head_path(
             model_path,
@@ -382,6 +387,8 @@ class DecoderOnlyLLMRunner(ABC):
         self._ptd_pool_max_nodes = ptd_pool_max_nodes
         self._ptd_pool_max_entries = ptd_pool_max_entries
         self._ptd_min_draft_rows = ptd_min_draft_rows
+        self._ptd_lookup_ngram = ptd_lookup_ngram
+        self._ptd_prompt_tokens = []
         self._ptd_pad_token = 0
         self._ptd_tok_buf = None
         self._ptd_pos_buf = None
@@ -1099,12 +1106,11 @@ class DecoderOnlyLLMRunner(ABC):
                     f"does not match the expected {scratch_sig[0]}."
                 )
 
-    def _ptd_reset_request_state(self) -> None:
-        """Per-request PTD state: a fresh draft tree; the candidate pool
-        warms up from the first round (same request-local semantics as the
-        torq-tools PTD runner)."""
+    def _ptd_reset_request_state(self, tokens: list[int] | None = None) -> None:
+        """Reset the draft tree and pool; retain the prompt for optional lookup."""
         if self._ptd_model is None:
             return
+        self._ptd_prompt_tokens = list(tokens or [])
         self._ptd_tree = ptd_core.PTDTree(
             width=self._ptd_width, max_depth=self._ptd_depth
         )
@@ -1194,6 +1200,21 @@ class DecoderOnlyLLMRunner(ABC):
         # least one draft row while the draft tree is non-empty.
         candidate_tree = self._ptd_pool.retrieve(anchor_token) if self._ptd_pool else None
         cand_nodes = candidate_tree.bfs_nodes() if candidate_tree is not None else []
+        lookup_ngram = getattr(self, "_ptd_lookup_ngram", 0)
+        if lookup_ngram:
+            continuation = ptd_core.lookup_continuation(
+                self._ptd_prompt_tokens + gen, free, lookup_ngram,
+                # An isolated common token is weak evidence: keep learned
+                # pool candidates unless lookup matches a longer suffix.
+                min_ngram=2 if lookup_ngram > 1 and cand_nodes else 1,
+            )
+            lookup_nodes = []
+            for depth, token in enumerate(continuation, start=1):
+                node = ptd_core.PTDNode(token, depth, parent=lookup_nodes[-1] if lookup_nodes else None)
+                if lookup_nodes:
+                    lookup_nodes[-1].children[token] = node
+                lookup_nodes.append(node)
+            cand_nodes = lookup_nodes + cand_nodes
         draft_nodes = self._ptd_tree.bfs_nodes()
         if draft_nodes and self._ptd_min_draft_rows > 0:
             n_cand = min(len(cand_nodes), free - self._ptd_min_draft_rows)
@@ -1495,7 +1516,7 @@ class DecoderOnlyLLMRunner(ABC):
             yield_ns += time.perf_counter_ns() - yield_start_ns
 
             gen = [next_tok]
-            self._ptd_reset_request_state()
+            self._ptd_reset_request_state(tokens)
             while not self._should_stop(next_tok, gen):
                 _raise_if_stopped(should_stop)
                 if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:

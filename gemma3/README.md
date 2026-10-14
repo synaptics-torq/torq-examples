@@ -62,7 +62,13 @@ python src/infer.py --instruct-model
 > Any prompt remainder and all generated tokens still use `transformer.vmfb`, and both paths share the same KV cache. Use `--batch-prefill-model PATH` to point at a specific prefill model, or `--no-batch-prefill-model` to force single-token prompt prefill.
 
 > [!TIP]
-> A standalone PTD (Progressive Tree Drafting) model directory is run exactly like a regular one (`-m` it directly): its fixed-row `transformer.vmfb` body is detected by its `tree_vis` input and used for every phase — prompt prefill runs packed causal chains through it, and generated tokens are decoded in PTD rounds that verify multiple draft tokens per forward pass. Greedy output stays token-identical to single-token decoding of the same model, and near the end of the cache the rounds shrink to the rows that fit (no separate decode model is needed). PTD builds are greedy-only: run them with the default `--temperature 0`.
+> A standalone PTD (Progressive Tree Drafting) model directory is run exactly like a regular one (`-m` it directly): its fixed-row `transformer.vmfb` body is detected by its `tree_vis` input and used for every phase — prompt prefill runs packed causal chains through it, and generated tokens are decoded in PTD rounds that verify multiple draft tokens per forward pass. Proposed continuations are accepted only when they match the target model's greedy predictions. Near the end of the cache the rounds shrink to the rows that fit (no separate decode model is needed). PTD builds are greedy-only: run them with the default `--temperature 0`.
+
+PTD also has an experimental prompt/history lookup policy. It proposes observed continuations matching the generated token suffix, verifies them with the target model, and keeps learned pool candidates ahead of weak single-token matches. It is disabled by default; benefits depend on how much the answer repeats earlier text. To try it with a narrower draft tree and the full candidate budget:
+
+```sh
+python src/infer.py --instruct -m ../models/Synaptics/gemma-3-270m-it-torq/transformer.vmfb --ptd-lookup-ngram 4 --ptd-width 2 --ptd-min-draft-rows 0
+```
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
