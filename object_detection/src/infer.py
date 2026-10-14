@@ -7,7 +7,12 @@ import os
 import sys
 from pathlib import Path
 
-from object_detection.setup_demo import default_model_path, ensure_object_detection_models
+from object_detection.setup_demo import (
+    default_model_path,
+    download_object_detection,
+    ensure_object_detection_models,
+    VARIANT_MODEL_FILES,
+)
 from utils.vision import dequantize_out
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
@@ -17,6 +22,8 @@ from utils.object_detection import (
     render_annotated_image,
 )
 from utils.draw import display_image_gst
+from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 
 
 def load_labels(labels_path):
@@ -83,14 +90,22 @@ def main():
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
     args = parser.parse_args()
+    configure_logging("INFO")
 
     if args.model is None:
-        args.model = str(default_model_path(args.variant))
-        if not Path(args.model).exists():
-            parser.error(
-                f"default model {args.model} not found; pass --model or run "
-                f"`python setup_demos.py object_detection` from torq-examples root"
+        expected = default_model_path(args.variant)
+        args.model = str(
+            resolve_default_model(
+                parser,
+                lambda: expected if expected.exists() else None,
+                download=lambda: download_object_detection([VARIANT_MODEL_FILES[args.variant][0]]),
+                no_refresh=args.no_refresh,
+                message=(
+                    f"default model {expected} not found; pass --model or run "
+                    f"`python setup_demos.py object_detection` from torq-examples root"
+                ),
             )
+        )
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
 

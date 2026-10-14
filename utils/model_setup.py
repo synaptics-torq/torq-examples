@@ -48,6 +48,7 @@ __all__ = [
     "setup_demo",
     "demo_main",
     "sync_prefill_tracking",
+    "resolve_default_model",
 ]
 
 logger = logging.getLogger(__name__)
@@ -144,6 +145,7 @@ def download_models(
     base_dir: str | Path | None = None,
     model_version: str | None = None,
     no_update: bool = False,
+    preserve_version: bool = True,
     tracked_files_present: FilesPresent | None = None,
 ) -> dict[str, Path]:
     """Download/refresh ``models``; return ``{name: model_dir}``.
@@ -157,7 +159,8 @@ def download_models(
     own risk); absent an explicit version it downloads the repo's latest
     (HEAD) revision rather than the built-in version tag.
 
-    ``label`` only appears in log messages and error text.
+    Existing manifest versions are preserved unless a version is requested
+    explicitly or ``preserve_version=False``. ``label`` is used in log messages.
     """
     if base_dir is None:
         base_dir = default_models_dir()
@@ -169,7 +172,16 @@ def download_models(
     for name, spec_version in parse_model_specs(models):
         repo_id = resolve_repo_id(name, repo_map)
         explicit_version = spec_version or model_version
-        if no_update and explicit_version is None:
+        model_dir = base_dir / repo_id
+        manifest = read_manifest(model_dir) if preserve_version else None
+        if (
+            not no_update
+            and explicit_version is None
+            and manifest is not None
+            and manifest.get("repo_id") == repo_id
+        ):
+            version = manifest.get("version")
+        elif no_update and explicit_version is None:
             # Untracked copies are not pinned to the built-in version tag
             # (untagged repos cannot resolve it); they download the repo's
             # latest (HEAD) revision.
@@ -178,7 +190,6 @@ def download_models(
             version = resolve_model_version(
                 repo_id, explicit_version, builtin_repos=builtin_repos
             )
-        model_dir = base_dir / repo_id
         try:
             refresh_model(
                 repo_id,
@@ -258,6 +269,30 @@ def ensure_demo_models(
         logger.warning(
             "Could not refresh models from %s (%s); using local files.", repo_id, e
         )
+
+
+def resolve_default_model(
+    parser: argparse.ArgumentParser,
+    resolve: Callable[[], Path | None],
+    *,
+    download: Callable[[], object],
+    message: str,
+    no_refresh: bool = False,
+) -> Path:
+    """Resolve a local default, downloading once unless ``no_refresh`` is set."""
+    model = resolve()
+    if model is None and not no_refresh:
+        logger.info("No local model found; downloading on first run...")
+        try:
+            download()
+        except DownloadError as e:
+            logger.warning("First-run model download failed: %s", e)
+            if e.__cause__:
+                logger.warning("Caused by: %s", e.__cause__)
+        model = resolve()
+    if model is None:
+        parser.error(message)
+    return model
 
 
 def sync_prefill_tracking(
@@ -350,6 +385,7 @@ def setup_demo(
         base_dir=base_dir,
         model_version=model_version,
         no_update=no_update,
+        preserve_version=False,
         tracked_files_present=tracked_files_present,
     )
     logger.info("%s setup complete.", demo_name)
