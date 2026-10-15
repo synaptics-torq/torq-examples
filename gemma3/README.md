@@ -20,14 +20,17 @@ From the repo root, run:
 python setup_demos.py gemma3
 ```
 
-This downloads the default instruct model files to: `models/Synaptics/gemma-3-270m-it-torq/`
+This downloads the default instruct model files to: `models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/`
+
+The default instruct model has INT4 weights (GPTQ, block size 32) and a separate LM head:
+`transformer.vmfb` and `lm_head.vmfb.trim`. It has no batched prefill model.
 
 By default the demo downloads the model version matching this repo's `VERSION` file (see the
 [repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
 
 ```sh
 cd gemma3
-python setup_demo.py --model-version v2.2.0
+python setup_demo.py --model-version v2.3.0
 ```
 
 A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
