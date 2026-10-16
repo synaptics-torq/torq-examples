@@ -1,217 +1,367 @@
 #!/usr/bin/env python3
-"""
-Generate a combined HTML summary from JUnit XML and profile HTML.
+"""Generate one TorqExamples-style HTML report from JUnit XML and profile data."""
 
-Usage:
-  python3 generate_test_summary.py --junit TEST-TorqExamplesTest.xml --profile profile_summary.html --out combined_summary.html
-
-This script uses only the Python standard library.
-"""
 from __future__ import annotations
 
 import argparse
 import html
+import json
 import os
-import re
-import sys
-from pathlib import Path
-from typing import Dict, List, Tuple
 import xml.etree.ElementTree as ET
+from pathlib import Path
+from typing import Any
 
 
-METRIC_KEYS = [
-    "Avg inference time",
-    "Avg DRAM footprint",
-    "Peak DRAM footprint",
-    "Avg memory usage",
-    "Peak memory usage",
+PROFILE_METRICS = (
     "Avg CPU usage",
+    "Avg DRAM footprint",
     "Avg NPU usage",
-]
+    "Avg inference time",
+    "Avg memory usage",
+    "Peak DRAM footprint",
+    "Peak memory usage",
+)
 
 
-def parse_profile_html(path: Path) -> Dict[str, Dict[str, str]]:
-    """Parse profile_summary.html table into mapping demo -> metrics dict."""
-    if not path.exists():
-        return {}
-    txt = path.read_text(encoding="utf-8", errors="ignore")
-    # Extract the first <table>...</table>
-    m = re.search(r"<table[^>]*>(.*?)</table>", txt, flags=re.S | re.I)
-    if not m:
-        return {}
-    table_html = m.group(1)
-    # Extract headers
-    headers = re.findall(r"<th[^>]*>(.*?)</th>", table_html, flags=re.S | re.I)
-    headers = [re.sub(r"<[^>]+>", "", h).strip() for h in headers]
+def _testcase_status(testcase: ET.Element) -> str:
+    if testcase.find("failure") is not None or testcase.find("error") is not None:
+        return "FAIL"
+    if testcase.find("skipped") is not None:
+        return "SKIP"
+    return "PASS"
 
-    rows = re.findall(r"<tr[^>]*>(.*?)</tr>", table_html, flags=re.S | re.I)
-    data: Dict[str, Dict[str, str]] = {}
-    for r in rows[1:]:  # skip header row
-        cols = re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", r, flags=re.S | re.I)
-        cols = [re.sub(r"<[^>]+>", "", c).strip() for c in cols]
-        if not cols:
+
+def _profile_records_from_property(testcase: ET.Element) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    properties = testcase.find("properties")
+    if properties is None:
+        return records
+
+    for prop in properties.findall("property"):
+        if prop.get("name") != "profile_metrics":
             continue
-        # Map headers to cols
-        rowmap = {headers[i]: cols[i] if i < len(cols) else "" for i in range(len(headers))}
-        demo_name = rowmap.get("demo") or rowmap.get("Demo") or rowmap.get(headers[0])
-        if demo_name:
-            data[demo_name] = rowmap
-    return data
-
-
-def parse_junit(junit_path: Path) -> List[Tuple[str, str, float]]:
-    """Return list of (test_label, status, time_seconds)"""
-    if not junit_path.exists():
-        return []
-    tree = ET.parse(str(junit_path))
-    root = tree.getroot()
-    tests: List[Tuple[str, str, float]] = []
-    # testsuite may contain testcase elements
-    for tc in root.findall('.//testcase'):
-        name = tc.get('name') or ''
-        classname = tc.get('classname') or ''
-        label = f"{classname}.{name}" if classname else name
-        time = 0.0
+        raw_value = prop.get("value") or prop.text or ""
         try:
-            time = float(tc.get('time') or 0.0)
-        except Exception:
-            time = 0.0
-        status = 'PASS'
-        if tc.find('failure') is not None or tc.find('error') is not None:
-            status = 'FAIL'
-        elif tc.find('skipped') is not None:
-            status = 'SKIP'
-        tests.append((label, status, time))
-    return tests
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, list):
+            records.extend(record for record in parsed if isinstance(record, dict))
+    return records
 
 
-def find_best_demo_match(test_label: str, profile_keys: List[str]) -> str | None:
-    low = test_label.lower()
-    # exact substring match
-    for k in profile_keys:
-        if k.lower() in low or low in k.lower():
-            return k
-    # fallback: token match
-    for k in profile_keys:
-        for token in re.split(r'[^A-Za-z0-9]+', k.lower()):
-            if token and token in low:
-                return k
-    return None
+def _case_id(test_name: str) -> str:
+    """Return the pytest parameter ID enclosed in the testcase name."""
+    if "[" not in test_name or not test_name.endswith("]"):
+        return ""
+    return test_name.rsplit("[", 1)[1][:-1]
 
 
-def build_html(tests: List[Tuple[str, str, float]], profile_map: Dict[str, Dict[str, str]], out_path: Path) -> None:
+def _model_versions_from_property(
+    testcase: ET.Element,
+) -> dict[str, dict[str, str]]:
+    """Map pytest model case IDs to version records embedded in JUnit."""
+    properties = testcase.find("properties")
+    if properties is None:
+        return {}
+
+    test_case_id = _case_id(testcase.get("name") or "")
+    for prop in properties.findall("property"):
+        if prop.get("name") != "model_versions":
+            continue
+        raw_value = prop.get("value") or prop.text or ""
+        try:
+            parsed = json.loads(raw_value)
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+
+        demo_name = ""
+        for record in parsed.values():
+            if not isinstance(record, dict):
+                continue
+            repo_name = Path(str(record.get("repo_id") or "")).name
+            suffix = f"_{repo_name}"
+            if repo_name and test_case_id.endswith(suffix):
+                demo_name = test_case_id[:-len(suffix)]
+                break
+        if not demo_name:
+            return {}
+        return _normalize_model_versions({demo_name: parsed})
+    return {}
+
+
+def _normalize_model_versions(parsed: object) -> dict[str, dict[str, str]]:
+    """Normalize nested setup version records into a case-ID lookup."""
+    if not isinstance(parsed, dict):
+        return {}
+    normalized: dict[str, dict[str, str]] = {}
+    for demo_name, model_records in parsed.items():
+        if not isinstance(model_records, dict):
+            continue
+        for record in model_records.values():
+            if not isinstance(record, dict):
+                continue
+            repo_name = Path(str(record.get("repo_id") or "")).name
+            if not repo_name:
+                continue
+            version = record.get("resolved_version") or record.get("version") or ""
+            revision = record.get("revision") or ""
+            normalized[f"{demo_name}_{repo_name}"] = {
+                "version": str(version),
+                "revision": str(revision),
+            }
+    return normalized
+
+
+def parse_junit(
+    junit_path: Path,
+) -> tuple[
+    list[tuple[str, str, float]],
+    list[dict[str, Any]],
+    dict[str, str],
+    dict[str, dict[str, str]],
+]:
+    """Read testcase results, profiling records, and prepare metadata."""
+    if not junit_path.exists():
+        raise FileNotFoundError(f"JUnit XML report not found: {junit_path}")
+
+    root = ET.parse(junit_path).getroot()
+    tests: list[tuple[str, str, float]] = []
+    profile_records: list[dict[str, Any]] = []
+    metadata: dict[str, str] = {}
+    model_versions: dict[str, dict[str, str]] = {}
+    for testcase in root.findall(".//testcase"):
+        name = testcase.get("name") or ""
+        try:
+            duration = float(testcase.get("time") or 0.0)
+        except ValueError:
+            duration = 0.0
+        tests.append((name, _testcase_status(testcase), duration))
+        profile_records.extend(_profile_records_from_property(testcase))
+        model_versions.update(_model_versions_from_property(testcase))
+        properties = testcase.find("properties")
+        if properties is not None:
+            for prop in properties.findall("property"):
+                prop_name = prop.get("name") or ""
+                if prop_name not in {"torq_examples_commit", "dut_sdk_version"}:
+                    continue
+                prop_value = prop.get("value") or prop.text or ""
+                if prop_value:
+                    metadata[prop_name] = prop_value
+    return tests, profile_records, metadata, model_versions
+
+
+def load_prepare_metadata(profile_dir: Path) -> dict[str, str]:
+    """Load prepare metadata when JUnit properties are unavailable."""
+    metadata_path = profile_dir / "prepare_metadata.json"
+    try:
+        parsed = json.loads(metadata_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        key: str(value)
+        for key, value in parsed.items()
+        if key in {"torq_examples_commit", "dut_sdk_version"} and value
+    }
+
+
+def load_model_versions(profile_dir: Path) -> dict[str, dict[str, str]]:
+    """Load per-model version records when JUnit properties are unavailable."""
+    versions_path = profile_dir / "setup_model_versions.json"
+    try:
+        parsed = json.loads(versions_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return _normalize_model_versions(parsed)
+
+
+def load_profile_json(profile_dir: Path) -> list[dict[str, Any]]:
+    """Load structured profiling records as a fallback for older JUnit reports."""
+    if not profile_dir.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for profile_path in sorted(profile_dir.glob("*_profile.json")):
+        try:
+            parsed = json.loads(profile_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, list):
+            records.extend(record for record in parsed if isinstance(record, dict))
+    return records
+
+
+def merge_profile_records(*record_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge records while preferring JUnit data and removing duplicate profile cases."""
+    merged: list[dict[str, Any]] = []
+    seen: set[tuple[str, str, str]] = set()
+    for records in record_groups:
+        for record in records:
+            key = (
+                str(record.get("demo_name", "")),
+                str(record.get("case_name", "")),
+                str(record.get("model_path", "")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(record)
+    return merged
+
+
+def build_html(
+    tests: list[tuple[str, str, float]],
+    profile_records: list[dict[str, Any]],
+    metadata: dict[str, str],
+    model_versions: dict[str, dict[str, str]],
+    out_path: Path,
+) -> None:
+    """Write the same single-table, inline-style report used by TorqExamplesTest."""
     th_style = "border:1px solid #ccc;padding:8px 10px;text-align:left;background:#f2f2f2"
     td_style = "border:1px solid #ccc;padding:8px 10px;text-align:left"
-
-    # We'll make a single table with sections. Use 8 columns total (profile section requires 8).
     total_cols = 8
 
-    # Build rows for testcases. Prefer one aggregated row per demo found in profile_map
-    def _matches_demo(label: str, demo: str) -> bool:
-        low = (label or "").lower()
-        dlow = (demo or "").lower()
-        if not low or not dlow:
-            return False
-        if dlow in low or low in dlow:
-            return True
-        for token in re.split(r'[^A-Za-z0-9]+', dlow):
-            if token and token in low:
-                return True
-        return False
+    info_values = (
+        (
+            "Torq Examples Commit",
+            metadata.get("torq_examples_commit")
+            or os.environ.get("TORQ_EXAMPLES_REF", ""),
+        ),
+        (
+            "DUT SDK Version",
+            metadata.get("dut_sdk_version")
+            or os.environ.get("SYNA_SDK_REVISION", ""),
+        ),
+    )
+    info_rows: list[str] = []
+    info_padding = "".join(
+        f'<td style="{td_style}"></td>' for _ in range(total_cols - 2)
+    )
+    for label, value in info_values:
+        info_rows.append(
+            f'<tr><td style="{td_style}"><strong>{html.escape(label)}</strong></td>'
+            f'<td style="{td_style}">{html.escape(value)}</td>{info_padding}</tr>'
+        )
 
-    test_rows_html = []
-    profile_keys = list(profile_map.keys())
-    # Build Test Demo Results rows directly from the JUnit XML `name` values.
-    # Use the last segment after '.' as the TestCase Name and show the status (PASS/FAIL/SKIP).
-    test_rows_html = []
-    for label, status, _t in tests:
-        # label is typically 'ClassName.test_name' or similar; take last segment
-        tc_name = (label or '').split('.')[-1]
-        color = "#28a745" if status == 'PASS' else ("#d73a49" if status == 'FAIL' else "#6c757d")
-        test_cell = f"<td style=\"{td_style}\">{html.escape(tc_name)}</td>"
-        result_cell = f"<td style=\"{td_style};color:{color};font-weight:bold\">{html.escape(status)}</td>"
-        pad = ''.join(f"<td style=\"{td_style}\"></td>" for _ in range(total_cols - 2))
-        test_rows_html.append(f"<tr>{test_cell}{result_cell}{pad}</tr>")
+    test_rows: list[str] = []
+    for test_name, status, _duration in tests:
+        color = {
+            "PASS": "#28a745",
+            "FAIL": "#d73a49",
+            "SKIP": "#6c757d",
+        }[status]
+        version_record = model_versions.get(_case_id(test_name), {})
+        version = version_record.get("version", "")
+        revision = version_record.get("revision", "")
+        padding = "".join(
+            f'<td style="{td_style}"></td>' for _ in range(total_cols - 4)
+        )
+        test_rows.append(
+            f'<tr><td style="{td_style}">{html.escape(test_name)}</td>'
+            f'<td style="{td_style};color:{color};font-weight:bold">{status}</td>'
+            f'<td style="{td_style}">{html.escape(version)}</td>'
+            f'<td style="{td_style}">{html.escape(revision)}</td>'
+            f"{padding}</tr>"
+        )
+    if not test_rows:
+        test_rows.append(
+            f'<tr><td style="{td_style}" colspan="{total_cols}">No test cases found</td></tr>'
+        )
 
-    if not test_rows_html:
-        test_rows_html = [f"<tr><td style=\"{td_style}\" colspan=\"{total_cols}\">No test cases found</td></tr>"]
-
-    # Build rows for profile summary
-    profile_header_cells = ''.join(f"<th style=\"{th_style}\">{html.escape(h)}</th>" for h in [
-        "demo",
-        "Avg CPU usage",
-        "Avg DRAM footprint",
-        "Avg NPU usage",
-        "Avg inference time",
-        "Avg memory usage",
-        "Peak DRAM footprint",
-        "Peak memory usage",
-    ])
-
-    profile_rows = []
-    for demo, metrics in profile_map.items():
-        cells = [f"<td style=\"{td_style}\">{html.escape(demo)}</td>"]
-        # Order metrics as requested
-        for key in ["Avg CPU usage", "Avg DRAM footprint", "Avg NPU usage", "Avg inference time", "Avg memory usage", "Peak DRAM footprint", "Peak memory usage"]:
-            cells.append(f"<td style=\"{td_style}\">{html.escape(metrics.get(key, ''))}</td>")
+    profile_rows: list[str] = []
+    for record in profile_records:
+        metrics = record.get("metrics")
+        if not isinstance(metrics, dict):
+            continue
+        demo_label = str(
+            record.get("case_name")
+            or record.get("demo_name")
+            or record.get("model_path")
+            or ""
+        )
+        cells = [f'<td style="{td_style}">{html.escape(demo_label)}</td>']
+        for metric in PROFILE_METRICS:
+            cells.append(
+                f'<td style="{td_style}">{html.escape(str(metrics.get(metric, "")))}</td>'
+            )
         profile_rows.append(f"<tr>{''.join(cells)}</tr>")
-
     if not profile_rows:
-        profile_rows = [f"<tr><td style=\"{td_style}\" colspan=\"{total_cols}\">No profile data found</td></tr>"]
+        profile_rows.append(
+            f'<tr><td style="{td_style}" colspan="{total_cols}">No profile data found</td></tr>'
+        )
 
-    # Build DUT and GitHub info
-    torq_commit = os.environ.get('TORQ_EXAMPLES_REF', '')
-    sdk_rev = os.environ.get('SYNA_SDK_REVISION', '')
+    test_header_padding = "".join(
+        f'<th style="{th_style}"></th>' for _ in range(total_cols - 4)
+    )
+    profile_headers = "".join(
+        f'<th style="{th_style}">{html.escape(header)}</th>'
+        for header in ("demo", *PROFILE_METRICS)
+    )
 
-    info_rows = []
-    pad_cells = ''.join(f'<td style="{td_style}"></td>' for _ in range(total_cols - 2))
-    info_rows.append(f"<tr><td style=\"{td_style}\"><strong>Torq Examples Commit</strong></td><td style=\"{td_style}\">{html.escape(torq_commit)}</td>{pad_cells}</tr>")
-    info_rows.append(f"<tr><td style=\"{td_style}\"><strong>DUT SDK Version</strong></td><td style=\"{td_style}\">{html.escape(sdk_rev)}</td>{pad_cells}</tr>")
-
-    # Testcases header padding and header HTML (precompute to avoid statements inside expression)
-    header_pad = ''.join(f'<th style="{th_style}"></th>' for _ in range(total_cols - 2))
-    testcases_header_html = f"<tr><th style=\"{th_style}\">TestCase Name</th><th style=\"{th_style}\">TestCase Result</th>{header_pad}</tr>"
-
-    # Assemble full HTML
     html_text = (
         "<!DOCTYPE html>\n"
         "<html><head><meta charset='utf-8'><title>Test + Profile Summary</title></head>"
-        "<body style=\"font-family:Arial,sans-serif;margin:24px\">"
-        f"<h2>Test + Profile Summary</h2>"
-        f"<table border=\"1\" cellpadding=\"4\" cellspacing=\"0\" style=\"border-collapse:collapse\">"
-        # DUT/GitHub info rows
+        '<body style="font-family:Arial,sans-serif;margin:24px">'
+        "<h2>Test + Profile Summary</h2>"
+        '<table border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse">'
         f"<tbody>{''.join(info_rows)}"
-        # Test Demo Results title row
-        f"<tr><td style=\"{td_style}\" colspan=\"{total_cols}\"><strong>Test Demo Results</strong></td></tr>"
-        # Testcases header
-        f"{testcases_header_html}"
-        # Test rows
-        f"{''.join(test_rows_html)}"
-        # Profile Summary title
-        f"<tr><td style=\"{td_style}\" colspan=\"{total_cols}\"><strong>Profile Summary</strong></td></tr>"
-        # Profile header
-        f"<tr>{profile_header_cells}</tr>"
-        # Profile rows
+        f'<tr><td style="{td_style}" colspan="{total_cols}"><strong>Test Demo Results</strong></td></tr>'
+        f'<tr><th style="{th_style}">TestCase Name</th>'
+        f'<th style="{th_style}">TestCase Result</th>'
+        f'<th style="{th_style}">VERSION</th>'
+        f'<th style="{th_style}">Hugging Face commit (revision)</th>'
+        f"{test_header_padding}</tr>"
+        f"{''.join(test_rows)}"
+        f'<tr><td style="{td_style}" colspan="{total_cols}"><strong>Profile Summary</strong></td></tr>'
+        f"<tr>{profile_headers}</tr>"
         f"{''.join(profile_rows)}"
-        f"</tbody></table></body></html>\n"
+        "</tbody></table></body></html>\n"
     )
-
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html_text, encoding='utf-8')
+    out_path.write_text(html_text, encoding="utf-8")
     print(f"Wrote combined summary: {out_path}")
+
+
+def generate_summary(junit_path: Path, profile_dir: Path, out_path: Path) -> None:
+    tests, junit_profile_records, junit_metadata, junit_model_versions = parse_junit(
+        junit_path
+    )
+    file_profile_records = load_profile_json(profile_dir)
+    profile_records = merge_profile_records(junit_profile_records, file_profile_records)
+    file_metadata = load_prepare_metadata(profile_dir)
+    metadata = {**file_metadata, **junit_metadata}
+    file_model_versions = load_model_versions(profile_dir)
+    model_versions = {**file_model_versions, **junit_model_versions}
+    build_html(tests, profile_records, metadata, model_versions, out_path)
 
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument('--junit', type=Path, default=Path('TEST-TorqExamplesTest.xml'))
-    parser.add_argument('--profile', type=Path, default=Path('profile_summary.html'))
-    parser.add_argument('--out', type=Path, default=Path('test_and_profile_summary.html'))
+    parser.add_argument(
+        "--junit",
+        type=Path,
+        default=Path("TEST-TorqExamplesRefactorTest.xml"),
+        help="Final pytest JUnit XML report",
+    )
+    parser.add_argument(
+        "--profile-dir",
+        type=Path,
+        default=Path("logs"),
+        help="Directory containing *_profile.json fallback files",
+    )
+    parser.add_argument(
+        "--out",
+        type=Path,
+        default=Path("test_and_profile_summary.html"),
+        help="Combined HTML output path",
+    )
     args = parser.parse_args()
-
-    profile_map = parse_profile_html(args.profile)
-    tests = parse_junit(args.junit)
-    build_html(tests, profile_map, args.out)
+    generate_summary(args.junit, args.profile_dir, args.out)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

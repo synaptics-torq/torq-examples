@@ -1,210 +1,75 @@
-# TorqExamplesTest Runbook
+# TorqExamplesRefactorTest
 
-Git clone `torq-examples` with branch `wip/ci_cd_test`, which includes the test suite `TorqExamplesTest`, to `/home` on the DUT.
+This package is the host-side execution layer for the TorqExamples demo validation flow.
 
-Move `TorqExamplesTest/` to also under `/home`. Keep `torq-examples/` and `TorqExamplesTest/` at the same level under `/home`.
+It will push torq-examples and related test materials to DUT-side. All logs files, pytest result XML and test result HTML will save on host-side
 
-## Layout
+The goal is to drive the actual demo execution on a DUT through the existing board/runner abstraction.
 
-```text
-/home/
-├── torq-examples/
-└── TorqExamplesTest/
-    ├── RunSuite.sh
-    ├── test_demo_board.py
-    ├── prepare_dut_python_env.sh
-    ├── run_demo_setup.sh
-    ├── run_demo_gemma3.sh
-    ├── run_demo_liquidai_lfm2_5_230m.sh
-    ├── run_demo_liquidai_lfm2_vl_450m.sh
-    ├── run_demo_moonshine.sh
-    ├── run_demo_moonshine_streaming.sh
-    ├── run_demo_object_detection.sh
-    ├── run_demo_pose_estimation.sh
-    ├── run_demo_profile.sh
-    ├── collect_profile_metrics.py
-    ├── generate_test_summary.py
-    ├── hello_world_16k.wav
-    ├── normalize_junit_report.py
-    ├── read_demo_names.py
-    ├── README.md
-    └── requirements-host.txt
-```
+The runner prepends `TorqExamplesRefactorTest` to the pytest subprocess
+`PYTHONPATH`, so the bundled `TorqExamplesRefactorTest/torq` host board
+utilities are imported as the top-level `torq` namespace instead of an
+unrelated package with the same name from site-packages. Both supported layouts
+are detected automatically: `TorqExamplesRefactorTest` beside `torq-examples`,
+or copied inside the torq-examples repository.
 
-## Usage
+## Scope
 
-`TorqExamplesTest` can test based on target commit and target demo. For example:
+- resolve the latest demo names from `torq-examples/setup_demos.py`
+- map each demo to its Python inference entrypoint
+- acquire one DUT through Torq board control, retain its lock for the complete pytest session, and reuse it for every stage
+- run each demo through the host-side board/runner execution path
+- profile every generated model on the DUT over ADB and collect CPU, DRAM, NPU, latency, and memory metrics
+- dynamically parse `setup_demos.py` and each demo's `setup_demo.py` to discover selected model aliases and Hugging Face repo IDs, derive DUT model directories, and save them to `logs/setup_model_paths.json`
+- run `setup_demos.py` without `--model-version`, allowing torq-examples to use its release `VERSION` for built-in repositories and the latest HEAD revision for custom repositories
+- after setup, read each model directory's `.manifest.json`, print its Repo ID, version, and revision, and save the results to `logs/setup_model_versions.json` and the JUnit `model_versions` property; custom repositories without a pinned version are reported as `HEAD (untracked)`
+- during prepare, read the actual pushed torq-examples Git commit from the DUT
+	and `SYNA_SDK_REVISION` from DUT `/etc/buildinfo`, then save both as JUnit
+	properties and `logs/prepare_metadata.json` for combined HTML generation
+- parameterize conversion, inference, and profiling as one pytest case per dynamically discovered model repository
+- save conversion, inference, profiling, and failure artifacts separately for every model case using a `demo_repo-id` filename prefix, preventing models from overwriting one another's logs or profiling JSON
+- collect pass/fail results on a per-demo basis
+- avoid adding shell-only assumptions into the execution contract
 
-`https://github.com/synaptics-torq/torq-examples/commit/50b7cdb526eddd226042bbd111da4b4085903ccd`
+## Execution model
 
-Run the command below to test a target commit with a target demo:
+- `demo_registry.py`: resolves the latest demo inventory and entrypoints
+- `demo_executor.py`: performs the real host-side demo execution flow
+- `test_demo_execution.py`: exercises the per-model run and result collection
+- `run_suite.py`: runs pytest, writes the final JUnit XML, and always generates the combined HTML report
+- `generate_test_summary.py`: merges JUnit results with structured profiling records
 
-```bash
-bash RunSuite.sh 50b7cdb526eddd226042bbd111da4b4085903ccd LiquidAI-LFM2-VL-450M
-```
+## Run and report generation
 
-If you run the command without a demo name, for example:
+Run the complete suite from the workspace root:
 
-```bash
-bash RunSuite.sh 50b7cdb526eddd226042bbd111da4b4085903ccd
-```
+	python TorqExamplesRefactorTest/run_suite.py
 
-The test suite will run all 7 supported demos and their profiling:
+Before pytest starts, the runner removes artifacts left by the previous run:
+the configured JUnit XML and combined HTML, plus all `.log`, `.json`, `.xml`,
+and `.html` files under `torq-examples/logs`. This prevents stale test or
+profiling data from being included in the new report.
 
-1. `gemma3`
-2. `LiquidAI-LFM2.5-230M`
-3. `moonshine`
-4. `moonshine_streaming`
-5. `LiquidAI-LFM2-VL-450M`
-6. `object_detection`
-7. `pose_estimation`
+The runner preserves pytest's exit code after report generation and produces:
 
-## Log File Location
+- `TEST-TorqExamplesRefactorTest.xml`: final pytest JUnit report
+- `test_and_profile_summary.html`: combined test and profiling report
+- `torq-examples/logs/main.log`: complete suite console output, including
+	runner messages plus merged pytest stdout and stderr; output remains visible
+	in the Jenkins console in real time
 
-After test run related log files are generated under the target repo directory `/home/torq-examples/`.
+The HTML contains the Torq Examples commit, DUT SDK version,
+per-case PASS/FAIL/SKIP results, each model's VERSION and resolved Hugging Face
+commit revision, and the seven profiling metrics. Model version data is read
+from the JUnit `model_versions` properties with
+`torq-examples/logs/setup_model_versions.json` as a fallback. Profiling data
+is read first from the JUnit `profile_metrics` properties and then supplemented
+from `torq-examples/logs/*_profile.json` when necessary.
 
-```text
-/home/
-└── torq-examples/
-    └── log/
-        ├── execute.log
-        ├── main.log
-        ├── run_demo_profile_home_torq-examples_models_Synaptics_LiquidAI-LFM2-VL-450M_decod.log
-        ├── run_demo_liquidai_lfm2_vl_450m_--model_home_torq-examples_models_Synaptics_Liqui.log
-        └── suite.log
-```
+To regenerate only the HTML from existing artifacts:
 
-Three result files are generated under the test suite directory `/home/TorqExamplesTest/`:
+	python TorqExamplesRefactorTest/generate_test_summary.py --junit TEST-TorqExamplesRefactorTest.xml --profile-dir torq-examples/logs --out test_and_profile_summary.html
 
-```text
-/home/
-└── TorqExamplesTest/
-    ├── profile_summary.html
-    ├── test_and_profile_summary.html
-    └── TEST-TorqExamplesTest.xml
-```
+## Important boundary
 
-## File Guide
-
-Main entry points:
-
-- `RunSuite.sh`
-    Main entry for the whole test suite. It checks out the target `torq-examples` commit, prepares the DUT Python environment, selects one demo or the full demo list, runs `pytest`, and generates the final XML and HTML summaries.
-
-- `test_demo_board.py`
-    The pytest scheduler for the suite. It loads the demo queue, runs per-demo setup, dispatches each demo inference script, runs model profiling, and controls skip/fail behavior in the test report.
-
-Environment and setup helpers:
-
-- `prepare_dut_python_env.sh`
-    Older ADB-based environment preparation helper. It checks DUT connectivity, clones `torq-examples`, creates the DUT virtual environment, and installs the Torq runtime wheel.
-
-- `run_demo_setup.sh`
-    Shared per-demo setup wrapper. It installs base requirements, installs demo-specific requirements when needed, and runs `python3 setup_demos.py <demo>` with retry logic.
-
-Per-demo runtime wrappers:
-
-- `run_demo_gemma3.sh`
-    Runs the Gemma3 demo with a target model path and optional LM head, then feeds a single prompt into the interactive infer script for automated validation.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples/gemma3
-    printf '%s\n' "$PROMPT" | python3 src/infer.py -m "$MODEL_PATH" [--instruct-model] [--lm-head "$LM_HEAD"]
-    ```
-
-- `run_demo_liquidai_lfm2_5_230m.sh`
-    Runs the LiquidAI LFM2.5-230M text model with body VMFB, LM head, and optional prompt for automated single-turn validation.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples/LiquidAI/LiquidAI-LFM2.5-230M
-    printf '%s\n' "$PROMPT" | python3 src/infer.py -m "$MODEL_PATH" [--instruct-model] [--lm-head "$LM_HEAD"]
-    ```
-
-- `run_demo_liquidai_lfm2_vl_450m.sh`
-    Runs the LiquidAI LFM2-VL-450M vision-language demo with decoder, LM head, vision encoder, image decoder, image input, and prompt.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples/LiquidAI/LiquidAI-LFM2-VL-450M
-    python3 src/infer.py -m "$MODEL_PATH" --vision "$VISION_MODEL" --image "$IMAGE_PATH" --prompt "$PROMPT" [--lm-head "$LM_HEAD"] [--image-decoder "$IMAGE_DECODER"]
-    ```
-
-- `run_demo_moonshine.sh`
-    Runs the Moonshine speech demo against a WAV input, using the prepared demo assets under `models/Synaptics/moonshine-tiny-bf16-torq`.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples/moonshine
-    python3 src/infer.py -m "$MODEL_DIR" "$WAV_PATH"
-    ```
-
-- `run_demo_moonshine_streaming.sh`
-    Runs the Moonshine streaming speech demo against a WAV input, using the prepared streaming model assets.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples/moonshine_streaming
-    python3 src/infer.py -m "$MODEL_DIR" --wav "$WAV_PATH"
-    ```
-
-- `run_demo_object_detection.sh`
-    Thin wrapper for `object_detection/src/infer.py`. The pytest suite passes the resolved model, image, label, and device arguments through this script.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples
-    python3 object_detection/src/infer.py "$@"
-    ```
-
-- `run_demo_pose_estimation.sh`
-    Thin wrapper for `pose_estimation/src/infer.py`. The pytest suite passes the resolved model, image, and device arguments through this script.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples
-    python3 pose_estimation/src/infer.py "$@"
-    ```
-
-- `run_demo_profile.sh`
-    Wrapper around `profile.py` used by the profiling test stage to collect model performance numbers for prepared VMFB models.
-
-    Actual command pattern:
-
-    ```bash
-    cd /home/torq-examples
-    python3 profile.py "$@"
-    ```
-
-Reporting and queue helpers:
-
-- `collect_profile_metrics.py`
-    Parses profiling log files and generates `profile_summary.html`.
-
-- `generate_test_summary.py`
-    Combines the JUnit XML report and profiling HTML into one `test_and_profile_summary.html` page.
-
-- `normalize_junit_report.py`
-    Rewrites pytest-generated JUnit case names into a more stable and readable test naming format.
-
-- `read_demo_names.py`
-    Resolves the effective demo list from defaults plus `config.ini`, and prints the enabled demos as a comma-separated list.
-
-Static assets and support files:
-
-- `hello_world_16k.wav`
-    Default sample WAV file used by the Moonshine and Moonshine Streaming tests.
-
-- `requirements-host.txt`
-    Host-side Python dependency list for running the test harness and summary tools.
-
-- `README.md`
-    Quick-start runbook for this test suite.
+This layer is intentionally not a validation suite for the refactor helper implementation itself. The object under test is the real demo execution flow on the DUT, not the Python utility code used to orchestrate it.
