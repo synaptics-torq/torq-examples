@@ -24,7 +24,7 @@ logger = logging.getLogger("Gemma3.setup")
 
 GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
-    "instruct": "Synaptics/gemma-3-270m-it-torq"
+    "instruct": "Synaptics/gemma-3-270-GPTQ-int4-it-torq"
 }
 _DEFAULT_MODELS: Final[list[str]] = ["instruct"]
 _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (

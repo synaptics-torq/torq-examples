@@ -34,10 +34,12 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
 
-from gemma3.setup_demo import local_gemma3_model_path
+from gemma3.setup_demo import download_gemma3, local_gemma3_model_path
 from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
+from utils.runtime import build_runtime_flags
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -410,7 +412,6 @@ class TeacherForcedValidator(BaseValidator):
 
 
 def main(args: argparse.Namespace) -> None:
-    configure_logging(args.logging)
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,
@@ -419,7 +420,8 @@ def main(args: argparse.Namespace) -> None:
         instruct_model=args.instruct_model,
         cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
         temperature=0.0,   # greedy decoding for reproducibility
-        runtime_flags=args.runtime_flags,
+        runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
+        device_io=args.device_io,
         lm_head_path=args.lm_head,
         disable_lm_head=args.no_lm_head,
     )
@@ -458,7 +460,6 @@ if __name__ == "__main__":
         with_prefill=False,
         with_max_gen_tokens=False,
         with_sampling=False,
-        with_allocator=False,
         with_no_refresh=False,
     )
     parser.add_argument(
@@ -498,12 +499,17 @@ if __name__ == "__main__":
         ),
     )
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model is None:
-        local_model = local_gemma3_model_path()
-        if local_model is None:
-            parser.error(
-                "no local Gemma3 model found; pass -m/--model or run "
-                "`python setup_demos.py gemma3` from torq-examples root"
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_gemma3_model_path,
+                download=download_gemma3,
+                message=(
+                    "no local Gemma3 model found; pass -m/--model or run "
+                    "`python setup_demos.py gemma3` from torq-examples root"
+                ),
             )
-        args.model = str(local_model)
+        )
     main(args)

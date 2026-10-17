@@ -102,7 +102,7 @@ Version checks use a short timeout (default 5s; override with `TORQ_HF_CHECK_TIM
 Each demo lives in its own directory. To run a demo, `cd` into its directory and run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
 
 ```sh
-python src/infer.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model
+python src/infer.py -m ../models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb --instruct-model
 ```
 
 The `-m`/`--model` (or `--model-dir`) flag is optional in every demo: it defaults to the model the demo's setup downloaded, and fails with a pointer to `setup_demos.py` when no local model is present.
@@ -114,7 +114,7 @@ Run `python src/infer.py -h` to see all available inference options.
 `profile.py` at the repo root is a model-agnostic profiling tool. Point it at any VMFB:
 
 ```sh
-python profile.py models/Synaptics/gemma-3-270m-it-torq/model.vmfb -r 5
+python profile.py models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb -r 5
 ```
 
 ## Validation
@@ -123,7 +123,7 @@ Some demos include built-in validation scripts. For example, Gemma 3 can be vali
 
 ```sh
 cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270m-it-torq/model.vmfb.trim --instruct-model --max-samples 10
+python src/validate.py -m ../models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb --instruct-model --max-samples 10
 ```
 
 Run the validation script with `-h` to see all available options.
