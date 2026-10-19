@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from utils.download import (
     default_models_dir,
     download_from_hf,
+    hf_file_exists,
     read_manifest,
     resolve_repo_id,
 )
@@ -28,16 +29,19 @@ QWEN25_HF_REPO_MAP: Final[dict[str, str]] = {
 _DEFAULT_MODELS: Final[list[str]] = ["instruct"]
 _QWEN25_FILES: Final[tuple[str, ...]] = (
     "transformer.vmfb",
-    "lm_head.vmfb",
     "token_embeddings.npy",
     "token_id_lut.npy",
     "config.json",
     "tokenizer.json",
 )
+#: LM head file names in download preference order. The trimmed-vocabulary
+#: LM head is named ``lm_head.vmfb.trim``; older uploads use ``lm_head.vmfb``.
+_LM_HEAD_FILENAMES: Final[tuple[str, ...]] = ("lm_head.vmfb.trim", "lm_head.vmfb")
 
 
 def _has_qwen25_files(model_dir: Path) -> bool:
-    return all((model_dir / filename).exists() for filename in _QWEN25_FILES)
+    has_lm_head = any((model_dir / name).exists() for name in _LM_HEAD_FILENAMES)
+    return has_lm_head and all((model_dir / filename).exists() for filename in _QWEN25_FILES)
 
 
 def _qwen25_files_present(model_dir: Path) -> bool:
@@ -51,10 +55,19 @@ def _qwen25_files_present(model_dir: Path) -> bool:
 def _download_qwen25(
     repo_id: str, base_dir: Path, *, revision: str | None = None
 ) -> list[str]:
-    for filename in _QWEN25_FILES:
+    lm_head = next(
+        (name for name in _LM_HEAD_FILENAMES if hf_file_exists(repo_id, name, revision=revision)),
+        None,
+    )
+    if lm_head is None:
+        raise FileNotFoundError(
+            f"No LM head ({' or '.join(_LM_HEAD_FILENAMES)}) in {repo_id}"
+        )
+    files = [*_QWEN25_FILES, lm_head]
+    for filename in files:
         download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
         logger.info("Downloaded %s from %s", filename, repo_id)
-    return list(_QWEN25_FILES)
+    return files
 
 
 def local_qwen25_model_path(

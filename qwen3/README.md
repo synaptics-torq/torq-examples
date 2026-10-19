@@ -23,7 +23,7 @@ python setup_demos.py qwen3
 ```
 
 This downloads the model files to `models/Synaptics/Qwen3-0.6B-GPTQ-int4-torq/`:
-`transformer.vmfb`, `lm_head.vmfb`, `token_embeddings.npy`, `token_id_lut.npy`,
+`transformer.vmfb`, `lm_head.vmfb.trim`, `token_embeddings.npy`, `token_id_lut.npy`,
 `config.json` and `tokenizer.json`.
 
 By default the demo downloads the model version matching this repo's `VERSION` file (see the
@@ -44,7 +44,7 @@ python src/infer.py --instruct-model
 ```
 
 `-m`/`--model` defaults to the downloaded `transformer.vmfb`. The sibling
-`lm_head.vmfb` is picked up automatically. The context window is fixed at 256 tokens
+`lm_head.vmfb.trim` is picked up automatically. The context window is fixed at 256 tokens
 (system prompt + conversation + answer).
 
 > [!NOTE]
@@ -63,6 +63,6 @@ The model files on Hugging Face come from one
 torq-export-model qwen -s qwen3-0.6b
 ```
 
-It writes `transformer.vmfb`, `lm_head.vmfb` and the host files to
+It writes `transformer.vmfb`, `lm_head.vmfb.trim` and the host files to
 `models/<hf-repo>/export/torq/converted/static/`. Pass that `transformer.vmfb`
 with `-m` to use your own build.
