@@ -1563,7 +1563,7 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
     with mock.patch.object(gemma_setup, "setup_gemma3") as gemma_mock:
         setup_demos.setup_demo("gemma3", enable_prefill=True)
     gemma_mock.assert_called_once_with(
-        ["instruct"], model_version=None, no_update=False, enable_prefill=True
+        [gemma_setup.DEFAULT_MODEL], model_version=None, no_update=False, enable_prefill=True
     )
 
     with (
