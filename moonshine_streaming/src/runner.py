@@ -212,11 +212,15 @@ class MoonshineStaticStreamingModel:
             configs, npy tables and tokenizer.
         runtime_flags: Flags forwarded verbatim to the Torq runtime, or ``None``
             to use the runtime's own defaults.
+        device_io: Convert host NumPy model inputs to device arrays before
+            inference. Required with the dmabuf device allocator.
     """
-    def __init__(self, model_dir: str, runtime_flags: list[str] | None = None):
+    def __init__(self, model_dir: str, runtime_flags: list[str] | None = None,
+                 device_io: bool = False):
         # Flat layout: VMFBs, configs, npy tables and tokenizer all live in
         # model_dir. Input names are hardcoded (see *_INPUT_ORDER above).
         self.model_dir = model_dir
+        self._device_io = device_io
 
         def load_runner(name, input_order, device_outputs=False):
             vmfb = os.path.join(model_dir, name + ".vmfb")
@@ -318,6 +322,12 @@ class MoonshineStaticStreamingModel:
             *state.enc_bufs,
         ]
 
+        if self._device_io:
+            encoder_inputs = [
+                self.fused_encoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
+                for x in encoder_inputs
+            ]
+
         res = _to_host(self.fused_encoder.infer(encoder_inputs))
 
         # Unpack outputs:
@@ -409,6 +419,12 @@ class MoonshineStaticStreamingModel:
             decoder_inputs.extend((k_cross_dev[_i], v_cross_dev[_i]))
         position_ids = current_len
         decoder_inputs.extend((cross_attn_bias, position_ids, current_len))
+
+        if self._device_io:
+            decoder_inputs = [
+                self.decoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
+                for x in decoder_inputs
+            ]
 
         dec_out = self.decoder.infer(decoder_inputs)
 
