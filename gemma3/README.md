@@ -101,7 +101,7 @@ torq-export-model gemma3 --instruct-model --trim-vocab
 
 The command quantizes the weights to INT4 with the GPTQ checkpoint of the model
 repository and compiles with the stream-schedule prefetch. It writes
-`transformer.vmfb`, `transformer_prefill.vmfb`, `lm_head.vmfb` and the host
+`transformer.vmfb`, `transformer_prefill.vmfb`, `lm_head.vmfb.trim` and the host
 files to `models/google/gemma-3-270m-it/export/trim/split_lm_head/quantized/static/compiled/`.
 Copy that directory to the board and pass its `transformer.vmfb` with `-m` to
 use your own build. The demo picks up `transformer_prefill.vmfb` (see the tip
