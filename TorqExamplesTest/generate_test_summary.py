@@ -344,7 +344,7 @@ def main() -> None:
     parser.add_argument(
         "--junit",
         type=Path,
-        default=Path("TEST-TorqExamplesRefactorTest.xml"),
+        default=Path("TEST-TorqExamplesTest.xml"),
         help="Final pytest JUnit XML report",
     )
     parser.add_argument(

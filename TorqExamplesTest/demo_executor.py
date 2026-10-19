@@ -18,7 +18,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from TorqExamplesRefactorTest.demo_registry import REPO_ROOT, demo_registry, repo_demo_names
+from TorqExamplesTest.demo_registry import REPO_ROOT, demo_registry, repo_demo_names
 
 
 PROFILE_METRIC_LABELS = (
@@ -49,7 +49,7 @@ def _image_decoder_prefix(vmfb_path: str) -> str:
     return match.group("prefix")
 
 
-# The host board utilities are shipped under TorqExamplesRefactorTest/torq as
+# The host board utilities are shipped under TorqExamplesTest/torq as
 # a top-level ``torq`` namespace package. Put its parent ahead of site-packages
 # so an unrelated installed package named ``torq`` cannot shadow it.
 _BUNDLED_TORQ_PARENT = Path(__file__).resolve().parent
@@ -58,6 +58,10 @@ if _bundled_torq_parent_text not in sys.path:
     sys.path.insert(0, _bundled_torq_parent_text)
 
 try:  # pragma: no cover - exercised only in host-side board environments.
+    from torq.lab.pipeline.remote import (
+        RemoteCommandError,
+        remote_command_runner_factory,
+    )
     from torq.utils.boards import create_boards_control
 except ImportError as exc:  # pragma: no cover - environment-specific.
     raise RuntimeError(
@@ -182,6 +186,7 @@ class HostDemoRunner:
         self.board_control_file = str(Path(__file__).resolve().parent / "board_control.json")
         self.remote_root = remote_root
         self._board_context: Any | None = None
+        self._remote_runner: Any | None = None
         self._target: AdbTarget | None = None
         self._prepared_dut_environments: set[tuple[str, str]] = set()
         self._setup_attempted_demos: set[tuple[str, str, str]] = set()
@@ -199,13 +204,26 @@ class HostDemoRunner:
 
         control = create_boards_control(self.board_control_file, backend="adb")
         board_context = control.board()
+        board_entered = False
         try:
-            _, serial, _ = board_context.__enter__()
+            board_user, serial, private_key = board_context.__enter__()
+            board_entered = True
+            remote_address = control.get_remote_address(board_user, serial)
+            remote_runner = remote_command_runner_factory(
+                remote_address,
+                timeout=30 * 60,
+                ssh_multiplex=True,
+                ssh_port=22,
+                ssh_private_key=private_key,
+            )
         except Exception as exc:
+            if board_entered:
+                board_context.__exit__(type(exc), exc, exc.__traceback__)
             print("[demo_executor] failed to acquire DUT board target")
             raise RuntimeError("Failed to acquire a DUT board target for demo execution.") from exc
 
         self._board_context = board_context
+        self._remote_runner = remote_runner
         self._target = AdbTarget(serial=serial)
         print(f"[demo_executor] acquired and locked DUT target: serial={serial}")
         return self._target
@@ -213,12 +231,17 @@ class HostDemoRunner:
     def close(self) -> None:
         """Release the Torq board lock held by this runner."""
         board_context = self._board_context
+        remote_runner = self._remote_runner
         target = self._target
         self._board_context = None
+        self._remote_runner = None
         self._target = None
-        if board_context is None:
-            return
-        board_context.__exit__(None, None, None)
+        try:
+            if remote_runner is not None:
+                remote_runner.close()
+        finally:
+            if board_context is not None:
+                board_context.__exit__(None, None, None)
         if target is not None:
             print(f"[demo_executor] released DUT target: serial={target.serial}")
 
@@ -469,34 +492,46 @@ class HostDemoRunner:
             )
         return combined_output
 
-    def _run_adb_command(self, target: AdbTarget, args: list[str]) -> str:
-        """Run a native ADB subcommand without adding ``shell``.
-
-        Arguments are passed as a list for commands such as ``push``, ``pull``,
-        or ``install``. Stdout and stderr are captured separately, and failures
-        are reported through ``CommandExecutionError``.
-        """
-        completed = subprocess.run(
-            ["adb", "-s", target.serial, *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0:
-            raise CommandExecutionError(
-                f"ADB command failed on {target.serial}: {' '.join(args)}",
-                returncode=completed.returncode,
-                stdout=completed.stdout,
-                stderr=completed.stderr,
+    def _copy_files(
+        self,
+        target: AdbTarget,
+        src: str,
+        dst: str,
+        *,
+        recursive: bool = False,
+        board_dst: bool,
+    ) -> None:
+        """Transfer files through Torq's board transport abstraction."""
+        runner = self._remote_runner
+        if runner is None or self._target != target:
+            raise RuntimeError("A Torq-managed DUT must be acquired before file transfer")
+        try:
+            runner.copy_files(
+                src,
+                dst,
+                recursive=recursive,
+                board_dst=board_dst,
             )
-        return completed.stdout
+        except RemoteCommandError as exc:
+            direction = "to" if board_dst else "from"
+            raise CommandExecutionError(
+                f"File transfer {direction} DUT failed on {target.serial}: {src} -> {dst}",
+                returncode=1,
+                stderr=exc.output,
+            ) from exc
 
     def _push_repo_to_dut(self, target: AdbTarget) -> None:
         local_repo = str(self.repo_root)
         remote_parent = str(PurePosixPath(self.remote_root).parent)
         print(f"[test_prepare] step 3/8: push repository: {local_repo} -> {self.remote_root}")
         self._run_remote_command(target, f"mkdir -p {shlex.quote(remote_parent)}")
-        self._run_adb_command(target, ["push", local_repo, remote_parent])
+        self._copy_files(
+            target,
+            local_repo,
+            remote_parent,
+            recursive=True,
+            board_dst=True,
+        )
         self._run_remote_command(
             target,
             f"rm -rf {shlex.quote(self.remote_root + '/logs')}",

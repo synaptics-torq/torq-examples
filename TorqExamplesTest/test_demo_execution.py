@@ -10,8 +10,8 @@ import json
 
 import pytest
 
-from TorqExamplesRefactorTest.demo_executor import DemoExecutor
-from TorqExamplesRefactorTest.demo_registry import demo_model_cases
+from TorqExamplesTest.demo_executor import DemoExecutor
+from TorqExamplesTest.demo_registry import demo_model_cases
 
 
 MODEL_CASES = demo_model_cases()

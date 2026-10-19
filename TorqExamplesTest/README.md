@@ -1,17 +1,18 @@
-# TorqExamplesRefactorTest
+# TorqExamplesTest
 
 This package is the host-side execution layer for the TorqExamples demo validation flow.
 
-It will push torq-examples and related test materials to DUT-side. All logs files, pytest result XML and test result HTML will save on host-side
+It will push torq-examples and related test materials to DUT-side. Auto tests are run on DUT side. All logs files, pytest result XML and test result HTML will save on host-side
 
 The goal is to drive the actual demo execution on a DUT through the existing board/runner abstraction.
 
-The runner prepends `TorqExamplesRefactorTest` to the pytest subprocess
-`PYTHONPATH`, so the bundled `TorqExamplesRefactorTest/torq` host board
-utilities are imported as the top-level `torq` namespace instead of an
-unrelated package with the same name from site-packages. Both supported layouts
-are detected automatically: `TorqExamplesRefactorTest` beside `torq-examples`,
-or copied inside the torq-examples repository.
+The repository-local pytest plugin is loaded automatically from `conftest.py`.
+The executor prepends `TorqExamplesTest` to `sys.path`, so the bundled
+`TorqExamplesTest/torq` host board utilities are imported as the
+top-level `torq` namespace instead of an unrelated package with the same name
+from site-packages. Both supported layouts are detected automatically:
+`TorqExamplesTest` beside `torq-examples`, or copied inside the
+torq-examples repository.
 
 ## Scope
 
@@ -36,27 +37,36 @@ or copied inside the torq-examples repository.
 - `demo_registry.py`: resolves the latest demo inventory and entrypoints
 - `demo_executor.py`: performs the real host-side demo execution flow
 - `test_demo_execution.py`: exercises the per-model run and result collection
-- `run_suite.py`: runs pytest, writes the final JUnit XML, and always generates the combined HTML report
+- `conftest.py`: repository-local pytest plugin that cleans artifacts, tees the
+	console log, writes reports, and preserves report-generation failure semantics
 - `generate_test_summary.py`: merges JUnit results with structured profiling records
 
 ## Run and report generation
 
 Run the complete suite from the workspace root:
 
-	python TorqExamplesRefactorTest/run_suite.py
+	python -m pytest TorqExamplesTest
 
-Before pytest starts, the runner removes artifacts left by the previous run:
+The `pytest.ini` configuration enables stdout streaming and JUnit output for a
+bare pytest invocation. Before tests start, the plugin removes artifacts left
+by the previous run:
 the configured JUnit XML and combined HTML, plus all `.log`, `.json`, `.xml`,
 and `.html` files under `torq-examples/logs`. This prevents stale test or
 profiling data from being included in the new report.
 
-The runner preserves pytest's exit code after report generation and produces:
+The plugin preserves pytest's exit code after report generation. If pytest
+succeeds but combined-report generation fails, the session is changed to a
+failure. Every invocation produces:
 
-- `TEST-TorqExamplesRefactorTest.xml`: final pytest JUnit report
+- `TEST-TorqExamplesTest.xml`: final pytest JUnit report
 - `test_and_profile_summary.html`: combined test and profiling report
 - `torq-examples/logs/main.log`: complete suite console output, including
 	runner messages plus merged pytest stdout and stderr; output remains visible
 	in the Jenkins console in real time
+
+The output locations can be overridden with `--torq-profile-dir` and
+`--torq-summary-html`. The JUnit location can be overridden with pytest's
+standard `--junitxml` option.
 
 The HTML contains the Torq Examples commit, DUT SDK version,
 per-case PASS/FAIL/SKIP results, each model's VERSION and resolved Hugging Face
@@ -68,7 +78,7 @@ from `torq-examples/logs/*_profile.json` when necessary.
 
 To regenerate only the HTML from existing artifacts:
 
-	python TorqExamplesRefactorTest/generate_test_summary.py --junit TEST-TorqExamplesRefactorTest.xml --profile-dir torq-examples/logs --out test_and_profile_summary.html
+	python TorqExamplesTest/generate_test_summary.py --junit TEST-TorqExamplesTest.xml --profile-dir torq-examples/logs --out test_and_profile_summary.html
 
 ## Important boundary
 
