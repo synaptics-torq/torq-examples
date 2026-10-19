@@ -2,8 +2,11 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import logging
+import sys
 from pathlib import Path
 from typing import Final
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import (
@@ -119,11 +122,21 @@ def ensure_lfm2vl_int8_models(model_dir: str | Path, *, refresh: bool = True) ->
         logger.warning("Could not refresh models from %s (%s); using local files.", repo_id, e)
 
 
-def setup_liquidvl_int8(models: list[str]):
+def download_lfm2vl_int8(
+    models: list[str] | None = None,
+    *,
+    base_dir: str | Path | None = None,
+) -> dict[str, Path]:
+    """Download the W8 model set from HEAD; return ``{name: model_dir}``."""
+    if models is None:
+        models = ["default"]
+    if base_dir is None:
+        base_dir = default_models_dir()
+    base_dir = Path(base_dir)
     logger.info("Setting up LFM2-VL-450M INT8 demo with models: [%s]", ", ".join(models))
-    repos = [_HF_REPO_MAP.get(m, m) for m in models]
-    base_dir = default_models_dir()
-    for repo_id in repos:
+    result: dict[str, Path] = {}
+    for name in models:
+        repo_id = _HF_REPO_MAP.get(name, name)
         model_dir = base_dir / repo_id
         try:
             status = _refresh(repo_id, model_dir, base_dir)
@@ -133,8 +146,14 @@ def setup_liquidvl_int8(models: list[str]):
             logger.info("Using local LFM2-VL-450M INT8 model files from %s", model_dir)
         else:
             logger.info("Downloaded LFM2-VL-450M INT8 model files from %s", repo_id)
+        result[name] = model_dir
+    return result
+
+
+def setup_liquidvl_int8(models: list[str]):
+    download_lfm2vl_int8(models)
     check_requirements(Path(__file__).parent / "requirements.txt")
-    logger.info("LFM2-VL-450M INT8 setup complete. Model dir: %s", base_dir / repos[0])
+    logger.info("LFM2-VL-450M INT8 setup complete.")
 
 
 if __name__ == "__main__":

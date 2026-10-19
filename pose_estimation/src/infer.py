@@ -6,7 +6,13 @@ import os
 import sys
 from pathlib import Path
 
-from pose_estimation.setup_demo import ensure_pose_estimation_models, local_pose_model_path
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from pose_estimation.setup_demo import (
+    download_pose_estimation,
+    ensure_pose_estimation_models,
+    local_pose_model_path,
+)
 from utils.preprocess import preprocess_image
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
 from utils.pose_estimation import (
@@ -15,6 +21,8 @@ from utils.pose_estimation import (
     render_annotated_pose_image,
 )
 from utils.draw import display_image_gst
+from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 
 
 def maybe_save_and_display(args, results):
@@ -65,15 +73,21 @@ def main():
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
     args = parser.parse_args()
+    configure_logging("INFO")
 
     if args.model is None:
-        local_model = local_pose_model_path()
-        if local_model is None:
-            parser.error(
-                "no local pose model found; pass --model or run "
-                "`python setup_demos.py pose_estimation` from torq-examples root"
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_pose_model_path,
+                download=download_pose_estimation,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local pose model found; pass --model or run "
+                    "`python setup_demos.py pose_estimation` from torq-examples root"
+                ),
             )
-        args.model = str(local_model)
+        )
 
     ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
 

@@ -3,12 +3,20 @@
 
 import argparse
 import logging
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from runner import Gemma3Static
-from gemma3.setup_demo import ensure_gemma3_models, local_gemma3_model_path
+from gemma3.setup_demo import (
+    download_gemma3,
+    ensure_gemma3_models,
+    local_gemma3_model_path,
+)
 from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -18,7 +26,6 @@ from utils.runtime import (
 
 def main(args: argparse.Namespace):
 
-    configure_logging(args.logging)
     logging.getLogger("Gemma3").info("Starting assistant...")
     ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
 
@@ -57,12 +64,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run Gemma3 VMFB inference.")
     add_llm_inference_args(parser)
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model is None:
-        local_model = local_gemma3_model_path()
-        if local_model is None:
-            parser.error(
-                "no local Gemma3 model found; pass -m/--model or run "
-                "`python setup_demos.py gemma3` from torq-examples root"
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_gemma3_model_path,
+                download=download_gemma3,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local Gemma3 model found; pass -m/--model or run "
+                    "`python setup_demos.py gemma3` from torq-examples root"
+                ),
             )
-        args.model = str(local_model)
+        )
     main(args)

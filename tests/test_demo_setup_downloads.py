@@ -316,7 +316,6 @@ def test_setup_offline_uses_local_files(tmp_path):
 
 def test_setup_offline_with_missing_files_fails_loudly(tmp_path):
     base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
 
     with (
         mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
@@ -1205,7 +1204,7 @@ def test_liquid_w8a8_setup_downloads_prefill(tmp_path):
 
     with (
         mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(liquid_setup, "check_requirements"),
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
@@ -1236,7 +1235,7 @@ def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
 
     with (
         mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(liquid_setup, "check_requirements"),
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
@@ -1270,7 +1269,7 @@ def test_liquid_falls_back_to_legacy_body_set(tmp_path):
 
     with (
         mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(liquid_setup, "check_requirements"),
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
@@ -1390,7 +1389,7 @@ def test_liquid_prefill_not_downloaded_without_flag(tmp_path):
 
     with (
         mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(liquid_setup, "check_requirements"),
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
         mock.patch.object(
@@ -1423,7 +1422,7 @@ def test_liquid_prefill_untracking_persists_across_setup_runs(tmp_path):
     def run_setup(enable_prefill: bool):
         with (
             mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-            mock.patch.object(model_setup, "check_requirements"),
+            mock.patch.object(liquid_setup, "check_requirements"),
             mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
             mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
             mock.patch.object(
@@ -1464,7 +1463,7 @@ def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
     def run_setup(enable_prefill: bool):
         with (
             mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-            mock.patch.object(model_setup, "check_requirements"),
+            mock.patch.object(liquid_setup, "check_requirements"),
             mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
             mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
             mock.patch.object(

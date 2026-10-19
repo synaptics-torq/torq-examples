@@ -16,6 +16,9 @@ import sys
 import threading
 import time
 from collections import deque
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 
@@ -28,11 +31,13 @@ except ImportError:
 
 from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
 from moonshine_streaming.setup_demo import (
+    download_moonshine_streaming,
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.npu import configure_npu_userspace_frequency
 
 logger = logging.getLogger("moonshine_streaming")
@@ -186,7 +191,6 @@ class _Stats:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace):
-    configure_logging(args.logging)
 
     model_dir = args.model_dir
 
@@ -210,9 +214,13 @@ def main(args: argparse.Namespace):
     ok, message = configure_npu_userspace_frequency("max")
     print(f"[NPU] {message}")
 
+    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
+    device_io = args.device_io or args.tda == "dmabuf"
+
     try:
         model     = MoonshineStaticStreamingModel(model_dir,
-                                                   runtime_flags=args.runtime_flags)
+                                                   runtime_flags=runtime_flags,
+                                                   device_io=device_io)
         tokenizer = Tokenizer.from_file(find_asset(model.model_dir, "tokenizer.json"))
     except Exception as e:
         logger.error("Error initializing models: %s", e)
@@ -441,14 +449,25 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
-    add_common_inference_args(parser, with_threads=False, with_allocator=False)
+    add_common_inference_args(
+        parser,
+        with_threads=False,
+        device_io_default=False,
+        device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
+    )
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model_dir is None:
-        local_dir = local_moonshine_streaming_model_dir()
-        if local_dir is None:
-            parser.error(
-                "no local Moonshine streaming model found; pass -m/--model-dir or run "
-                "`python setup_demos.py moonshine_streaming` from torq-examples root"
+        args.model_dir = str(
+            resolve_default_model(
+                parser,
+                local_moonshine_streaming_model_dir,
+                download=download_moonshine_streaming,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local Moonshine streaming model found; pass -m/--model-dir or run "
+                    "`python setup_demos.py moonshine_streaming` from torq-examples root"
+                ),
             )
-        args.model_dir = str(local_dir)
+        )
     main(args)

@@ -13,6 +13,8 @@ import logging
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from PIL import Image
 import numpy as np
 
@@ -25,11 +27,13 @@ from lfm2vl import LFM2VL  # noqa: E402
 # missing setup_demo never breaks inference.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from setup_demo import local_lfm2vl_model_dir
+    from setup_demo import download_lfm2vl_int8, local_lfm2vl_model_dir
 except Exception:
+    download_lfm2vl_int8 = None
     local_lfm2vl_model_dir = None  # type: ignore[assignment]
 
 from utils.log import add_logging_args, configure_logging  # noqa: E402
+from utils.model_setup import resolve_default_model  # noqa: E402
 from utils.terminal import InferenceStopInput  # noqa: E402
 
 YELLOW = "\033[33m"
@@ -74,7 +78,6 @@ def _ask_once(vl: LFM2VL, question: str, debug: bool) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
-    configure_logging(args.logging)
     logging.getLogger("LFM2VL").info("Loading models...")
     debug = args.logging.upper() == "DEBUG"
 
@@ -181,12 +184,22 @@ if __name__ == "__main__":
     gen.add_argument("--top-k", type=int, default=64,
                      help="Top-k pre-filter size for sampling (default: %(default)s)")
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model_dir is None:
-        local_dir = local_lfm2vl_model_dir() if local_lfm2vl_model_dir else None
-        if local_dir is None:
+        if local_lfm2vl_model_dir is None:
             parser.error(
                 "no local LFM2-VL-450M model set found; pass --model-dir or run "
                 "`python setup_demos.py LiquidAI-LFM2-VL-450M` from torq-examples root"
             )
-        args.model_dir = str(local_dir)
+        args.model_dir = str(
+            resolve_default_model(
+                parser,
+                local_lfm2vl_model_dir,
+                download=download_lfm2vl_int8,
+                message=(
+                    "no local LFM2-VL-450M model set found; pass --model-dir or run "
+                    "`python setup_demos.py LiquidAI-LFM2-VL-450M` from torq-examples root"
+                ),
+            )
+        )
     main(args)

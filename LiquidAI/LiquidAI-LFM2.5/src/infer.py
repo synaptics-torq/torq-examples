@@ -6,9 +6,12 @@ import logging
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+
 from runner import LiquidStatic
 from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
+from utils.model_setup import resolve_default_model
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -20,15 +23,19 @@ from utils.runtime import (
 # import the module directly. Guarded so a missing setup_demo never breaks inference.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 try:
-    from setup_demo import ensure_liquid_models, local_liquid_model_path
+    from setup_demo import (
+        download_liquid,
+        ensure_liquid_models,
+        local_liquid_model_path,
+    )
 except Exception:
+    download_liquid = None
     ensure_liquid_models = None
     local_liquid_model_path = None
 
 
 def main(args: argparse.Namespace):
 
-    configure_logging(args.logging)
     logging.getLogger("Liquid").info("Starting assistant...")
     if ensure_liquid_models is not None:
         # Sync the local copy with its tracked manifest before inference
@@ -70,12 +77,23 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run LFM2.5 (Liquid) VMFB inference.")
     add_llm_inference_args(parser)
     args = parser.parse_args()
+    configure_logging(args.logging)
     if args.model is None:
-        local_model = local_liquid_model_path() if local_liquid_model_path else None
-        if local_model is None:
+        if local_liquid_model_path is None:
             parser.error(
                 "no local LiquidAI-LFM2.5 model found; pass -m/--model or run "
                 "`python setup_demos.py LiquidAI-LFM2.5` from torq-examples root"
             )
-        args.model = str(local_model)
+        args.model = str(
+            resolve_default_model(
+                parser,
+                local_liquid_model_path,
+                download=download_liquid,
+                no_refresh=args.no_refresh,
+                message=(
+                    "no local LiquidAI-LFM2.5 model found; pass -m/--model or run "
+                    "`python setup_demos.py LiquidAI-LFM2.5` from torq-examples root"
+                ),
+            )
+        )
     main(args)

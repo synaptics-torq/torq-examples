@@ -2,8 +2,11 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import logging
+import sys
 from pathlib import Path
 from typing import Final
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.download import (
     default_models_dir,
@@ -24,7 +27,7 @@ logger = logging.getLogger("Gemma3.setup")
 
 GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
-    "instruct": "Synaptics/gemma-3-270m-it-torq"
+    "instruct": "Synaptics/gemma-3-270-GPTQ-int4-it-torq"
 }
 _DEFAULT_MODELS: Final[list[str]] = ["instruct"]
 _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
