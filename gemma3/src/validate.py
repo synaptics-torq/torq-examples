@@ -34,6 +34,8 @@ from abc import ABC, abstractmethod
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from gemma3.setup_demo import download_gemma3, local_gemma3_model_path
 from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
