@@ -27,9 +27,12 @@ logger = logging.getLogger("Gemma3.setup")
 
 GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/gemma-3-270m-torq",
-    "instruct": "Synaptics/gemma-3-270-GPTQ-int4-it-torq"
+    "instruct": "Synaptics/gemma-3-270m-it-torq",
+    "instruct-int4-gptq": "Synaptics/gemma-3-270-GPTQ-int4-it-torq",
 }
-_DEFAULT_MODELS: Final[list[str]] = ["instruct"]
+#: The model the demo sets up and runs by default.
+DEFAULT_MODEL: Final[str] = "instruct-int4-gptq"
+_DEFAULT_MODELS: Final[list[str]] = [DEFAULT_MODEL]
 _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
     ("transformer.vmfb", "lm_head.vmfb.trim"),
     ("transformer.vmfb", "lm_head.vmfb"),
@@ -191,7 +194,7 @@ _GEMMA3_MAIN_MODEL_FILENAMES: Final[tuple[str, ...]] = (
 
 
 def local_gemma3_model_path(
-    model: str = "instruct",
+    model: str = DEFAULT_MODEL,
     *,
     base_dir: str | Path | None = None,
 ) -> Path | None:

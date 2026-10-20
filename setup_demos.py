@@ -90,9 +90,9 @@ def setup_demo(
         )
     try:
         if name == "gemma3":
-            from gemma3.setup_demo import setup_gemma3
+            from gemma3.setup_demo import DEFAULT_MODEL, setup_gemma3
             setup_gemma3(
-                ["instruct"],
+                [DEFAULT_MODEL],
                 model_version=model_version,
                 no_update=no_update,
                 enable_prefill=enable_prefill,

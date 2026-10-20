@@ -22,7 +22,7 @@ class Qwen3Static(DecoderOnlyLLMRunner):
     ``token_embeddings.npy``) and ``position_ids`` ``[1, 1]``, followed by one
     combined ``past_key_values.N.key_value`` cache ``[1, 16, 256, 128]`` per
     layer. The transformer outputs the hidden state, and the sibling
-    ``lm_head.vmfb`` turns it into logits over the trimmed vocabulary, which
+    ``lm_head.vmfb.trim`` turns it into logits over the trimmed vocabulary, which
     ``token_id_lut.npy`` maps back to tokenizer IDs. All of this is handled by
     :class:`~utils.llm.DecoderOnlyLLMRunner`; this class only adds Qwen's
     ChatML template and stop tokens. Qwen3 answers in non-thinking mode: the

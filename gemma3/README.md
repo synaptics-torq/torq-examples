@@ -20,10 +20,22 @@ From the repo root, run:
 python setup_demos.py gemma3
 ```
 
-This downloads the default instruct model files to: `models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/`
+This downloads the default model, `instruct-int4-gptq`, to: `models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/`
 
-The default instruct model has INT4 weights (GPTQ, block size 32) and a separate LM head:
-`transformer.vmfb` and `lm_head.vmfb.trim`. It has no batched prefill model.
+The demo has three models:
+
+| Name | Hugging Face repo | Model |
+|---|---|---|
+| `instruct-int4-gptq` (default) | `Synaptics/gemma-3-270-GPTQ-int4-it-torq` | Instruct, INT4 weights (GPTQ, block size 32), separate LM head (`transformer.vmfb`, `lm_head.vmfb.trim`), no batched prefill model |
+| `instruct` | `Synaptics/gemma-3-270m-it-torq` | Instruct, with a batched prefill model |
+| `default` | `Synaptics/gemma-3-270m-torq` | Base (pre-trained), with a batched prefill model |
+
+To set up another model, give its name to the demo's setup:
+
+```sh
+cd gemma3
+python setup_demo.py instruct
+```
 
 By default the demo downloads the model version matching this repo's `VERSION` file (see the
 [repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
@@ -76,3 +88,21 @@ python src/validate.py --instruct-model --max-samples 10
 ```
 
 Run `python src/validate.py -h` to see all available validation options.
+
+## Build the model
+
+The instruct model on Hugging Face (`Synaptics/gemma-3-270-GPTQ-int4-it-torq`)
+comes from one [torq-tools](https://github.com/synaptics-torq/torq-tools) command
+(see its `src/torq/models/gemma3/README.md`):
+
+```sh
+torq-export-model gemma3 --instruct-model --trim-vocab
+```
+
+The command quantizes the weights to INT4 with the GPTQ checkpoint of the model
+repository and compiles with the stream-schedule prefetch. It writes
+`transformer.vmfb`, `transformer_prefill.vmfb`, `lm_head.vmfb.trim` and the host
+files to `models/google/gemma-3-270m-it/export/trim/split_lm_head/quantized/static/compiled/`.
+Copy that directory to the board and pass its `transformer.vmfb` with `-m` to
+use your own build. The demo picks up `transformer_prefill.vmfb` (see the tip
+in [Running](#running)).
