@@ -237,6 +237,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_id_buf",
         "_extra_step_inputs",
         "_cache_keep_n",
+        "_turn_pos",
         "_n_tokens_gen",
         "_last_infer_ns",
         "_time_to_first_token_ns",
@@ -377,11 +378,25 @@ class DecoderOnlyLLMRunner(ABC):
                 "prefilled with single-token decode steps."
             )
 
+        self._turn_pos = 0
         self._warmup_len = self._warmup()
         if self._warmup_len > 0:
             self._reset_cache_state = self._model.save_kv_state()
         else:
             self._reset_cache_state = []
+        self._turn_pos = self._warmup_len
+        if (
+            self._cache_keep_n is not None
+            and self._warmup_len + self._cache_keep_n >= self._max_seq_len
+        ):
+            self._logger.warning(
+                "kv-cache-window (%d) plus warm-up (%d) fills the %d-token KV "
+                "cache, so the sliding window cannot roll; generation stops "
+                "when the cache is full.",
+                self._cache_keep_n,
+                self._warmup_len,
+                self._max_seq_len,
+            )
 
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
@@ -568,8 +583,9 @@ class DecoderOnlyLLMRunner(ABC):
             self._model.reset_kv()
 
     def reset(self) -> None:
-        """Reset the model to its post-warmup state."""
+        """Reset the model to its post-warmup state (a fresh conversation)."""
         self._reset_cache()
+        self._turn_pos = self._warmup_len
 
     def llm_step(
         self,
@@ -609,6 +625,9 @@ class DecoderOnlyLLMRunner(ABC):
         """
         if sample_next and not compute_logits:
             raise ValueError("sample_next=True requires compute_logits=True")
+
+        # The cache now holds tokens through position seq_pos + len(tokens).
+        self._turn_pos = seq_pos + len(tokens)
 
         if len(tokens) == 1:
             if self._emb_buf is not None:
@@ -839,6 +858,9 @@ class DecoderOnlyLLMRunner(ABC):
         *,
         produce_next_token: bool = True,
     ) -> tuple[int, int]:
+        if not tokens:
+            # Nothing to feed: return without consuming a cache slot
+            return 0, start
         pos = start
         if self._prefill_model is not None and len(tokens) >= self._prefill_size:
             chunk = self._prefill_size
@@ -926,11 +948,8 @@ class DecoderOnlyLLMRunner(ABC):
         return n
 
     def prefill_tokens(self, tokens: list[int]) -> tuple[int, int]:
-        return self._prefill(
-            tokens,
-            start=self._warmup_len,
-            should_stop=None,
-        )
+        """Prefill tokens at the current cache end; returns (next_token, new_pos)."""
+        return self._prefill(tokens, start=self._turn_pos, should_stop=None)
 
     def _apply_prompt_limit(self, tokens: list[int]) -> list[int]:
         """Truncate the prompt to the configured maximum input length.
@@ -960,13 +979,45 @@ class DecoderOnlyLLMRunner(ABC):
         user_input: str,
         should_stop: StopCheck | None = None,
     ) -> Iterator[str]:
-        """Yield decoded text chunks as tokens are generated."""
-        self._reset_cache()
+        """Yield decoded text chunks as tokens are generated.
+
+        The KV cache is shared across turns: the conversation so far stays in
+        the cache and this prompt is prefilled right after it, so later turns
+        see the earlier ones. When the conversation (or this prompt alone) no
+        longer fits, the cache rolls: the sliding window keeps the warm-up
+        prefix plus the most recent ``cache_keep_n`` tokens, and without a
+        window the conversation restarts from the warm-up prefix.
+        """
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
 
         tokens = self._apply_prompt_limit(self._build_prompt_tokens(user_input))
+        if self._turn_pos + len(tokens) > self._max_seq_len:
+            if self._cache_keep_n is not None:
+                self._model.shift_kv(
+                    self._cache_keep_n,
+                    protect_first_n=self._warmup_len,
+                )
+                self._turn_pos = self._warmup_len + self._cache_keep_n
+                self._logger.debug(
+                    "Circular KV cache at turn start: shifted last %d entries "
+                    "after %d protected prefix tokens",
+                    self._cache_keep_n,
+                    self._warmup_len,
+                )
+            else:
+                self._reset_cache()
+                self._turn_pos = self._warmup_len
+                self._logger.warning(
+                    "KV cache full, starting a fresh conversation"
+                )
+            room = self._max_seq_len - self._turn_pos
+            if len(tokens) > room:
+                tokens = tokens[:room]
+                self._logger.warning(
+                    "Prompt truncated to fit the KV cache (%d tokens)", len(tokens)
+                )
 
         gen: list[int] = []
         self._start_time_ns = time.perf_counter_ns()
@@ -974,7 +1025,7 @@ class DecoderOnlyLLMRunner(ABC):
         try:
             next_tok, pos = self._prefill(
                 tokens,
-                start=self._warmup_len,
+                start=self._turn_pos,
                 should_stop=should_stop,
             )
             self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
@@ -1005,8 +1056,11 @@ class DecoderOnlyLLMRunner(ABC):
                             self._cache_keep_n,
                             self._warmup_len,
                         )
-                    else:
-                        self._logger.warning("Max generation tokens reached")
+                    if pos >= self._max_seq_len:
+                        # The shift could not free space (no window, or the
+                        # window plus prefix already fills the cache): step
+                        # again and we would write past the last cache slot.
+                        self._logger.warning("KV cache full; stopping generation")
                         break
                 next_tok = self.llm_step(next_tok, pos)
                 _raise_if_stopped(should_stop)

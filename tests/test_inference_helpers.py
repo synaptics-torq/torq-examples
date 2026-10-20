@@ -267,6 +267,7 @@ class _GenProbe(DecoderOnlyLLMRunner):
         self._max_prompt_tokens = None
         self._max_user_tokens = None
         self._cache_keep_n = None
+        self._turn_pos = 0
         self._reset_cache_state = []
         self._tokenizer = _FakeTokenizer()
         self._eos_token_id = 99
