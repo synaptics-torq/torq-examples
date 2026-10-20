@@ -167,11 +167,13 @@ class CommandExecutionError(RuntimeError):
         returncode: int,
         stdout: str = "",
         stderr: str = "",
+        command: str | None = None,
     ) -> None:
         super().__init__(message)
         self.returncode = returncode
         self.stdout = stdout
         self.stderr = stderr
+        self.command = command
 
 
 class HostDemoRunner:
@@ -266,11 +268,14 @@ class HostDemoRunner:
             raise FileNotFoundError(f"Demo profiling entry not found: {entry}")
         return spec.profiling_entry.replace("\\", "/")
 
-    def _write_log(self, demo_name: str, stdout: str, stderr: str) -> str:
+    def _write_log(self, demo_name: str, stdout: str, stderr: str, command: str | None = None) -> str:
         log_dir = self.repo_root / "logs"
         log_dir.mkdir(parents=True, exist_ok=True)
         log_path = log_dir / f"{demo_name}.log"
-        log_path.write_text((stdout + "\n" + stderr).strip() + "\n", encoding="utf-8")
+        content = (stdout + "\n" + stderr).strip()
+        if command:
+            content = f"COMMAND: {command}\n\n{content}" if content else f"COMMAND: {command}"
+        log_path.write_text(content + "\n", encoding="utf-8")
         return str(log_path)
 
     def _write_profile_results(
@@ -448,6 +453,7 @@ class HostDemoRunner:
                 returncode=completed.returncode,
                 stdout=completed.stdout,
                 stderr=completed.stderr,
+                command=command,
             )
         return completed.stdout
 
@@ -482,6 +488,7 @@ class HostDemoRunner:
                 f"Remote command timed out after {timeout}s on {target.serial}: {command}",
                 returncode=124,
                 stdout=partial_output,
+                command=command,
             ) from exc
         combined_output = completed.stdout or ""
         if completed.returncode != 0:
@@ -489,6 +496,7 @@ class HostDemoRunner:
                 f"Remote command failed on {target.serial}: {command}",
                 returncode=completed.returncode,
                 stdout=combined_output,
+                command=command,
             )
         return combined_output
 
@@ -1118,13 +1126,16 @@ class HostDemoRunner:
         demo_name: str,
         remote_repo: str,
     ) -> dict[str, str]:
+        setup_cmd = (
+            f"cd {shlex.quote(remote_repo)} && . .venv/bin/activate && "
+            f"python setup_demos.py {shlex.quote(demo_name)}"
+        )
         setup_stdout = self._run_remote_command(
             target,
-            f"cd {shlex.quote(remote_repo)} && . .venv/bin/activate && "
-            f"python setup_demos.py {shlex.quote(demo_name)}",
+            setup_cmd,
             timeout=3600,
         )
-        self._write_log(f"{demo_name}_setup", setup_stdout, "")
+        self._write_log(f"{demo_name}_setup", setup_stdout, "", command=setup_cmd)
         model_dirs = self._read_setup_model_paths().get(demo_name, {})
         if not model_dirs:
             raise RuntimeError(
@@ -1169,8 +1180,10 @@ class HostDemoRunner:
         *,
         artifact_name: str | None = None,
     ) -> DemoExecutionResult:
+        failed_command: str | None = None
         if isinstance(exc, CommandExecutionError):
             returncode = exc.returncode
+            failed_command = exc.command
             stdout = exc.stdout
             stderr = f"{phase} failed: {exc}"
             if exc.stderr:
@@ -1197,6 +1210,7 @@ class HostDemoRunner:
             f"{artifact_name or demo_name}_{phase}_failed",
             stdout,
             stderr,
+            command=failed_command,
         )
         return DemoExecutionResult(
             demo_name=demo_name,
@@ -1306,6 +1320,7 @@ class HostDemoRunner:
                         f"{demo_name}_setup",
                         exc.stdout,
                         exc.stderr,
+                        command=exc.command,
                     )
                     print(
                         f"[{case_name}] setup command returned rc={exc.returncode}; "
@@ -1327,6 +1342,7 @@ class HostDemoRunner:
                         returncode=setup_error.returncode,
                         stdout=setup_error.stdout,
                         stderr=setup_error.stderr,
+                        command=setup_error.command,
                     ) from validation_exc
                 raise
 
