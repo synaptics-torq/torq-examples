@@ -238,6 +238,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_extra_step_inputs",
         "_cache_keep_n",
         "_turn_pos",
+        "_pending_token",
         "_n_tokens_gen",
         "_last_infer_ns",
         "_time_to_first_token_ns",
@@ -379,6 +380,7 @@ class DecoderOnlyLLMRunner(ABC):
             )
 
         self._turn_pos = 0
+        self._pending_token = None
         self._warmup_len = self._warmup()
         if self._warmup_len > 0:
             self._reset_cache_state = self._model.save_kv_state()
@@ -586,6 +588,7 @@ class DecoderOnlyLLMRunner(ABC):
         """Reset the model to its post-warmup state (a fresh conversation)."""
         self._reset_cache()
         self._turn_pos = self._warmup_len
+        self._pending_token = None
 
     def llm_step(
         self,
@@ -626,9 +629,6 @@ class DecoderOnlyLLMRunner(ABC):
         if sample_next and not compute_logits:
             raise ValueError("sample_next=True requires compute_logits=True")
 
-        # The cache now holds tokens through position seq_pos + len(tokens).
-        self._turn_pos = seq_pos + len(tokens)
-
         if len(tokens) == 1:
             if self._emb_buf is not None:
                 self._emb_buf[0, 0, :] = self._token_embeddings[tokens[0]]
@@ -652,10 +652,12 @@ class DecoderOnlyLLMRunner(ABC):
                 model.infer(step_inputs, skip_lm_head=True)
             else:
                 model.infer(step_inputs)
+            self._turn_pos = seq_pos + len(tokens)
             self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
             return 0
 
         results = model.infer(step_inputs)
+        self._turn_pos = seq_pos + len(tokens)
         self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
 
         if not sample_next:
@@ -993,41 +995,53 @@ class DecoderOnlyLLMRunner(ABC):
         self._time_to_first_token_ns = 0
 
         tokens = self._apply_prompt_limit(self._build_prompt_tokens(user_input))
-        if self._turn_pos + len(tokens) > self._max_seq_len:
+        # Sampling predicts a token; its KV entry is written on the next step.
+        # Carry the last prediction across normal stops and closed streams.
+        pending = [] if self._pending_token is None else [self._pending_token]
+        if self._turn_pos + len(pending) + len(tokens) > self._max_seq_len:
             if self._cache_keep_n is not None:
+                keep = min(self._cache_keep_n, self._turn_pos - self._warmup_len)
                 self._model.shift_kv(
-                    self._cache_keep_n,
+                    keep,
                     protect_first_n=self._warmup_len,
+                    valid_length=self._turn_pos,
                 )
-                self._turn_pos = self._warmup_len + self._cache_keep_n
+                self._turn_pos = self._warmup_len + keep
                 self._logger.debug(
                     "Circular KV cache at turn start: shifted last %d entries "
                     "after %d protected prefix tokens",
-                    self._cache_keep_n,
+                    keep,
                     self._warmup_len,
                 )
             else:
-                self._reset_cache()
-                self._turn_pos = self._warmup_len
+                self.reset()
+                pending = []
                 self._logger.warning(
                     "KV cache full, starting a fresh conversation"
                 )
-            room = self._max_seq_len - self._turn_pos
+            room = max(0, self._max_seq_len - self._turn_pos - len(pending))
             if len(tokens) > room:
                 tokens = tokens[:room]
                 self._logger.warning(
                     "Prompt truncated to fit the KV cache (%d tokens)", len(tokens)
                 )
 
+        if not tokens:
+            self._logger.warning("No prompt tokens fit in the KV cache")
+            return
+        tokens = pending + tokens
+
         gen: list[int] = []
         self._start_time_ns = time.perf_counter_ns()
         yield_ns = 0
         try:
+            self._pending_token = None
             next_tok, pos = self._prefill(
                 tokens,
                 start=self._turn_pos,
                 should_stop=should_stop,
             )
+            self._pending_token = next_tok
             self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
 
             prev_text = self._tokenizer.decode([next_tok])
@@ -1063,6 +1077,7 @@ class DecoderOnlyLLMRunner(ABC):
                         self._logger.warning("KV cache full; stopping generation")
                         break
                 next_tok = self.llm_step(next_tok, pos)
+                self._pending_token = next_tok
                 _raise_if_stopped(should_stop)
                 gen.append(next_tok)
                 pos += 1
