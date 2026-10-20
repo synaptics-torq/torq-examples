@@ -4,6 +4,7 @@
 
 import argparse
 import os
+import signal
 import sys
 from abc import abstractmethod
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -884,4 +885,6 @@ def run_chat_loop(
                     continue
             stats_fn()
     except KeyboardInterrupt:
+        # A second Ctrl+C must not interrupt runtime/interpreter cleanup.
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         print()

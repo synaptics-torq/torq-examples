@@ -7,6 +7,11 @@ the chat loop, and the ``max_gen_tokens`` generation cap."""
 import argparse
 import builtins
 import logging
+import signal
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -230,6 +235,58 @@ def test_finish_interrupted_output_variants(capsys):
     finish_interrupted_output(False)
     out = capsys.readouterr().out
     assert "\r" in out and "[Interrupt]" in out
+
+
+@pytest.mark.parametrize("debug", [False, True])
+def test_ctrl_c_during_generation_keeps_prompt_interruptible(monkeypatch, capsys, debug):
+    inputs = iter(["hi", "quit"])
+    monkeypatch.setattr(builtins, "input", lambda prompt: next(inputs))
+
+    def interrupt(*args):
+        raise KeyboardInterrupt
+
+    stats = mock.Mock()
+    with mock.patch("utils.inference.signal.signal") as set_handler:
+        run_chat_loop(interrupt, interrupt, stats, debug=debug)
+    set_handler.assert_not_called()
+    stats.assert_called_once_with()
+    assert "[Interrupt]" in capsys.readouterr().out
+
+
+def test_repeated_ctrl_c_during_thread_shutdown_exits_cleanly():
+    script = textwrap.dedent('''
+        import builtins
+        import runpy
+        import sys
+        import threading
+
+        runpy.run_path("tests/conftest.py")
+        from utils.inference import run_chat_loop
+
+        def interrupt(prompt):
+            raise KeyboardInterrupt
+
+        builtins.input = interrupt
+        threading.Thread(target=lambda: sys.stdin.read()).start()
+        run_chat_loop(None, None, None)
+        print("shutting down", flush=True)
+    ''')
+    child = subprocess.Popen(
+        [sys.executable, "-u", "-c", script],
+        stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, cwd=Path(__file__).resolve().parents[1],
+    )
+    try:
+        assert child.stdout.readline() == "\n"
+        assert child.stdout.readline() == "shutting down\n"
+        child.send_signal(signal.SIGINT)
+        stdout, stderr = child.communicate("\n", timeout=10)
+        assert child.returncode == 0
+        assert stdout == stderr == ""
+    finally:
+        if child.poll() is None:
+            child.kill()
+            child.communicate()
 
 
 def test_print_llm_stats_line():
