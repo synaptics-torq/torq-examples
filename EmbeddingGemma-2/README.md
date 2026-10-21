@@ -50,11 +50,26 @@ The default build keeps the 4-bit weights of the onnx-community `*_q4` export, a
 model, but with more memory per network.
 
 ```sh
-python setup_demos.py EmbeddingGemma-2      # download the model files
+python setup_demos.py EmbeddingGemma-2      # download the model files and the examples
 cd EmbeddingGemma-2
+python src/infer.py --examples              # run the example media
+```
+
+`--examples` scores 14 example files against their 14 descriptions:
+- six subjects, each with a photo and a sound: cat, dog, bird, piano, train and police car;
+- two short videos: a waterfall and a sea turtle.
+
+Each file ranks its own description first, well ahead of the other subjects' descriptions (checked
+with the 8-bit build on the NPU). For example, the dog's bark matches "a dog barking and growling",
+not "a cat meowing loudly". The files are CC0 or public domain; credits are in `examples/README.md`
+next to them.
+
+Your own queries and media work the same way, and can be combined with `--examples`:
+
+```sh
 python src/infer.py \
-    --queries "cats sleeping on a couch" "a turtle swimming in the ocean" "a dog barking" \
-    --images cats.jpg --videos sea-turtle.mp4 --audios dog_barking.wav
+    --queries "a fluffy tabby and white cat with bright blue eyes" "a dog barking and growling" \
+    --images my_cat.jpg --videos my_video.mp4 --audios my_dog.wav
 ```
 
 `-m/--model-dir` defaults to the files `setup_demos.py` downloaded.
@@ -64,7 +79,7 @@ within a process is not reliable on the current driver, so a session keeps all t
 needs mapped. The default 4-bit build fits all of them (~0.6 GB). With the bf16 build, the vision
 and audio encoders plus both text buckets need ~1.7 GB. In that case `infer.py` asks you to run
 `--audios` in a separate session; embeddings from both sessions live in the same space and
-compare directly.
+compare directly. For the examples, run `--examples visual` and then `--examples audio`.
 
 Options: `--backend ort` runs the fp32 ONNX graphs on the CPU with the same host code,
 `--dim 256` truncates the embeddings (Matryoshka; renormalised), `--documents` adds text

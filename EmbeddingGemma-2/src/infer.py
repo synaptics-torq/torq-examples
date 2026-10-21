@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""EmbeddingGemma-2 demo: embed text queries, images and videos into one 768-d space
+"""EmbeddingGemma-2 demo: embed text queries, images, videos and sounds into one 768-d space
 and rank them against each other.
 
+    python src/infer.py --examples
     python src/infer.py \
-        --queries "cats sleeping on a couch" "a turtle swimming in the ocean" \
-        --images cats.jpg --videos sea-turtle.mp4
+        --queries "a fluffy tabby and white cat with bright blue eyes" "a dog barking and growling" \
+        --images cat.jpg --audios dog.wav
 
-Images and videos are scored against every query (cosine similarity). With only
-``--queries`` the queries are compared with each other (sentence similarity).
+Images, videos and sounds are scored against every query (cosine similarity). With only
+``--queries`` the queries are compared with each other (sentence similarity). ``--examples``
+runs the example media that setup_demos.py downloads, with their descriptions as the queries.
 """
 
 import argparse
@@ -28,6 +30,22 @@ def _fmt_timings(t: dict) -> str:
     return ", ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in t.items())
 
 
+def _add_examples(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
+    """Append the example media in <model dir>/examples and their descriptions to the inputs."""
+    import json
+    ex_dir = Path(args.model_dir) / "examples"
+    index = ex_dir / "examples.json"
+    if not index.exists():
+        ap.error(f"no examples in {ex_dir}; run `python setup_demos.py EmbeddingGemma-2` from the "
+                 "torq-examples root to download them")
+    kinds = {"all": {"image", "video", "audio"}, "visual": {"image", "video"}, "audio": {"audio"}}[args.examples]
+    examples = json.loads(index.read_text())["examples"]
+    args.queries += [e["text"] for e in examples]
+    for e in examples:
+        if e["kind"] in kinds:
+            {"image": args.images, "video": args.videos, "audio": args.audios}[e["kind"]].append(str(ex_dir / e["file"]))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-m", "--model-dir", help="Directory with the vmfbs/onnx graphs and assets (default: the files setup_demos.py downloaded)")
@@ -43,9 +61,15 @@ def main():
                     help="Audio encoder window in seconds (1.4, 2.8, 5.6, 11.2) or 'auto': the smallest "
                          "window that holds the longest clip (default: %(default)s)")
     ap.add_argument("--dim", type=int, default=768, choices=[768, 512, 256, 128], help="Matryoshka dimension")
+    ap.add_argument("--examples", nargs="?", const="all", choices=["all", "visual", "audio"],
+                    help="Add the downloaded example media (photos, videos and sounds) with their "
+                         "descriptions as queries. 'visual' adds the photos and videos, 'audio' the "
+                         "sounds; with the bf16 or 8-bit build, run these as two sessions")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
+    if args.examples:
+        _add_examples(ap, args)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
 
     modalities = {"text"} | ({"image"} if args.images else set()) | ({"video"} if args.videos else set()) \

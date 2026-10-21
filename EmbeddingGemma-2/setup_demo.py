@@ -32,16 +32,32 @@ _REQUIRED_FILES: Final[tuple[str, ...]] = (
     "embeddinggemma2_manifest.json",
 )
 
+# Example media for `src/infer.py --examples`: CC0 / public-domain photos, sounds and videos with a
+# description each (credits in examples/README.md). They live on the `main` branch whichever weight
+# build --model-version selects, so they are always downloaded from there.
+_EXAMPLES_REVISION: Final[str] = "main"
+_EXAMPLE_FILES: Final[tuple[str, ...]] = tuple(f"examples/{f}" for f in (
+    "examples.json", "README.md",
+    "cat_tabby.jpg", "cat_meowing.wav", "dog_labrador.jpg", "dog_barking.wav",
+    "bird_sparrow.jpg", "birds_chirping.wav", "piano_keyboard.jpg", "piano_arpeggio.wav",
+    "train_locomotive.jpg", "train_passing.wav", "police_car.jpg", "police_siren.wav",
+    "waterfall.ogv", "sea_turtle.ogv",
+))
+
+
+def _has_model_files(model_dir: Path) -> bool:
+    return all((model_dir / f).exists() for f in _REQUIRED_FILES)
+
 
 def _has_files(model_dir: Path) -> bool:
-    return all((model_dir / f).exists() for f in _REQUIRED_FILES)
+    return _has_model_files(model_dir) and all((model_dir / f).exists() for f in _EXAMPLE_FILES)
 
 
 def local_embeddinggemma2_model_dir(base_dir: str | Path | None = None) -> Path | None:
     """The downloaded model directory to default ``--model-dir`` to, if it is complete."""
     base_dir = Path(base_dir) if base_dir is not None else default_models_dir()
     for repo_id in dict.fromkeys(_HF_REPO_MAP.values()):
-        if _has_files(base_dir / repo_id):
+        if _has_model_files(base_dir / repo_id):
             return base_dir / repo_id
     return None
 
@@ -50,7 +66,10 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
     for f in _REQUIRED_FILES:
         download_from_hf(repo_id, f, base_dir=base_dir, revision=revision)
         logger.info("Downloaded %s from %s", f, repo_id)
-    return list(_REQUIRED_FILES)
+    for f in _EXAMPLE_FILES:
+        download_from_hf(repo_id, f, base_dir=base_dir, revision=_EXAMPLES_REVISION)
+        logger.info("Downloaded %s from %s", f, repo_id)
+    return list(_REQUIRED_FILES + _EXAMPLE_FILES)
 
 
 def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | None = None,
