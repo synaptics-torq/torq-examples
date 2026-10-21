@@ -12,7 +12,7 @@ logger = logging.getLogger("EmbeddingGemma2.setup")
 
 _HF_REPO_MAP: Final[dict[str, str]] = {
     "default": "Synaptics/Google-EmbeddingGemma-2",
-    "Google-EmbeddingGemma-2": "Synaptics/Google-EmbeddingGemma-2",
+    "EmbeddingGemma-2": "Synaptics/Google-EmbeddingGemma-2",
 }
 _DEFAULT_MODELS: Final[list[str]] = ["default"]
 
@@ -55,11 +55,11 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
 
 def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | None = None,
                           no_update: bool = False):
-    """Set up the Google-EmbeddingGemma-2 demo (download/refresh the model files)."""
+    """Set up the EmbeddingGemma-2 demo (download/refresh the model files)."""
     return setup_demo(
         _HF_REPO_MAP,
         models or _DEFAULT_MODELS,
-        demo_name="Google-EmbeddingGemma-2",
+        demo_name="EmbeddingGemma-2",
         requirements=Path(__file__).parent / "requirements.txt",
         files_present=_has_files,
         download=_download,

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""Default ``--model-dir``: the files ``setup_demos.py Google-EmbeddingGemma-2`` downloaded."""
+"""Default ``--model-dir``: the files ``setup_demos.py EmbeddingGemma-2`` downloaded."""
 
 import argparse
 import sys
@@ -15,7 +15,7 @@ def resolve_model_dir(parser: argparse.ArgumentParser, model_dir: str | None) ->
         return model_dir
     # setup_demo.py sits in the demo directory (not an importable package) and imports the
     # repo's `utils` package, so both directories go on the path.
-    for p in (_DEMO_DIR, _DEMO_DIR.parent.parent):
+    for p in (_DEMO_DIR, _DEMO_DIR.parent):
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
     try:
@@ -25,5 +25,5 @@ def resolve_model_dir(parser: argparse.ArgumentParser, model_dir: str | None) ->
         local = None
     if local is None:
         parser.error("no local EmbeddingGemma-2 model files found; pass -m/--model-dir or run "
-                     "`python setup_demos.py Google-EmbeddingGemma-2` from the torq-examples root")
+                     "`python setup_demos.py EmbeddingGemma-2` from the torq-examples root")
     return str(local)

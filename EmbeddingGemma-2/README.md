@@ -50,8 +50,8 @@ The default build keeps the 4-bit weights of the onnx-community `*_q4` export, a
 model, but with more memory per network.
 
 ```sh
-python setup_demos.py Google-EmbeddingGemma-2      # download the model files
-cd Google/Google-EmbeddingGemma-2
+python setup_demos.py EmbeddingGemma-2      # download the model files
+cd EmbeddingGemma-2
 python src/infer.py \
     --queries "cats sleeping on a couch" "a turtle swimming in the ocean" "a dog barking" \
     --images cats.jpg --videos sea-turtle.mp4 --audios dog_barking.wav
