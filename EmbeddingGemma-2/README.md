@@ -26,17 +26,17 @@ Audio becomes `<bos> <|audio> n x <|audio|> <audio|> <eos>` with n = 25 tokens p
 A session loads one audio encoder window. By default (`--audio-window auto`) that is the smallest
 window that holds the longest clip. Shorter clips are zero-padded and only their n valid tokens
 are used (identical to the unpadded result); longer clips are truncated to the window.
-Smaller windows are faster (board, NPU):
+Smaller windows are faster (board, NPU, 8-bit build):
 
 | Window | Audio encoder |
 |---|---|
-| 1.4 s | 337 ms |
-| 2.8 s | 530 ms |
-| 5.6 s | 1161 ms |
-| 11.2 s | 1973 ms |
+| 1.4 s | 302 ms |
+| 2.8 s | 463 ms |
+| 5.6 s | 935 ms |
+| 11.2 s | 2041 ms |
 
-The text pass that follows takes 481 ms (S=128) for clips up to ~4.9 s (124 audio tokens), or
-2278 ms (S=512) for longer ones: an 11 s clip takes 4.3 s end to end.
+The text pass that follows takes 389 ms (S=128) for clips up to ~4.9 s (124 audio tokens), or
+2185 ms (S=512) for longer ones: an 11 s clip takes about 4.2 s end to end.
 
 The static 384x384 / 64-token geometry is what the HF processor produces for a square image
 at the smallest token budget (70). Inputs are resized to a square, so non-square images and
@@ -45,9 +45,13 @@ video frames are squashed.
 ## Usage
 
 The model files come from [Synaptics/Google-EmbeddingGemma-2](https://huggingface.co/Synaptics/Google-EmbeddingGemma-2).
-The default build keeps the 4-bit weights of the onnx-community `*_q4` export, about 1.1 GB.
-`--model-version bf16` downloads the bf16 build instead, about 3.6 GB: closer to the original
-model, but with more memory per network.
+The default build has 8-bit weights (int8 in blocks of 32, bf16 activations), about 2.3 GB. Its
+embeddings are much closer to the original model's than the 4-bit build's (cosine to the fp32
+model over a media library: 0.997, against 0.976 for 4-bit), and it is as fast or faster on the
+NPU (389 ms against 549 ms for a short query). `--model-version main` downloads the 4-bit build
+(weights of the onnx-community `*_q4` export, about 1.1 GB), and `--model-version bf16` the bf16
+build (about 3.6 GB, closest to the original model, with more memory per network). Each build
+replaces the files of the previous one.
 
 ```sh
 python setup_demos.py EmbeddingGemma-2      # download the model files and the examples
@@ -76,10 +80,11 @@ python src/infer.py \
 
 The board's NPU driver maps at most ~1.5 GB of networks at a time, and releasing a network
 within a process is not reliable on the current driver, so a session keeps all the networks it
-needs mapped. The default 4-bit build fits all of them (~0.6 GB). With the bf16 build, the vision
-and audio encoders plus both text buckets need ~1.7 GB. In that case `infer.py` asks you to run
-`--audios` in a separate session; embeddings from both sessions live in the same space and
-compare directly. For the examples, run `--examples visual` and then `--examples audio`.
+needs mapped. The 8-bit build (~1.3 GB) and the 4-bit build (~0.6 GB) fit all of them. With the
+bf16 build, the vision and audio encoders plus both text buckets need ~1.7 GB. In that case
+`infer.py` asks you to run `--audios` in a separate session; embeddings from both sessions live in
+the same space and compare directly. For the examples, run `--examples visual` and then
+`--examples audio`.
 
 Options: `--backend ort` runs the fp32 ONNX graphs on the CPU with the same host code,
 `--dim 256` truncates the embeddings (Matryoshka; renormalised), `--documents` adds text

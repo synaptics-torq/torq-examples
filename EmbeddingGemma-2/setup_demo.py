@@ -16,6 +16,18 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
 }
 _DEFAULT_MODELS: Final[list[str]] = ["default"]
 
+# Weight builds on Hugging Face, chosen with --model-version (or `default:<version>`):
+#   q8      branch `q8` (the default): 8-bit weights (int8 block-32, bf16 activations); much
+#           closer to the original model than 4-bit at the same or better NPU speed
+#   main    branch `main` or the version tag (e.g. v2.2.0): 4-bit weights (q4)
+#   bf16    branch `bf16`: bf16 weights
+# All builds use the same file names and go to the same model directory; switching
+# replaces the files.
+#
+# The build downloaded when no --model-version is given: the 8-bit build on the `q8` branch.
+# Once a release tag itself holds the 8-bit build, set it back to None (the version tag).
+_DEFAULT_MODEL_VERSION: Final[str | None] = "q8"
+
 _REQUIRED_FILES: Final[tuple[str, ...]] = (
     "vision_384x384.vmfb",            # vision encoder, 384x384 -> 64 soft tokens
     "text_body_s128.vmfb",            # text body, 128 tokens (queries, images)
@@ -75,6 +87,7 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
 def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | None = None,
                           no_update: bool = False):
     """Set up the EmbeddingGemma-2 demo (download/refresh the model files)."""
+    model_version = model_version or _DEFAULT_MODEL_VERSION
     return setup_demo(
         _HF_REPO_MAP,
         models or _DEFAULT_MODELS,
