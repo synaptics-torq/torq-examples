@@ -44,8 +44,9 @@ python src/infer.py --instruct-model
 ```
 
 `-m`/`--model` defaults to the downloaded `transformer.vmfb`. The sibling
-`lm_head.vmfb.trim` is picked up automatically. The context window is fixed at 256 tokens
-(system prompt + conversation + answer).
+`lm_head.vmfb.trim` is picked up automatically. The context window (system prompt +
+conversation + answer) is fixed when the model is exported: 256 tokens for the hosted
+model, or the value of `torq-export-model qwen -t/--max-gen-tokens` for your own export.
 
 ### Thinking mode
 
@@ -60,9 +61,10 @@ before the answer starts.
 | `--show-thinking` | Print the `<think>` block before the answer |
 | `--no-thinking` | Answer at once, without reasoning (faster, less accurate) |
 
-The 256-token context also holds the thinking. When the context is full before
+The context window also holds the thinking. When the context is full before
 the model finishes thinking, the demo stops and prints a note instead of an
-answer. Use `--no-thinking` for long questions.
+answer. Use `--no-thinking` for long questions, or export the model with a
+larger context.
 
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.

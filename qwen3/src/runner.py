@@ -21,8 +21,9 @@ class Qwen3Static(DecoderOnlyLLMRunner):
     The ``torq-export-model qwen --split-lm-head`` export takes
     ``token_embedding`` ``[1, 1, 896]`` (a CPU-side lookup into
     ``token_embeddings.npy``) and ``position_ids`` ``[1, 1]``, followed by one
-    combined ``past_key_values.N.key_value`` cache ``[1, 16, 256, 128]`` per
-    layer. The transformer outputs the hidden state, and the sibling
+    combined ``past_key_values.N.key_value`` cache ``[1, 16, S, 128]`` per
+    layer, where ``S`` is the context length of the export (256 for the hosted
+    model). The transformer outputs the hidden state, and the sibling
     ``lm_head.vmfb.trim`` turns it into logits over the trimmed vocabulary, which
     ``token_id_lut.npy`` maps back to tokenizer IDs. All of this is handled by
     :class:`~utils.llm.DecoderOnlyLLMRunner`; this class only adds Qwen's
