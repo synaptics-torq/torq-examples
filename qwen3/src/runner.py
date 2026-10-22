@@ -2,11 +2,12 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import os
+from collections.abc import Iterable, Iterator
 from typing import Final
 
 from utils.llm import DecoderOnlyLLMRunner, InferenceInterrupted
 
-__all__ = ["Qwen3Static", "InferenceInterrupted"]
+__all__ = ["Qwen3Static", "InferenceInterrupted", "hide_thinking"]
 
 DEFAULT_SYS_PROMPT: Final[str] = (
     "You are a helpful assistant. "
@@ -25,13 +26,18 @@ class Qwen3Static(DecoderOnlyLLMRunner):
     ``lm_head.vmfb.trim`` turns it into logits over the trimmed vocabulary, which
     ``token_id_lut.npy`` maps back to tokenizer IDs. All of this is handled by
     :class:`~utils.llm.DecoderOnlyLLMRunner`; this class only adds Qwen's
-    ChatML template and stop tokens. Qwen3 answers in non-thinking mode: the
-    assistant turn starts with an empty ``<think></think>`` block, as
-    ``apply_chat_template(..., enable_thinking=False)`` does.
+    ChatML template and stop tokens.
+
+    With ``thinking=True`` (the default) the model first writes its reasoning
+    in a ``<think>...</think>`` block and then the answer, as
+    ``apply_chat_template(..., enable_thinking=True)`` does. With
+    ``thinking=False`` the assistant turn starts with an empty
+    ``<think></think>`` block, so the model answers at once.
     """
 
     __slots__ = (
         "_instruct_model",
+        "_thinking",
         "_sys_prompt",
         "_nl_token_id",
         "_double_nl_token_id",
@@ -59,8 +65,10 @@ class Qwen3Static(DecoderOnlyLLMRunner):
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
         disable_prefill: bool = False,
+        thinking: bool = True,
     ):
         self._instruct_model = instruct_model
+        self._thinking = thinking
         self._sys_prompt = (sys_prompt or DEFAULT_SYS_PROMPT) if instruct_model else None
         super().__init__(
             model_path,
@@ -96,7 +104,10 @@ class Qwen3Static(DecoderOnlyLLMRunner):
         # Qwen ChatML format: <|im_start|>role\ntext<|im_end|>\n
         # Qwen uses no BOS token (config bos_token_id is <|endoftext|>).
         if role == "assistant":
-            return self._tokenizer.encode("<|im_start|>assistant\n<think>\n\n</think>\n\n").ids
+            header = "<|im_start|>assistant\n"
+            if not self._thinking:
+                header += "<think>\n\n</think>\n\n"
+            return self._tokenizer.encode(header).ids
         return self._tokenizer.encode(
             "<|im_start|>" + role + "\n" + text + "<|im_end|>\n"
         ).ids
@@ -120,3 +131,30 @@ class Qwen3Static(DecoderOnlyLLMRunner):
                 return True
             return all(t == self._nl_token_id for t in gen[-2:])
         return False
+
+
+def hide_thinking(chunks: Iterable[str]) -> Iterator[str]:
+    """Yield only the answer of a thinking-mode response.
+
+    The text up to and including ``</think>`` is held back. If the response
+    ends before ``</think>`` (the context is full while the model thinks), one
+    note is yielded instead of an empty answer.
+    """
+    buf = ""
+    answering = False
+    started = False  # the blank lines after </think> are not part of the answer
+    for chunk in chunks:
+        if not answering:
+            buf += chunk
+            end = buf.find("</think>")
+            if end < 0:
+                continue
+            answering = True
+            chunk = buf[end + len("</think>"):]
+        if not started:
+            chunk = chunk.lstrip()
+            started = bool(chunk)
+        if chunk:
+            yield chunk
+    if not answering:
+        yield "[No answer: the context was full before the model finished thinking.]"
