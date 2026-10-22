@@ -1,8 +1,8 @@
 # Qwen3 Demo
 
 Interactive chat with [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) on the
-Torq NPU, in non-thinking mode (the assistant turn starts with an empty
-`<think></think>` block). The weights are INT4, calibrated with GPTQ.
+Torq NPU, in thinking mode: the model reasons in a `<think>` block before it
+answers. The weights are INT4, calibrated with GPTQ.
 
 ## Setup
 
@@ -44,8 +44,27 @@ python src/infer.py --instruct-model
 ```
 
 `-m`/`--model` defaults to the downloaded `transformer.vmfb`. The sibling
-`lm_head.vmfb.trim` is picked up automatically. The context window is fixed at 256 tokens
-(system prompt + conversation + answer).
+`lm_head.vmfb.trim` is picked up automatically. The context window (system prompt +
+conversation + answer) is fixed when the model is exported: 256 tokens for the hosted
+model, or the value of `torq-export-model qwen -t/--max-gen-tokens` for your own export.
+
+### Thinking mode
+
+By default the model thinks before it answers. While it thinks, the demo shows
+`[thinking...]`, and then it prints only the answer. Thinking gives better
+answers on reasoning, word problems and code, but it takes time: a short
+question usually needs 100 to 300 thinking tokens, which is about 20 to 50 s
+before the answer starts.
+
+| Option | Effect |
+|---|---|
+| `--show-thinking` | Print the `<think>` block before the answer |
+| `--no-thinking` | Answer at once, without reasoning (faster, less accurate) |
+
+The context window also holds the thinking. When the context is full before
+the model finishes thinking, the demo stops and prints a note instead of an
+answer. Use `--no-thinking` for long questions, or export the model with a
+larger context.
 
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
