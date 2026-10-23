@@ -51,6 +51,7 @@ class Cache:
 
     def __init__(self, capacity):
         self._n_kv = 1
+        self._seq_axis = 2
         self._kv_cache = [Device(np.zeros((1, 1, capacity, 1), dtype=np.int64))]
         self.calls = []
 

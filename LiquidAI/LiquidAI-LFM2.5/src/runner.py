@@ -98,6 +98,8 @@ class LiquidStatic(DecoderOnlyLLMRunner):
         ``inputs_info[2]`` — for LFM2.5 that slot is either a conv cache
         ``[1, 1024, 3]`` (legacy exports) or the ``[1, 256]`` attention mask
         (newer exports), not the 256-token KV window."""
+        if (seq_len := self._model.kv_seq_len) is not None:
+            return seq_len
         info = self._model.inputs_info
         if info is None:
             return None

@@ -109,6 +109,7 @@ def _install_runner_import_stubs() -> None:
             pass
 
         runtime.DeviceArray = DeviceArray
+        runtime.HalCommandBuffer = type("HalCommandBuffer", (), {})
         iree.runtime = runtime
         sys.modules["iree"] = iree
         sys.modules["iree.runtime"] = runtime

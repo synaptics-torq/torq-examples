@@ -99,8 +99,8 @@ format + system-prompt warm-up (drop it for a base/completion model). Run
 
 LFM2.5 is a hybrid conv + attention model: each layer is either a depthwise 1D
 conv block (sliding `past_conv.N` state `[1, 1024, 3]`) or an attention block
-(per-layer combined KV cache `[1, 16, 256, 64]` — 8 KV heads × 64 head-dim,
-256-token window). The 230M build has 14 layers (8 conv + 6 attention); the
+(per-layer combined KV cache `[1, 256, 16, 64]` — 256-token window × 8 KV heads
+for K and V × 64 head-dim; models before v2.4.0 use `[1, 16, 256, 64]`). The 230M build has 14 layers (8 conv + 6 attention); the
 350M build has 16 layers (9 conv + 7 attention).
 
 The new exporter's body VMFB takes three non-cache inputs — `token_embedding`
@@ -117,7 +117,10 @@ chat format, system-prompt warm-up, and stop conditions. Its
 tensor is — it zero-inits every per-layer cache from the model's input-shape
 metadata and shuttles each present output back to its past input — so the
 *mixed* conv/KV caches thread correctly with no special-casing (board-verified
-bit-coherent against the fp32 reference).
+bit-coherent against the fp32 reference). From v2.4.0 the attention layers only
+read their KV caches and output the step's new rows (`[1, 1, 16, 64]` per
+decode step, `[1, 64, 16, 64]` per prefill chunk); the cache manager copies them
+into the cache at the step position, and still replaces the conv states whole.
 
 The token-embedding lookup is done on the CPU from `token_embeddings.npy`; the
 VMFB takes the embedded vector `[1, 1, 1024]` as input 0 (not `input_ids`).

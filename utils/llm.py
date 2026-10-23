@@ -561,6 +561,8 @@ class DecoderOnlyLLMRunner(ABC):
 
     def _query_model_seq_len(self) -> int | None:
         """Extract max sequence length from the KV cache input shape."""
+        if (seq_len := self._model.kv_seq_len) is not None:
+            return seq_len
         info = self._model.inputs_info
         if info is None or len(info) < 3:
             return None

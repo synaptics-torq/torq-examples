@@ -14,7 +14,7 @@ import numpy as np
 import numpy.typing as npt
 
 from torq.runtime import VMFBInferenceRunner
-from iree.runtime import DeviceArray
+from iree.runtime import DeviceArray, HalCommandBuffer
 
 from utils.log import add_logging_args
 from utils.terminal import InferenceStopInput
@@ -132,10 +132,16 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
     Assumes model outputs layout: [..., self_v0, self_k0, self_v1, self_k1, ..., self_vN, self_kN].
 
+    A cache output either replaces its cache input, or holds only the step's new
+    rows (read-only KV cache models): it is then shorter than the cache along one
+    axis, and the rows are copied into the cache at the step position, input
+    ``position_idx``.
+
     Args:
         model_path: Path to the ``.vmfb`` file.
         cache_start_idx: Index of the first cache output in the model's
             output list. Defaults to 1 ([logits, self_v0, ...]).
+        position_idx: Index of the step's start position in the inputs.
     """
 
     def __init__(
@@ -143,19 +149,54 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         model_path: str | os.PathLike,
         cache_start_idx: int = 1,
         device_io: bool = False,
+        position_idx: int = 1,
         **kwargs,
     ) -> None:
         self._device_io = device_io
+        self._position_idx = position_idx
         super().__init__(model_path, cache_start_idx=cache_start_idx, **kwargs)
 
         self._n_kv = len(self.outputs_info) - self._cache_start_idx
 
         in_info = self.inputs_info
-        self._kv_init = [
-            np.zeros(in_info[i].shape, dtype=np.dtype(in_info[i].dtype))
-            for i in range(len(in_info) - self._n_kv, len(in_info))
-        ]
+        cache_info = in_info[len(in_info) - self._n_kv:]
+        self._kv_init = [np.zeros(info.shape, dtype=np.dtype(info.dtype)) for info in cache_info]
         self._kv_cache = [self.allocate_device_array(z) for z in self._kv_init]
+        # Axis of the new rows in each cache output, None if it is the whole cache.
+        self._rows_axis = [
+            next((a for a, (o, c) in enumerate(zip(out.shape, cache.shape)) if o < c), None)
+            for out, cache in zip(self.outputs_info[self._cache_start_idx:], cache_info)
+        ]
+        self._seq_axis = next((a for a in self._rows_axis if a is not None), 2)
+        self._kv_seq_len = next(
+            (cache.shape[a] for a, cache in zip(self._rows_axis, cache_info) if a is not None), None
+        )
+        if self._kv_seq_len is not None:
+            self._copy_semaphore = self.device.create_semaphore(0)
+            self._copies = 0
+
+    @property
+    def kv_seq_len(self) -> int | None:
+        """Cache length along the rows axis of a read-only KV cache model."""
+        return self._kv_seq_len
+
+    def _write_rows(self, rows: list[tuple[int, DeviceArray]], position: int) -> None:
+        """Copy each cache's new rows into it at *position*, in one submission."""
+        cb = HalCommandBuffer(self.device)
+        for i, out in rows:
+            cache, axis = self._kv_cache[i], self._rows_axis[i]
+            n, length = out.shape[axis], cache.shape[axis]
+            inner = int(np.prod(cache.shape[axis + 1:])) * np.dtype(cache.dtype).itemsize
+            src, dst = out._buffer_view.get_buffer(), cache._buffer_view.get_buffer()
+            # One contiguous block per index of the leading axes (one for a time-major cache).
+            for b in range(int(np.prod(cache.shape[:axis]))):
+                cb.copy(src, dst, b * n * inner, (b * length + position) * inner, n * inner)
+        cb.end()
+        self._copies += 1
+        self.device.queue_execute(
+            cb, [(self._copy_semaphore, self._copies - 1)], [(self._copy_semaphore, self._copies)]
+        )
+        self._copy_semaphore.wait(self._copies)
 
     @property
     def n_cache_inputs(self) -> int:
@@ -174,13 +215,23 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
                 for x in user_inputs
             ]
 
+        if self._kv_seq_len is not None:
+            position = int(np.asarray(user_inputs[self._position_idx]).reshape(-1)[0])
+
         full_inputs = user_inputs + self._kv_cache
 
         results = super()._infer(full_inputs)
 
-        # Outputs from cache_start_idx onward are updated KV caches.
+        # Outputs from cache_start_idx onward are updated KV caches or their new rows.
+        rows = []
         for i in range(self._n_kv):
-            self._kv_cache[i] = results[self._cache_start_idx + i]
+            out = results[self._cache_start_idx + i]
+            if self._rows_axis[i] is None:
+                self._kv_cache[i] = out
+            else:
+                rows.append((i, out))
+        if rows:
+            self._write_rows(rows, position)
 
         return results[:self._cache_start_idx]
 
@@ -224,7 +275,7 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         self._kv_cache = owner._kv_cache
 
     def shift_kv(
-        self, keep_last_n: int, seq_axis: int = 2, protect_first_n: int = 0,
+        self, keep_last_n: int, seq_axis: int | None = None, protect_first_n: int = 0,
         *, valid_length: int | None = None,
     ) -> None:
         """Shift the last *keep_last_n* entries to just after the first
@@ -232,6 +283,8 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
         *valid_length* is the occupied cache length; defaults to the full cache.
         """
+        if seq_axis is None:
+            seq_axis = self._seq_axis
         for i in range(self._n_kv):
             host = self._kv_cache[i].to_host()
             seq_len = host.shape[seq_axis]
@@ -564,6 +617,10 @@ class SplitLMHeadRunner:
     @property
     def n_cache_inputs(self) -> int:
         return self._body.n_cache_inputs
+
+    @property
+    def kv_seq_len(self) -> int | None:
+        return self._body.kv_seq_len
 
     def infer(
         self,

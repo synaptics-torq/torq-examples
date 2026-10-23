@@ -356,3 +356,63 @@ def test_max_gen_tokens_caps_generation():
 def test_max_gen_tokens_none_keeps_old_behaviour():
     # Without a cap, generation runs to the runner's own stop condition (6 here).
     assert _GenProbe(max_gen_tokens=None).run("hi") == "2 3 3 3 3 3"
+
+
+# ── ManagedSelfAttnCacheRunner: read-only KV cache rows ───────────────────────
+
+
+def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch):
+    import numpy as np
+    from types import SimpleNamespace
+
+    from utils import inference
+
+    class _Array:
+        """Device array stand-in; its own buffer for the copies."""
+
+        def __init__(self, a):
+            self.a = np.ascontiguousarray(a)
+            self.shape, self.dtype = self.a.shape, self.a.dtype
+            self._buffer_view = SimpleNamespace(get_buffer=lambda: self)
+
+    class _CommandBuffer:
+        def __init__(self, device):
+            pass
+
+        def copy(self, src, dst, src_offset, dst_offset, length):
+            dst.a.reshape(-1).view(np.uint8)[dst_offset:dst_offset + length] = (
+                src.a.reshape(-1).view(np.uint8)[src_offset:src_offset + length]
+            )
+
+        def end(self):
+            pass
+
+    info = lambda shape: SimpleNamespace(shape=shape, dtype="float32")  # noqa: E731
+    # Time-major [1, L, 2kv, D] and head-major [1, 2kv, L, D] row caches, and a whole-cache state.
+    caches = [info([1, 4, 2, 3]), info([1, 2, 4, 3]), info([1, 5])]
+    rows = [info([1, 1, 2, 3]), info([1, 2, 1, 3]), info([1, 5])]
+
+    def fake_infer(self, inputs):
+        pos = int(np.asarray(inputs[1]).reshape(-1)[0])
+        return [_Array(np.zeros(1)), *(_Array(np.full(r.shape, pos + 1, np.float32)) for r in rows)]
+
+    monkeypatch.setattr(inference, "HalCommandBuffer", _CommandBuffer)
+    monkeypatch.setattr(inference.VMFBInferenceRunner, "__init__", lambda self, *a, **k: None, raising=False)
+    monkeypatch.setattr(inference.VMFBInferenceRunner, "_infer", fake_infer, raising=False)
+    semaphore = SimpleNamespace(wait=lambda value: None)
+    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "inputs_info", [info([1, 1]), info([1, 1]), *caches], raising=False)
+    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "outputs_info", [info([1]), *rows], raising=False)
+    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "device", SimpleNamespace(
+        create_semaphore=lambda value: semaphore, queue_execute=lambda cb, wait, signal: None,
+    ), raising=False)
+    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "allocate_device_array", lambda self, a: _Array(a), raising=False)
+
+    runner = inference.ManagedSelfAttnCacheRunner("model.vmfb")
+    assert runner.kv_seq_len == 4
+    for pos in range(3):
+        runner._infer([np.zeros((1, 1)), np.array([[pos]])])
+
+    time_major, head_major, state = (c.a for c in runner._kv_cache)
+    np.testing.assert_array_equal(time_major[0, :, 0, 0], [1, 2, 3, 0])
+    np.testing.assert_array_equal(head_major[0, 1, :, 2], [1, 2, 3, 0])
+    np.testing.assert_array_equal(state, np.full((1, 5), 3))
