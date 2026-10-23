@@ -182,17 +182,6 @@ Options: `--videos`, `--documents` (text documents), `--dim 256` (Matryoshka tru
 renormalised), `--top N`, and `--backend ort` to run the ONNX graphs of the same networks on the
 CPU with the same host code.
 
-### NPU memory
-
-The board's NPU driver maps at most ~1.5 GB of networks at a time, and releasing a network
-within a process is not reliable on the current driver, so a session keeps all the networks it
-needs mapped. Both text buckets, the vision encoder and one audio encoder need ~1.3 GB, so one
-session handles text, images, video and sound.
-
-The NPU's IOMMU addresses only the RAM below 4 GB, and each network needs large contiguous blocks
-of it. Before mapping each network the runner therefore drops the page cache (as root; otherwise
-it releases the model files' cached pages), which keeps the memory below 4 GB from fragmenting.
-
 ### Backend comparison
 
 ```sh
