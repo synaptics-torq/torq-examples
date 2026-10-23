@@ -73,46 +73,36 @@ so the embedding does not depend on the bucket:
 
 ## Inference time (SL2610 series)
 
-Measured on an SL2619 board, one network per process, NPU time per call after a warm-up run.
-The 8-bit build, the default, is compiled with the newer compiler optimisations (slicing,
-prefetch and K-chunked matmuls); the 4-bit and bf16 builds will be rebuilt with them.
+Measured on an SL2619 board with the 8-bit build (the default): time per call after a warm-up
+run, one network per process. The NPU runs the vmfbs; ONNX Runtime 1.27 runs the same 8-bit
+weights (`MatMulNBits`) on the board's 2 CPU cores.
 
-| Network | 8-bit (default) | 4-bit (`main`) | bf16 |
+| Network | NPU | CPU (ONNX Runtime) | NPU speed-up | NPU RAM / file |
+|---|---|---|---|---|
+| text S=128 | 389 ms | 4774 ms | 12.3x | 198 / 165 MB |
+| text S=512 | 2185 ms | 17546 ms | 8.0x | 220 / 186 MB |
+| vision 384x384 (per image or frame) | 2734 ms | 18612 ms | 6.8x | 330 / 303 MB |
+| audio 1.4 s window | 302 ms | 5793 ms | 19.2x | 352 / 328 MB |
+| audio 2.8 s window | 463 ms | 7859 ms | 17.0x | 355 / 331 MB |
+| audio 5.6 s window | 935 ms | 12067 ms | 12.9x | 361 / 337 MB |
+| audio 11.2 s window | 2041 ms | 20613 ms | 10.1x | 381 / 357 MB |
+
+End to end per input (encoder + text body; host preprocessing adds about 50 ms per image,
+25 ms per sound, and 1-2 s to decode a video):
+
+| Input | Networks | NPU | CPU (ONNX Runtime) |
 |---|---|---|---|
-| text S=128 | 389 ms | 549 ms | 440 ms |
-| text S=512 | 2185 ms | 2825 ms | 2128 ms |
-| vision 384x384 (per image or frame) | 2734 ms | 3310 ms | 3909 ms |
-| audio 1.4 s window | 302 ms | 279 ms | 332 ms |
-| audio 2.8 s window | 463 ms | 600 ms | 527 ms |
-| audio 5.6 s window | 935 ms | 1337 ms | 955 ms |
-| audio 11.2 s window | 2041 ms | 2670 ms | 1886 ms |
+| Text query | text S=128 | 0.39 s | 4.8 s |
+| Long document | text S=512 | 2.2 s | 17.5 s |
+| Image | vision + text S=128 | 3.1 s | 23.4 s |
+| Video, 7 frames | 7 x vision + text S=512 | 21.3 s | 148 s |
+| Sound up to 1.4 s | audio 1.4 s + text S=128 | 0.69 s | 10.6 s |
+| Sound up to 2.8 s | audio 2.8 s + text S=128 | 0.85 s | 12.6 s |
+| Sound up to 4.9 s | audio 5.6 s + text S=128 | 1.3 s | 16.8 s |
+| Sound 4.9-5.6 s | audio 5.6 s + text S=512 | 3.1 s | 29.6 s |
+| Sound 5.6-11.2 s | audio 11.2 s + text S=512 | 4.2 s | 38.2 s |
 
-| Network | 8-bit RAM / file | 4-bit RAM / file | bf16 RAM / file |
-|---|---|---|---|
-| text S=128 | 198 / 165 MB | 122 / 87 MB | 304 / 278 MB |
-| text S=512 | 220 / 186 MB | 140 / 103 MB | 316 / 288 MB |
-| vision 384x384 | 330 / 303 MB | 157 / 122 MB | 364 / 339 MB |
-| audio 1.4 s | 352 / 328 MB | 210 / 180 MB | 601 / 589 MB |
-| audio 2.8 s | 355 / 331 MB | 211 / 181 MB | 602 / 591 MB |
-| audio 5.6 s | 361 / 337 MB | 217 / 186 MB | 605 / 593 MB |
-| audio 11.2 s | 381 / 357 MB | 227 / 196 MB | 610 / 598 MB |
-
-End to end per input with the 8-bit build (encoder + text body; host preprocessing adds about
-50 ms per image, 25 ms per sound, and 1-2 s to decode a video):
-
-| Input | Networks | Time |
-|---|---|---|
-| Text query | text S=128 | 0.39 s |
-| Long document | text S=512 | 2.2 s |
-| Image | vision + text S=128 | 3.1 s |
-| Video, 7 frames | 7 x vision + text S=512 | 21.3 s |
-| Sound up to 1.4 s | audio 1.4 s + text S=128 | 0.69 s |
-| Sound up to 2.8 s | audio 2.8 s + text S=128 | 0.85 s |
-| Sound up to 4.9 s | audio 5.6 s + text S=128 | 1.3 s |
-| Sound 4.9-5.6 s | audio 5.6 s + text S=512 | 3.1 s |
-| Sound 5.6-11.2 s | audio 11.2 s + text S=512 | 4.2 s |
-
-The 8-bit timings are the same when all the networks run in one session (`--examples`).
+The NPU timings are the same when all the networks run in one session (`--examples`).
 
 ## Usage
 
@@ -120,7 +110,7 @@ The model files come from [Synaptics/Google-EmbeddingGemma-2](https://huggingfac
 The default build has 8-bit weights (int8 in blocks of 32, bf16 activations), about 2.3 GB. Its
 embeddings are much closer to the original model's than the 4-bit build's (cosine to the fp32
 model over a media library: 0.997, against 0.976 for 4-bit), and it is as fast or faster on the
-NPU (389 ms against 549 ms for a short query). `--model-version main` downloads the 4-bit build
+NPU. `--model-version main` downloads the 4-bit build
 (weights of the onnx-community `*_q4` export, about 1.1 GB), and `--model-version bf16` the bf16
 build (about 3.6 GB, closest to the original model, with more memory per network). Each build
 replaces the files of the previous one.
