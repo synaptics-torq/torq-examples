@@ -153,16 +153,26 @@ def _setup_call_from_branch(
     root_values: dict[str, object],
 ) -> tuple[Path, str, list[str] | None]:
     imported_functions: dict[str, tuple[str, str]] = {}
+    branch_values = dict(root_values)
     loaded_modules: dict[str, Path] = {}
+    setup_module_values: dict[Path, dict[str, object]] = {}
     for node in body:
         if isinstance(node, ast.ImportFrom) and node.module:
             if node.module.endswith("setup_demo"):
                 setup_file = REPO_ROOT / (node.module.replace(".", "/") + ".py")
+                module_values = setup_module_values.get(setup_file)
+                if module_values is None:
+                    module_ast = ast.parse(setup_file.read_text(encoding="utf-8"))
+                    module_values = _module_constants(module_ast)
+                    setup_module_values[setup_file] = module_values
                 for imported in node.names:
-                    imported_functions[imported.asname or imported.name] = (
+                    local_name = imported.asname or imported.name
+                    imported_functions[local_name] = (
                         str(setup_file),
                         imported.name,
                     )
+                    if imported.name in module_values:
+                        branch_values[local_name] = module_values[imported.name]
         if (
             isinstance(node, ast.Assign)
             and len(node.targets) == 1
@@ -171,7 +181,7 @@ def _setup_call_from_branch(
             and isinstance(node.value.func, ast.Name)
             and node.value.func.id == "_load_demo_module"
         ):
-            path_parts = [_static_value(arg, root_values) for arg in node.value.args]
+            path_parts = [_static_value(arg, branch_values) for arg in node.value.args]
             if all(isinstance(part, str) for part in path_parts):
                 loaded_modules[node.targets[0].id] = REPO_ROOT.joinpath(*path_parts)
 
@@ -195,7 +205,7 @@ def _setup_call_from_branch(
 
         requested_models: list[str] | None = None
         if node.args:
-            value = _static_value(node.args[0], root_values)
+            value = _static_value(node.args[0], branch_values)
             if isinstance(value, (list, tuple)) and all(isinstance(item, str) for item in value):
                 requested_models = list(value)
         return setup_file, setup_function, requested_models
