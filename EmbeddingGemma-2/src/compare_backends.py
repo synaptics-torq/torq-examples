@@ -31,7 +31,7 @@ import preprocess as pp  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
 
-EVAL = Path(__file__).resolve().parent.parent / "eval" / "eval_set.json"
+EVAL = Path(__file__).resolve().parents[2] / "data" / "eval" / "eval_set.json"
 
 
 def _media(media_dir: Path, repo: str, name: str) -> Path:

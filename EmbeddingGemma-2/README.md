@@ -205,6 +205,6 @@ python src/compare_backends.py report torq.npz ort.npz -o report.md
 python src/compare_backends.py run -m <vmfb_dir> --backend torq --modalities audio -o torq_audio.npz
 ```
 
-The eval set (`eval/eval_set.json`) has 53 texts, 20 images, 5 videos and 10 audio clips
-(pass `--audio` to `run` to include them); media files are downloaded from
-`Xenova/transformers.js-docs` on first use.
+The eval set (`data/eval/eval_set.json` in the repository root) has 53 texts, 20 images,
+5 videos and 10 audio clips (pass `--audio` to `run` to include them); media files are
+downloaded from `Xenova/transformers.js-docs` on first use.
