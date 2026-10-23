@@ -107,13 +107,7 @@ The NPU timings are the same when all the networks run in one session (`--exampl
 ## Usage
 
 The model files come from [Synaptics/Google-EmbeddingGemma-2](https://huggingface.co/Synaptics/Google-EmbeddingGemma-2).
-The default build has 8-bit weights (int8 in blocks of 32, bf16 activations), about 2.3 GB. Its
-embeddings are much closer to the original model's than the 4-bit build's (cosine to the fp32
-model over a media library: 0.997, against 0.976 for 4-bit), and it is as fast or faster on the
-NPU. `--model-version main` downloads the 4-bit build
-(weights of the onnx-community `*_q4` export, about 1.1 GB), and `--model-version bf16` the bf16
-build (about 3.6 GB, closest to the original model, with more memory per network). Each build
-replaces the files of the previous one.
+The default build has 8-bit weights (int8 in blocks of 32, bf16 activations), about 2.3 GB. 
 
 ```sh
 python setup_demos.py EmbeddingGemma-2      # download the model files and the examples
