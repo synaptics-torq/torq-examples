@@ -91,6 +91,8 @@ def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=
     if cls in (QwenStatic, Qwen3Static):
         runner._im_end_id = 99
         runner._endoftext_id = 98
+    if cls is Qwen3Static:
+        runner._thinking = True
     runner._warmup_len = runner._turn_pos = 2 if instruct else 0
     runner._pending_token = None
     runner._max_seq_len = capacity
