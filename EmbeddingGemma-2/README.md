@@ -66,16 +66,13 @@ so the embedding does not depend on the bucket:
 - S=128 is about 5.6x faster than S=512, and most queries and every image fit in it.
 - 512 is the largest bucket because the model's sliding-window layers reach 512 tokens: up to
   513 tokens every layer is plain full attention. Longer inputs are rejected, not truncated.
-- Each bucket holds its own copy of the weights (8-bit: 165 MB + 186 MB). If the requested
-  networks do not fit in the NPU's mapping limit (the bf16 build with all modalities), the
-  S=128 bucket is not loaded and everything runs at S=512, which is slower but gives the same
-  embeddings.
+- Each bucket holds its own copy of the weights (165 MB + 186 MB).
 
 ## Inference time (SL2610 series)
 
-Measured on an SL2619 board with the 8-bit build (the default): time per call after a warm-up
-run, one network per process. The NPU runs the vmfbs; ONNX Runtime 1.27 runs the same 8-bit
-weights (`MatMulNBits`) on the board's 2 CPU cores.
+Measured on an SL2619 board: time per call after a warm-up run, one network per process. The
+NPU runs the vmfbs; ONNX Runtime 1.27 runs the same 8-bit weights (`MatMulNBits`) on the board's
+2 CPU cores.
 
 | Network | NPU | CPU (ONNX Runtime) | NPU speed-up | NPU RAM / file |
 |---|---|---|---|---|
@@ -107,7 +104,7 @@ The NPU timings are the same when all the networks run in one session (`--exampl
 ## Usage
 
 The model files come from [Synaptics/Google-EmbeddingGemma-2](https://huggingface.co/Synaptics/Google-EmbeddingGemma-2).
-The default build has 8-bit weights (int8 in blocks of 32, bf16 activations), about 2.3 GB. 
+They have 8-bit weights (int8 in blocks of 32) and take about 2.3 GB.
 
 ```sh
 python setup_demos.py EmbeddingGemma-2      # download the model files and the examples
@@ -120,7 +117,7 @@ python src/infer.py --examples              # run the example media
 - two short videos: a waterfall and a sea turtle.
 
 Each file ranks its own description first, well ahead of the other subjects' descriptions (checked
-with the 8-bit build on the NPU). For example, the dog's bark matches "a dog barking and growling",
+on the NPU). For example, the dog's bark matches "a dog barking and growling",
 not "a cat meowing loudly". The files are CC0 or public domain; credits are in `examples/README.md`
 next to them.
 
@@ -136,13 +133,14 @@ python src/infer.py \
 
 The board's NPU driver maps at most ~1.5 GB of networks at a time, and releasing a network
 within a process is not reliable on the current driver, so a session keeps all the networks it
-needs mapped. The 8-bit build (~1.3 GB) and the 4-bit build (~0.6 GB) fit all of them. With the
-bf16 build, the vision and audio encoders plus both text buckets need ~1.7 GB. In that case
-`infer.py` asks you to run `--audios` in a separate session; embeddings from both sessions live in
-the same space and compare directly. For the examples, run `--examples visual` and then
-`--examples audio`.
+needs mapped. Both text buckets, the vision encoder and one audio encoder need ~1.3 GB, so one
+session handles text, images, video and sound.
 
-Options: `--backend ort` runs the fp32 ONNX graphs on the CPU with the same host code,
+The NPU's IOMMU addresses only the RAM below 4 GB, and each network needs large contiguous blocks
+of it. Before mapping each network the runner therefore drops the page cache (as root; otherwise
+it releases the model files' cached pages), which keeps the memory below 4 GB from fragmenting.
+
+Options: `--backend ort` runs the ONNX graphs of the same networks on the CPU with the same host code,
 `--dim 256` truncates the embeddings (Matryoshka; renormalised), `--documents` adds text
 documents.
 
@@ -179,6 +177,9 @@ query: text 'a dog barking'
   so the default results stay within the query's own media type. `--kinds` shows the others.
 - Indexing runs the vision and audio encoders in two processes (see the NPU mapping limit
   above). The index is one `.npz` file of 768-d embeddings plus their file names and times.
+- Indexing the sample library takes about 9 minutes on the board: 151 embeddings (20 images,
+  10 sounds, 5 videos and 116 video moments), mostly vision encoder runs at 2.7 s each. After
+  that a text query takes 0.4 s to embed and the search itself is one matrix product.
 
 ### Backend comparison
 
