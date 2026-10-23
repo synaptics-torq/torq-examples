@@ -237,6 +237,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_id_buf",
         "_extra_step_inputs",
         "_cache_keep_n",
+        "_cache_tokens",
         "_turn_pos",
         "_pending_token",
         "_n_tokens_gen",
@@ -381,6 +382,7 @@ class DecoderOnlyLLMRunner(ABC):
 
         self._turn_pos = 0
         self._pending_token = None
+        self._cache_tokens = []
         self._warmup_len = self._warmup()
         if self._warmup_len > 0:
             self._reset_cache_state = self._model.save_kv_state()
@@ -393,8 +395,8 @@ class DecoderOnlyLLMRunner(ABC):
         ):
             self._logger.warning(
                 "kv-cache-window (%d) plus warm-up (%d) fills the %d-token KV "
-                "cache, so the sliding window cannot roll; generation stops "
-                "when the cache is full.",
+                "cache; fewer history tokens will be retained to make room "
+                "for new tokens.",
                 self._cache_keep_n,
                 self._warmup_len,
                 self._max_seq_len,
@@ -591,6 +593,21 @@ class DecoderOnlyLLMRunner(ABC):
         self._reset_cache()
         self._turn_pos = self._warmup_len
         self._pending_token = None
+        self._cache_tokens = self._cache_tokens[:self._warmup_len]
+
+    def _roll_cache(self, keep: int, should_stop: StopCheck | None) -> None:
+        # Cached keys carry positional encodings. Moving their tensors leaves
+        # those encodings at the old positions; replay tokens at the new ones.
+        tokens = self._cache_tokens[-keep:] if keep else []
+        self._reset_cache()
+        self._turn_pos = self._warmup_len
+        self._cache_tokens = self._cache_tokens[:self._warmup_len]
+        self._prefill(
+            tokens,
+            start=self._turn_pos,
+            should_stop=should_stop,
+            produce_next_token=False,
+        )
 
     def llm_step(
         self,
@@ -649,17 +666,12 @@ class DecoderOnlyLLMRunner(ABC):
         self._pos_buf[0, 0] = seq_pos
         step_inputs = [first, self._pos_buf, *self._extra_step_inputs]
 
-        if not compute_logits:
-            if isinstance(model, SplitLMHeadRunner):
-                model.infer(step_inputs, skip_lm_head=True)
-            else:
-                model.infer(step_inputs)
-            self._turn_pos = seq_pos + len(tokens)
-            self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
-            return 0
-
-        results = model.infer(step_inputs)
+        if not compute_logits and isinstance(model, SplitLMHeadRunner):
+            results = model.infer(step_inputs, skip_lm_head=True)
+        else:
+            results = model.infer(step_inputs)
         self._turn_pos = seq_pos + len(tokens)
+        self._cache_tokens[seq_pos:] = tokens
         self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
 
         if not sample_next:
@@ -989,28 +1001,33 @@ class DecoderOnlyLLMRunner(ABC):
         the cache and this prompt is prefilled right after it, so later turns
         see the earlier ones. When the conversation (or this prompt alone) no
         longer fits, the cache rolls: the sliding window keeps the warm-up
-        prefix plus the most recent ``cache_keep_n`` tokens, and without a
-        window the conversation restarts from the warm-up prefix.
+        prefix plus up to ``cache_keep_n`` recent tokens, replayed at their new
+        positions. Without a window the conversation restarts from the warm-up
+        prefix.
         """
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
 
         tokens = self._apply_prompt_limit(self._build_prompt_tokens(user_input))
+        self._start_time_ns = time.perf_counter_ns()
         # Sampling predicts a token; its KV entry is written on the next step.
         # Carry the last prediction across normal stops and closed streams.
         pending = [] if self._pending_token is None else [self._pending_token]
         if self._turn_pos + len(pending) + len(tokens) > self._max_seq_len:
             if self._cache_keep_n is not None:
-                keep = min(self._cache_keep_n, self._turn_pos - self._warmup_len)
-                self._model.shift_kv(
-                    keep,
-                    protect_first_n=self._warmup_len,
-                    valid_length=self._turn_pos,
+                capacity = self._max_seq_len - self._warmup_len
+                # The new prompt takes priority over previous-turn history.
+                if len(pending) + len(tokens) > capacity:
+                    pending = []
+                keep = min(
+                    self._cache_keep_n,
+                    self._turn_pos - self._warmup_len,
+                    max(0, capacity - len(pending) - len(tokens)),
                 )
-                self._turn_pos = self._warmup_len + keep
+                self._roll_cache(keep, should_stop)
                 self._logger.debug(
-                    "Circular KV cache at turn start: shifted last %d entries "
+                    "Circular KV cache at turn start: replayed last %d entries "
                     "after %d protected prefix tokens",
                     keep,
                     self._warmup_len,
@@ -1034,7 +1051,6 @@ class DecoderOnlyLLMRunner(ABC):
         tokens = pending + tokens
 
         gen: list[int] = []
-        self._start_time_ns = time.perf_counter_ns()
         yield_ns = 0
         try:
             self._pending_token = None
@@ -1061,21 +1077,21 @@ class DecoderOnlyLLMRunner(ABC):
                     break
                 if pos >= self._max_seq_len:
                     if self._cache_keep_n is not None:
-                        self._model.shift_kv(
+                        keep = min(
                             self._cache_keep_n,
-                            protect_first_n=self._warmup_len,
+                            max(0, self._max_seq_len - self._warmup_len - 1),
                         )
-                        pos = self._warmup_len + self._cache_keep_n
+                        self._roll_cache(keep, should_stop)
+                        pos = self._turn_pos
                         self._logger.debug(
-                            "Circular KV cache: shifted last %d entries after "
+                            "Circular KV cache: replayed last %d entries after "
                             "%d protected prefix tokens",
-                            self._cache_keep_n,
+                            keep,
                             self._warmup_len,
                         )
                     if pos >= self._max_seq_len:
-                        # The shift could not free space (no window, or the
-                        # window plus prefix already fills the cache): step
-                        # again and we would write past the last cache slot.
+                        # No window, or the warm-up alone fills the cache.
+                        # Another step would write past the last cache slot.
                         self._logger.warning("KV cache full; stopping generation")
                         break
                 next_tok = self.llm_step(next_tok, pos)

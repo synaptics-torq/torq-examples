@@ -138,6 +138,7 @@ class TestGemmaPrefillLMHeadSkip:
 
     def test_llm_step_uses_skip_lm_head_when_logits_are_disabled(self):
         runner = Gemma3Static.__new__(Gemma3Static)
+        runner._cache_tokens = []
         model = SplitLMHeadRunner.__new__(SplitLMHeadRunner)
         body = FakeBody()
         model._body = body
@@ -158,6 +159,7 @@ class TestGemmaPrefillLMHeadSkip:
 
     def test_llm_step_can_compute_logits_without_sampling(self):
         runner = Gemma3Static.__new__(Gemma3Static)
+        runner._cache_tokens = []
         model = SplitLMHeadRunner.__new__(SplitLMHeadRunner)
         body = FakeBody()
         model._body = body
