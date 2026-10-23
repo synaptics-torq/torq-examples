@@ -1,17 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""EmbeddingGemma-2 demo: embed text queries, images, videos and sounds into one 768-d space
-and rank them against each other.
+"""EmbeddingGemma-2: embed your own text, images, videos and sounds into one 768-d space and
+rank them against each other.
 
-    python src/infer.py --examples
     python src/infer.py \
         --queries "a fluffy tabby and white cat with bright blue eyes" "a dog barking and growling" \
         --images cat.jpg --audios dog.wav
 
-Images, videos and sounds are scored against every query (cosine similarity). With only
-``--queries`` the queries are compared with each other (sentence similarity). ``--examples``
-runs the example media that setup_demos.py downloads, with their descriptions as the queries.
+For each query the images, videos, sounds and documents are listed best match first (cosine
+similarity). With only ``--queries`` the queries are compared with each other.
 """
 
 import argparse
@@ -30,22 +28,6 @@ def _fmt_timings(t: dict) -> str:
     return ", ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in t.items())
 
 
-def _add_examples(ap: argparse.ArgumentParser, args: argparse.Namespace) -> None:
-    """Append the example media in <model dir>/examples and their descriptions to the inputs."""
-    import json
-    ex_dir = Path(args.model_dir) / "examples"
-    index = ex_dir / "examples.json"
-    if not index.exists():
-        ap.error(f"no examples in {ex_dir}; run `python setup_demos.py EmbeddingGemma-2` from the "
-                 "torq-examples root to download them")
-    kinds = {"all": {"image", "video", "audio"}, "visual": {"image", "video"}, "audio": {"audio"}}[args.examples]
-    examples = json.loads(index.read_text())["examples"]
-    args.queries += [e["text"] for e in examples]
-    for e in examples:
-        if e["kind"] in kinds:
-            {"image": args.images, "video": args.videos, "audio": args.audios}[e["kind"]].append(str(ex_dir / e["file"]))
-
-
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("-m", "--model-dir", help="Directory with the vmfbs/onnx graphs and assets (default: the files setup_demos.py downloaded)")
@@ -61,15 +43,10 @@ def main():
                     help="Audio encoder window in seconds (1.4, 2.8, 5.6, 11.2) or 'auto': the smallest "
                          "window that holds the longest clip (default: %(default)s)")
     ap.add_argument("--dim", type=int, default=768, choices=[768, 512, 256, 128], help="Matryoshka dimension")
-    ap.add_argument("--examples", nargs="?", const="all", choices=["all", "visual", "audio"],
-                    help="Add the downloaded example media (photos, videos and sounds) with their "
-                         "descriptions as queries. 'visual' adds the photos and videos, 'audio' the "
-                         "sounds; with the bf16 or 8-bit build, run these as two sessions")
+    ap.add_argument("--top", type=int, default=5, help="Matches listed per query (default: %(default)s)")
     ap.add_argument("-v", "--verbose", action="store_true")
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
-    if args.examples:
-        _add_examples(ap, args)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
 
     modalities = {"text"} | ({"image"} if args.images else set()) | ({"video"} if args.videos else set()) \
@@ -90,8 +67,7 @@ def main():
     if args.audios and (args.images or args.videos) and args.backend == "torq":
         # The SL2619 NPU driver maps at most ~1.5 GB of networks at a time and releasing a
         # network inside a process is unreliable, so a session keeps all of its networks
-        # mapped. The 4-bit build fits the vision and audio encoders with both text buckets;
-        # the bf16 build (~1.7 GB) does not, and then audio runs in its own session.
+        # mapped; check that the requested networks fit together.
         import json
         spans = json.loads((Path(args.model_dir) / "embeddinggemma2_manifest.json").read_text()).get("xram_span_mb", {})
         need = sum(spans.get(n, 0) for n in ("vision_384x384", f"audio_{audio_frames}", "text_body_s128", "text_body_s512"))
@@ -105,38 +81,33 @@ def main():
     Q = []
     for q in args.queries:
         Q.append(model.encode_text(q, args.prompt, args.dim))
-        print(f"[text]  {q!r:50.50}  {_fmt_timings(model.timings)}")
+        print(f"[text]  {q!r:40.40}  {_fmt_timings(model.timings)}")
     items, names = [], []
     for d in args.documents:
         items.append(model.encode_text(d, "document", args.dim)); names.append(f"doc:{d[:30]}")
-        print(f"[doc]   {d!r:50.50}  {_fmt_timings(model.timings)}")
+        print(f"[doc]   {d!r:40.40}  {_fmt_timings(model.timings)}")
     for p in args.images:
         items.append(model.encode_image(p, args.dim)); names.append(f"image:{Path(p).name}")
-        print(f"[image] {p:50.50}  {_fmt_timings(model.timings)}")
+        print(f"[image] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
     for p in args.audios:
         items.append(model.encode_audio(p, args.dim)); names.append(f"audio:{Path(p).name}")
-        print(f"[audio] {p:50.50}  {_fmt_timings(model.timings)}")
+        print(f"[audio] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
     for p in args.videos:
         items.append(model.encode_video(p, dim=args.dim)); names.append(f"video:{Path(p).name}")
-        print(f"[video] {p:50.50}  {_fmt_timings(model.timings)}")
+        print(f"[video] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
 
     if not Q:
         return
     Q = np.stack(Q)
     if not items:
-        print("\nquery x query cosine similarity")
-        sims, rows = Q @ Q.T, args.queries
-    else:
-        print("\nitem x query cosine similarity")
-        sims, rows = np.stack(items) @ Q.T, names
-    width = max(len(r) for r in rows)
-    print(" " * width + "  " + "  ".join(f"q{i}" .rjust(6) for i in range(len(Q))))
-    for r, row in zip(rows, sims):
-        best = int(np.argmax(row))
-        print(r.ljust(width) + "  " + "  ".join(
-            (f"{v:6.3f}" + ("*" if j == best else " ")) for j, v in enumerate(row)))
-    for i, q in enumerate(args.queries):
-        print(f"q{i}: {q}")
+        # queries only: compare them with each other
+        items, names = list(Q), [f"text:{q}" for q in args.queries]
+    sims = Q @ np.stack(items).T
+    for qi, q in enumerate(args.queries):
+        print(f"\nquery: {q!r}")
+        order = [j for j in np.argsort(-sims[qi]) if names[j] != f"text:{q}"]
+        for j in order[: args.top]:
+            print(f"  {sims[qi, j]:6.3f}  {names[j]}")
 
 
 if __name__ == "__main__":

@@ -99,7 +99,7 @@ End to end per input (encoder + text body; host preprocessing adds about 50 ms p
 | Sound 4.9-5.6 s | audio 5.6 s + text S=512 | 3.1 s | 29.6 s |
 | Sound 5.6-11.2 s | audio 11.2 s + text S=512 | 4.2 s | 38.2 s |
 
-The NPU timings are the same when all the networks run in one session (`--examples`).
+The NPU timings are the same when all the networks run in one session.
 
 ## Usage
 
@@ -107,29 +107,82 @@ The model files come from [Synaptics/Google-EmbeddingGemma-2](https://huggingfac
 They have 8-bit weights (int8 in blocks of 32) and take about 2.3 GB.
 
 ```sh
-python setup_demos.py EmbeddingGemma-2      # download the model files and the examples
+python setup_demos.py EmbeddingGemma-2      # download the model files and the example media
 cd EmbeddingGemma-2
-python src/infer.py --examples              # run the example media
-```
-
-`--examples` scores 14 example files against their 14 descriptions:
-- six subjects, each with a photo and a sound: cat, dog, bird, piano, train and police car;
-- two short videos: a waterfall and a sea turtle.
-
-Each file ranks its own description first, well ahead of the other subjects' descriptions (checked
-on the NPU). For example, the dog's bark matches "a dog barking and growling",
-not "a cat meowing loudly". The files are CC0 or public domain; credits are in `examples/README.md`
-next to them.
-
-Your own queries and media work the same way, and can be combined with `--examples`:
-
-```sh
-python src/infer.py \
-    --queries "a fluffy tabby and white cat with bright blue eyes" "a dog barking and growling" \
-    --images my_cat.jpg --videos my_video.mp4 --audios my_dog.wav
+python src/media_search.py index            # index the example media on the NPU (~2 min)
+python src/media_search.py search --text "a dog barking"
 ```
 
 `-m/--model-dir` defaults to the files `setup_demos.py` downloaded.
+
+### Media search: one index for text, images, video and sound
+
+`src/media_search.py index` embeds every image, sound clip and video of a media folder once, and
+every second of each video as a "moment", and saves the embeddings with their file names and
+times to `media_index.npz`. `search` then embeds only the query (0.4 s for text) and ranks the
+index with one matrix product, so a result can also point to a time in a video.
+
+By default it indexes the 14 example files that `setup_demos.py` downloads into
+`<model dir>/examples`: six subjects with a photo and a sound each (cat, dog, bird, piano, train,
+police car) and two short videos (a waterfall, a sea turtle). They are CC0 or public domain;
+credits are in `examples/README.md` next to them. `--media-dir <folder>` indexes your own media
+instead.
+
+```
+$ python src/media_search.py search --text "a dog barking"
+query: text 'a dog barking'  (390 ms to embed)
+
+  images:
+     0.696  dog_labrador.jpg
+     0.611  bird_sparrow.jpg
+     0.582  piano_keyboard.jpg
+  sounds:
+     0.784  dog_barking.wav
+     0.675  police_siren.wav
+     0.673  cat_meowing.wav
+  videos:
+     0.589  waterfall.ogv
+     0.584  sea_turtle.ogv
+  ...
+```
+
+- **Text queries** search everything: "a piano" finds `piano_keyboard.jpg` (0.748) and
+  `piano_arpeggio.wav` (0.668); "a turtle swimming in the ocean" finds `sea_turtle.ogv` from its
+  first second (0.767).
+- Each example ranks first for a description of its own subject, well ahead of the other
+  subjects (checked on the NPU): the dog's bark matches "a dog barking and growling", not
+  "a cat meowing loudly".
+- **An image as the query** (`--image photo.jpg`) finds similar images and video moments. It is
+  most useful on your own library, where there are several photos of a kind.
+- Matching a sound directly against photos is not reliable: those scores are close to noise,
+  so the default results stay within the query's own media type. `--kinds` shows the others.
+- Indexing the 14 examples takes 2 minutes on the board, mostly the vision encoder (2.7 s per
+  photo or video second). Each modality group is indexed in its own process.
+
+### Embed your own files
+
+`src/infer.py` embeds text, images, videos and sounds given on the command line and lists, for
+each query, the best matches first. With some of the example files:
+
+```sh
+E=../models/Synaptics/Google-EmbeddingGemma-2/examples
+python src/infer.py --queries "a dog barking and growling" "a cat" \
+    --images $E/dog_labrador.jpg $E/cat_tabby.jpg --audios $E/dog_barking.wav $E/cat_meowing.wav
+```
+
+```
+query: 'a dog barking and growling'
+   0.790  audio:dog_barking.wav
+   0.681  audio:cat_meowing.wav
+   0.675  image:dog_labrador.jpg
+   0.557  image:cat_tabby.jpg
+```
+
+Options: `--videos`, `--documents` (text documents), `--dim 256` (Matryoshka truncation,
+renormalised), `--top N`, and `--backend ort` to run the ONNX graphs of the same networks on the
+CPU with the same host code.
+
+### NPU memory
 
 The board's NPU driver maps at most ~1.5 GB of networks at a time, and releasing a network
 within a process is not reliable on the current driver, so a session keeps all the networks it
@@ -139,47 +192,6 @@ session handles text, images, video and sound.
 The NPU's IOMMU addresses only the RAM below 4 GB, and each network needs large contiguous blocks
 of it. Before mapping each network the runner therefore drops the page cache (as root; otherwise
 it releases the model files' cached pages), which keeps the memory below 4 GB from fragmenting.
-
-Options: `--backend ort` runs the ONNX graphs of the same networks on the CPU with the same host code,
-`--dim 256` truncates the embeddings (Matryoshka; renormalised), `--documents` adds text
-documents.
-
-### Media search: one index for text, images, video and sound
-
-`src/media_search.py` builds a searchable index of a media folder on the NPU and answers
-queries against it. It indexes every image, sound clip and video, and every second of each
-video ("moments"), so a result can point to a time in a video. `--fetch-samples` downloads a
-small library (20 photos, 5 videos, 10 sounds) from the transformers.js documentation assets.
-
-```sh
-python src/media_search.py index --media-dir media --fetch-samples
-python src/media_search.py search --text "a dog barking"
-python src/media_search.py search --image media/beach.png
-```
-
-```
-query: text 'a dog barking'
-
-  images:
-     0.689  corgi.jpg
-     0.603  pikachu.png
-  sounds:
-     0.724  dog_barking.wav
-     0.697  cat_meow.wav
-  ...
-```
-
-- **Text queries** search everything: "piano music" finds `piano.wav`, "a mountain lake" finds
-  `moraine-lake.png`, "a turtle swimming in the ocean" finds `sea-turtle.mp4` and its first
-  seconds.
-- **An image as the query** finds similar images and video moments.
-- Matching a sound directly against photos is not reliable: those scores are close to noise,
-  so the default results stay within the query's own media type. `--kinds` shows the others.
-- Indexing runs the vision and audio encoders in two processes (see the NPU mapping limit
-  above). The index is one `.npz` file of 768-d embeddings plus their file names and times.
-- Indexing the sample library takes about 9 minutes on the board: 151 embeddings (20 images,
-  10 sounds, 5 videos and 116 video moments), mostly vision encoder runs at 2.7 s each. After
-  that a text query takes 0.4 s to embed and the search itself is one matrix product.
 
 ### Backend comparison
 

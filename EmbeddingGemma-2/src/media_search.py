@@ -4,16 +4,16 @@
 """Any-to-any media search with EmbeddingGemma-2.
 
 Text, images, video and audio share one embedding space, so one index answers a query
-in words across all of them: "a dog barking" finds the bark recording and the corgi
+in words across all of them: "a dog barking" finds the bark recording and the dog
 photo, "a turtle swimming in the ocean" finds the moment in a video. An image as the
 query finds similar images and video moments.
 
-    # 1. fetch the sample library (images, videos, sounds) and index it on the NPU
-    python src/media_search.py index --media-dir media --fetch-samples
+    # 1. index the example media that setup_demos.py downloaded (or --media-dir <folder>)
+    python src/media_search.py index
 
     # 2. search it
     python src/media_search.py search --text "a dog barking"
-    python src/media_search.py search --image media/beach.png
+    python src/media_search.py search --image my_photo.jpg
 
 Every image, sound clip and video goes into the index, and so does every second of
 each video ("moments"), so a search can point to a time in a video.
@@ -36,10 +36,9 @@ from runner import EmbeddingGemma2  # noqa: E402
 
 EVAL = Path(__file__).resolve().parent.parent / "eval" / "eval_set.json"
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
-VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm"}
+VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".ogv"}
 AUDIO_EXT = {".wav"}
-# On the NPU the vision and audio encoders do not fit next to both text buckets in one
-# session, so each group is indexed in its own process.
+# Each modality group is indexed in its own process, which maps only the networks it needs.
 GROUPS = {"visual": {"image", "video"}, "audio": {"audio"}}
 
 
@@ -159,8 +158,8 @@ def _label(m: dict) -> str:
 
 def cmd_search(args):
     if not Path(args.index).exists():
-        sys.exit(f"No index at {args.index}. Build one first, for example with the sample library:\n"
-                 f"  python src/media_search.py index --media-dir media --fetch-samples")
+        sys.exit(f"No index at {args.index}. Build one first (indexes the example media):\n"
+                 f"  python src/media_search.py index")
     embeddings, meta = load_entries(Path(args.index))
     if args.text:
         model = open_model(args, set())
@@ -209,8 +208,9 @@ def main():
         p.add_argument("--ort-threads", type=int, default=0)
         p.add_argument("--index", default="media_index.npz", help="Index file (default: %(default)s)")
     ix = sub.choices["index"]
-    ix.add_argument("--media-dir", default="media", help="Folder of images, videos (.mp4) and 16 kHz .wav sounds")
-    ix.add_argument("--fetch-samples", action="store_true", help="Download the sample library into --media-dir")
+    ix.add_argument("--media-dir", help="Folder of images, videos and .wav sounds (default: the example media "
+                                         "setup_demos.py downloaded, <model dir>/examples)")
+    ix.add_argument("--fetch-samples", action="store_true", help=argparse.SUPPRESS)
     ix.add_argument("--moment-fps", type=float, default=1.0, help="Video moments per second (default: %(default)s)")
     ix.add_argument("--max-moments", type=int, default=60, help="Moments per video at most (default: %(default)s)")
     ix.add_argument("--group", choices=list(GROUPS), help=argparse.SUPPRESS)
@@ -224,6 +224,11 @@ def main():
                                     "text query, image,moment,video for an image, audio for a sound)")
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
+    if args.cmd == "index" and not args.media_dir:
+        args.media_dir = "media" if args.fetch_samples else str(Path(args.model_dir) / "examples")
+        if not args.fetch_samples and not Path(args.media_dir).is_dir():
+            ap.error(f"no example media in {args.media_dir}; run `python setup_demos.py EmbeddingGemma-2` "
+                     "from the torq-examples root, or pass --media-dir")
     cmd_index(args) if args.cmd == "index" else cmd_search(args)
 
 

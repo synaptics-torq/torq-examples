@@ -44,9 +44,9 @@ _REQUIRED_FILES: Final[tuple[str, ...]] = (
     "embeddinggemma2_manifest.json",
 )
 
-# Example media for `src/infer.py --examples`: CC0 / public-domain photos, sounds and videos with a
-# description each (credits in examples/README.md). They live on the `main` branch whichever weight
-# build --model-version selects, so they are always downloaded from there.
+# Example media, the default library of `src/media_search.py index`: CC0 / public-domain photos,
+# sounds and videos with a description each (credits in examples/README.md). They live on the
+# `main` branch, so they are always downloaded from there.
 _EXAMPLES_REVISION: Final[str] = "main"
 _EXAMPLE_FILES: Final[tuple[str, ...]] = tuple(f"examples/{f}" for f in (
     "examples.json", "README.md",
