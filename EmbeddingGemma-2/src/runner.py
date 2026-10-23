@@ -21,6 +21,7 @@ Backends:
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 
@@ -34,6 +35,32 @@ except ImportError:  # run as a script from src/
     import preprocess as pp
 
 logger = logging.getLogger("EmbeddingGemma2.runner")
+
+
+def _release_file_cache(model_dir: Path):
+    """Free the page cache before a network is mapped into the NPU. The NPU's IOMMU is 32-bit,
+    so its page tables and each network's memory (large physically contiguous blocks) must sit
+    below 4 GB; cached file pages fragment that memory, and anything placed in the RAM above
+    4 GB fails to map or gives an all-zero output. As root the whole cache is dropped; otherwise
+    only the model files' pages are released, which helps less."""
+    os.sync()
+    try:
+        with open("/proc/sys/vm/drop_caches", "w") as f:
+            f.write("3\n")
+        return
+    except OSError:
+        pass
+    for p in model_dir.iterdir():
+        if not p.is_file():
+            continue
+        try:
+            fd = os.open(p, os.O_RDONLY)
+        except OSError:
+            continue
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        finally:
+            os.close(fd)
 
 
 class _Component:
@@ -64,6 +91,7 @@ class _Component:
             self._load()
         if self.backend == "torq":
             shapes = [tuple(t.shape) for t in self._impl.inputs_info]
+            _release_file_cache(self.path.parent)  # the first run maps the network into the NPU
         else:
             shapes = [tuple(i.shape) for i in self._impl.get_inputs()]
         self(*[np.zeros(sh, dtype=np.float32) for sh in shapes])
