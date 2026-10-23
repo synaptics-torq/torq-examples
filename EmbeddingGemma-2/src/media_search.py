@@ -11,8 +11,8 @@ query finds similar images and video moments.
     # 1. index the example media that setup_demos.py downloaded (or --media-dir <folder>)
     python src/media_search.py index
 
-    # 2. search it: an interactive prompt (the model loads once), or one query per run
-    python src/media_search.py search
+    # 2. search it: start an interactive prompt (the model loads once), or one query per run
+    python src/media_search.py search startup
     python src/media_search.py search --text "a dog barking"
     python src/media_search.py search --image my_photo.jpg
 
@@ -211,7 +211,7 @@ def cmd_search(args):
         sys.exit(f"No index at {args.index}. Build one first (indexes the example media):\n"
                  f"  python src/media_search.py index")
     embeddings, meta = load_entries(Path(args.index))
-    if not (args.text or args.image or args.audio):
+    if args.mode == "startup":
         interactive(args, embeddings, meta)
         return
     if args.text:
@@ -246,15 +246,19 @@ def main():
     ix.add_argument("--max-moments", type=int, default=60, help="Moments per video at most (default: %(default)s)")
     ix.add_argument("--group", choices=list(GROUPS), help=argparse.SUPPRESS)
     se = sub.choices["search"]
+    se.add_argument("mode", nargs="?", choices=["startup"],
+                    help="'startup': load the model once and answer text queries typed at a prompt "
+                         "(~0.4 s each)")
     q = se.add_mutually_exclusive_group()
-    q.add_argument("--text", help="One text query (without a query: an interactive prompt that keeps "
-                                  "the model loaded, so each query takes ~0.4 s)")
+    q.add_argument("--text", help="One text query")
     q.add_argument("--image", help="An image as the query")
     q.add_argument("--audio", help="A sound clip as the query")
     se.add_argument("--top", type=int, default=3, help="Results per kind (default: %(default)s)")
     se.add_argument("--kinds", help="Result kinds to show, from image,audio,video,moment (default: all for a "
                                     "text query, image,moment,video for an image, audio for a sound)")
     args = ap.parse_args()
+    if args.cmd == "search" and (args.mode == "startup") == bool(args.text or args.image or args.audio):
+        se.error("use `search startup` for the interactive prompt, or one of --text/--image/--audio")
     args.model_dir = resolve_model_dir(ap, args.model_dir)
     if args.cmd == "index" and not args.media_dir:
         args.media_dir = "media" if args.fetch_samples else str(Path(args.model_dir) / "examples")

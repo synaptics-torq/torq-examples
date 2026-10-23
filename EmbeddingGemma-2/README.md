@@ -110,7 +110,7 @@ They have 8-bit weights (int8 in blocks of 32) and take about 2.3 GB.
 python setup_demos.py EmbeddingGemma-2      # download the model files and the example media
 cd EmbeddingGemma-2
 python src/media_search.py index            # index the example media on the NPU (~2 min)
-python src/media_search.py search           # load the model once (~10 s), then type queries
+python src/media_search.py search startup   # load the model once (~10 s), then type queries
 ```
 
 `-m/--model-dir` defaults to the files `setup_demos.py` downloaded.
@@ -122,7 +122,7 @@ every second of each video as a "moment", and saves the embeddings with their fi
 times to `media_index.npz`. `search` then embeds only the query and ranks the index with one
 matrix product, so a result can also point to a time in a video.
 
-`search` without a query starts an interactive prompt: it loads the index and the text model
+`search startup` starts an interactive prompt: it loads the index and the text model
 once (about 10 s, most of it starting the two text networks on the NPU), and then answers each
 typed query in about 0.4 s. `search --text "..."` (or `--image`, `--audio`) answers one query and
 exits, so it pays the startup every time (about 12 s in total).
@@ -134,7 +134,7 @@ credits are in `examples/README.md` next to them. `--media-dir <folder>` indexes
 instead.
 
 ```
-$ python src/media_search.py search
+$ python src/media_search.py search startup
 [search] 25 entries from media_index.npz, model ready in 10 s. Type a query; Ctrl-D or 'q' to quit.
 
 search> a dog barking
