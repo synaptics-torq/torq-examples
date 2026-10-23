@@ -11,7 +11,8 @@ query finds similar images and video moments.
     # 1. index the example media that setup_demos.py downloaded (or --media-dir <folder>)
     python src/media_search.py index
 
-    # 2. search it
+    # 2. search it: an interactive prompt (the model loads once), or one query per run
+    python src/media_search.py search
     python src/media_search.py search --text "a dog barking"
     python src/media_search.py search --image my_photo.jpg
 
@@ -156,29 +157,7 @@ def _label(m: dict) -> str:
     return m["file"]
 
 
-def cmd_search(args):
-    if not Path(args.index).exists():
-        sys.exit(f"No index at {args.index}. Build one first (indexes the example media):\n"
-                 f"  python src/media_search.py index")
-    embeddings, meta = load_entries(Path(args.index))
-    if args.text:
-        model = open_model(args, set())
-        q, what = model.encode_text(args.text, "query"), f"text {args.text!r}"
-    elif args.image:
-        model = open_model(args, {"image"})
-        q, what = model.encode_image(args.image), f"image {Path(args.image).name}"
-    else:
-        model = open_model(args, {"audio"}, audio_window(Path(args.model_dir), [args.audio]))
-        q, what = model.encode_audio(args.audio), f"audio {Path(args.audio).name}"
-    ms = sum(v for k, v in model.timings.items() if k.endswith("_ms"))
-    query_file = Path(args.image or args.audio or "").name
-    scores = embeddings @ q
-    print(f"\nquery: {what}  ({ms:.0f} ms to embed)\n")
-    # Matches across media types are reliable from text; between two media types (a sound
-    # against photos) the scores are close to noise, so by default an image query returns
-    # images and video moments (frames are images) and a sound returns sounds.
-    default = {"text": "image,audio,video,moment", "image": "image,moment,video", "audio": "audio"}
-    kinds = (args.kinds or default["text" if args.text else "image" if args.image else "audio"]).split(",")
+def print_results(scores: np.ndarray, meta: list[dict], kinds: list[str], top: int, query_file: str = ""):
     for kind, title in (("image", "images"), ("audio", "sounds"), ("video", "videos"), ("moment", "video moments")):
         if kind not in kinds:
             continue
@@ -191,11 +170,63 @@ def cmd_search(args):
                 if f not in best or scores[i] > scores[best[f]]:
                     best[f] = i
             idx = list(best.values())
-        idx = sorted(idx, key=lambda i: -scores[i])[: args.top]
+        idx = sorted(idx, key=lambda i: -scores[i])[:top]
         if idx:
             print(f"  {title}:")
             for i in idx:
                 print(f"    {scores[i]:6.3f}  {_label(meta[i])}")
+
+
+# Matches across media types are reliable from text; between two media types (a sound
+# against photos) the scores are close to noise, so by default an image query returns
+# images and video moments (frames are images) and a sound returns sounds.
+DEFAULT_KINDS = {"text": "image,audio,video,moment", "image": "image,moment,video", "audio": "audio"}
+
+
+def interactive(args, embeddings: np.ndarray, meta: list[dict]):
+    """Load the text model once, then answer text queries typed at the prompt."""
+    t0 = time.perf_counter()
+    model = open_model(args, set())
+    kinds = (args.kinds or DEFAULT_KINDS["text"]).split(",")
+    print(f"[search] {len(meta)} entries from {args.index}, model ready in {time.perf_counter() - t0:.0f} s. "
+          "Type a query; Ctrl-D or 'q' to quit.", flush=True)
+    while True:
+        try:
+            text = input("\nsearch> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return
+        if text in ("q", "quit", "exit"):
+            return
+        if not text:
+            continue
+        t = time.perf_counter()
+        scores = embeddings @ model.encode_text(text, "query")
+        print(f"query: text {text!r}  ({(time.perf_counter() - t) * 1e3:.0f} ms)\n")
+        print_results(scores, meta, kinds, args.top)
+
+
+def cmd_search(args):
+    if not Path(args.index).exists():
+        sys.exit(f"No index at {args.index}. Build one first (indexes the example media):\n"
+                 f"  python src/media_search.py index")
+    embeddings, meta = load_entries(Path(args.index))
+    if not (args.text or args.image or args.audio):
+        interactive(args, embeddings, meta)
+        return
+    if args.text:
+        model = open_model(args, set())
+        q, what = model.encode_text(args.text, "query"), f"text {args.text!r}"
+    elif args.image:
+        model = open_model(args, {"image"})
+        q, what = model.encode_image(args.image), f"image {Path(args.image).name}"
+    else:
+        model = open_model(args, {"audio"}, audio_window(Path(args.model_dir), [args.audio]))
+        q, what = model.encode_audio(args.audio), f"audio {Path(args.audio).name}"
+    ms = sum(v for k, v in model.timings.items() if k.endswith("_ms"))
+    print(f"\nquery: {what}  ({ms:.0f} ms to embed)\n")
+    kinds = (args.kinds or DEFAULT_KINDS["text" if args.text else "image" if args.image else "audio"]).split(",")
+    print_results(embeddings @ q, meta, kinds, args.top, Path(args.image or args.audio or "").name)
 
 
 def main():
@@ -215,10 +246,11 @@ def main():
     ix.add_argument("--max-moments", type=int, default=60, help="Moments per video at most (default: %(default)s)")
     ix.add_argument("--group", choices=list(GROUPS), help=argparse.SUPPRESS)
     se = sub.choices["search"]
-    q = se.add_mutually_exclusive_group(required=True)
-    q.add_argument("--text")
-    q.add_argument("--image")
-    q.add_argument("--audio")
+    q = se.add_mutually_exclusive_group()
+    q.add_argument("--text", help="One text query (without a query: an interactive prompt that keeps "
+                                  "the model loaded, so each query takes ~0.4 s)")
+    q.add_argument("--image", help="An image as the query")
+    q.add_argument("--audio", help="A sound clip as the query")
     se.add_argument("--top", type=int, default=3, help="Results per kind (default: %(default)s)")
     se.add_argument("--kinds", help="Result kinds to show, from image,audio,video,moment (default: all for a "
                                     "text query, image,moment,video for an image, audio for a sound)")

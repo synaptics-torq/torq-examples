@@ -110,7 +110,7 @@ They have 8-bit weights (int8 in blocks of 32) and take about 2.3 GB.
 python setup_demos.py EmbeddingGemma-2      # download the model files and the example media
 cd EmbeddingGemma-2
 python src/media_search.py index            # index the example media on the NPU (~2 min)
-python src/media_search.py search --text "a dog barking"
+python src/media_search.py search           # load the model once (~10 s), then type queries
 ```
 
 `-m/--model-dir` defaults to the files `setup_demos.py` downloaded.
@@ -119,18 +119,26 @@ python src/media_search.py search --text "a dog barking"
 
 `src/media_search.py index` embeds every image, sound clip and video of a media folder once, and
 every second of each video as a "moment", and saves the embeddings with their file names and
-times to `media_index.npz`. `search` then embeds only the query (0.4 s for text) and ranks the
-index with one matrix product, so a result can also point to a time in a video.
+times to `media_index.npz`. `search` then embeds only the query and ranks the index with one
+matrix product, so a result can also point to a time in a video.
 
-By default it indexes the 14 example files that `setup_demos.py` downloads into
+`search` without a query starts an interactive prompt: it loads the index and the text model
+once (about 10 s, most of it starting the two text networks on the NPU), and then answers each
+typed query in about 0.4 s. `search --text "..."` (or `--image`, `--audio`) answers one query and
+exits, so it pays the startup every time (about 12 s in total).
+
+By default `index` reads the 14 example files that `setup_demos.py` downloads into
 `<model dir>/examples`: six subjects with a photo and a sound each (cat, dog, bird, piano, train,
 police car) and two short videos (a waterfall, a sea turtle). They are CC0 or public domain;
 credits are in `examples/README.md` next to them. `--media-dir <folder>` indexes your own media
 instead.
 
 ```
-$ python src/media_search.py search --text "a dog barking"
-query: text 'a dog barking'  (390 ms to embed)
+$ python src/media_search.py search
+[search] 25 entries from media_index.npz, model ready in 10 s. Type a query; Ctrl-D or 'q' to quit.
+
+search> a dog barking
+query: text 'a dog barking'  (390 ms)
 
   images:
      0.696  dog_labrador.jpg
