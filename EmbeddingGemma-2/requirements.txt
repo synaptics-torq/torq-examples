@@ -1,0 +1,6 @@
+tokenizers==0.23.1
+numpy
+ml_dtypes
+pillow                 # image preprocessing (numpy/PIL port of the Gemma4 image processor)
+opencv-python-headless # video frame decoding (1 fps sampling)
+onnxruntime>=1.20      # only for --backend ort (CPU baseline / comparison)
