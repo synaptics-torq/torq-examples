@@ -124,7 +124,9 @@ matrix product, so a result can also point to a time in a video.
 
 `search startup` starts an interactive prompt: it loads the index and the text model
 once (about 10 s, most of it starting the two text networks on the NPU), and then answers each
-typed query in about 0.4 s. `search --text "..."` (or `--image`, `--audio`) answers one query and
+typed query in about 0.4 s. Type `q` (or press Ctrl-D or Ctrl-C) to quit: the networks are
+unmapped from the NPU and the model memory is released (from ~660 MB back to ~50 MB) before the
+process exits. `search --text "..."` (or `--image`, `--audio`) answers one query and
 exits, so it pays the startup every time (about 12 s in total).
 
 By default `index` reads the 14 example files that `setup_demos.py` downloads into
@@ -135,7 +137,7 @@ instead.
 
 ```
 $ python src/media_search.py search startup
-[search] 25 entries from media_index.npz, model ready in 10 s. Type a query; Ctrl-D or 'q' to quit.
+[search] 25 entries from media_index.npz, model ready in 10 s. Type a query; 'q', Ctrl-D or Ctrl-C to quit.
 
 search> a dog barking
 query: text 'a dog barking'  (390 ms)
@@ -152,6 +154,9 @@ query: text 'a dog barking'  (390 ms)
      0.589  waterfall.ogv
      0.584  sea_turtle.ogv
   ...
+
+search> q
+[search] model released
 ```
 
 - **Text queries** search everything: "a piano" finds `piano_keyboard.jpg` (0.748) and

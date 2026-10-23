@@ -189,21 +189,27 @@ def interactive(args, embeddings: np.ndarray, meta: list[dict]):
     model = open_model(args, set())
     kinds = (args.kinds or DEFAULT_KINDS["text"]).split(",")
     print(f"[search] {len(meta)} entries from {args.index}, model ready in {time.perf_counter() - t0:.0f} s. "
-          "Type a query; Ctrl-D or 'q' to quit.", flush=True)
-    while True:
-        try:
-            text = input("\nsearch> ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print()
-            return
-        if text in ("q", "quit", "exit"):
-            return
-        if not text:
-            continue
-        t = time.perf_counter()
-        scores = embeddings @ model.encode_text(text, "query")
-        print(f"query: text {text!r}  ({(time.perf_counter() - t) * 1e3:.0f} ms)\n")
-        print_results(scores, meta, kinds, args.top)
+          "Type a query; 'q', Ctrl-D or Ctrl-C to quit.", flush=True)
+    try:
+        while True:
+            try:
+                text = input("\nsearch> ").strip()
+            except EOFError:
+                print()
+                break
+            if text in ("q", "quit", "exit"):
+                break
+            if not text:
+                continue
+            t = time.perf_counter()
+            scores = embeddings @ model.encode_text(text, "query")
+            print(f"query: text {text!r}  ({(time.perf_counter() - t) * 1e3:.0f} ms)\n")
+            print_results(scores, meta, kinds, args.top)
+    except KeyboardInterrupt:
+        print()
+    finally:
+        model.close()
+        print("[search] model released", flush=True)
 
 
 def cmd_search(args):

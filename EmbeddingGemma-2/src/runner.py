@@ -19,6 +19,7 @@ Backends:
     (identical host code; used as the accuracy/performance baseline).
 """
 
+import gc
 import json
 import logging
 import os
@@ -84,6 +85,10 @@ class _Component:
                 so.intra_op_num_threads = self.ort_threads
             self._impl = ort.InferenceSession(str(self.path), so, providers=["CPUExecutionProvider"])
         logger.info("loaded %s (%s)", self.path.name, self.backend)
+
+    def close(self):
+        """Drop the network; the runtime unmaps it from the NPU when the runner is collected."""
+        self._impl = None
 
     def warmup(self):
         """Load the network and run it once on zeros, which maps it into the NPU."""
@@ -161,6 +166,25 @@ class EmbeddingGemma2:
         self.timings: dict[str, float] = {}
         if warmup if warmup is not None else backend == "torq":
             self._warmup(set(modalities))
+
+    def close(self):
+        """Release every network (NPU mappings and model memory). The model cannot be used
+        afterwards; networks are not reloaded in the same process (unreliable on the driver)."""
+        for comp in (self.vision, self.audio, *self.text.values()):
+            comp.close()
+        self.lut = self.tokenizer = None
+        gc.collect()
+        try:  # hand the freed heap back to the system (glibc keeps it otherwise)
+            import ctypes
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except (OSError, AttributeError):
+            pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self.close()
 
     def _warmup(self, modalities: set[str]):
         """Start every network this session needs, largest XRAM span first. The NPU maps
