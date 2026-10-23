@@ -14,8 +14,24 @@ SL2619 NPU (text backbone + vision encoder + audio encoder, about 740M parameter
 | Vision encoder | NPU | `vision_384x384.vmfb`: 576 patches -> 64 soft tokens (512-d) |
 | Audio front end | CPU | 16 kHz mono, 128-bin log-mel (`mel_filters.npy`, `mel_window.npy`), padded to the encoder window |
 | Audio encoder | NPU | `audio_<frames>.vmfb` for 1.4 / 2.8 / 5.6 / 11.2 s windows (140 / 280 / 560 / 1120 frames) -> up to 35 / 70 / 140 / 280 soft tokens (512-d), one per 40 ms |
-| Text body | NPU | `text_body_s128.vmfb` (queries, images) or `text_body_s512.vmfb` (documents, video) |
+| Text body | NPU | `text_body_s128.vmfb` or `text_body_s512.vmfb`: the whole token sequence, text and soft tokens, -> 768-d per token |
 | Mean pooling, Matryoshka truncation, L2 norm | CPU | |
+
+The encoders do not produce the embedding themselves. Their soft tokens are already in the text
+model's embedding space (the 512-d projection is part of each encoder), and they go through the
+text body like words:
+
+1. The host builds the token sequence, for example `<bos> <|image> 64 x <|image|> <image|> <eos>`
+   for an image, and looks up every token in `token_embeddings.npy`.
+2. The encoder's soft tokens replace the `<|image|>`, `<|video|>` or `<|audio|>` placeholder rows,
+   in order. The surrounding marker tokens keep their text embeddings.
+3. The sequence is right-padded to the text bucket and runs through the text body (24
+   bidirectional layers) with a padding mask.
+4. The host takes the mean over the real tokens, optionally truncates it to 512 / 256 / 128
+   dimensions, and L2-normalises it.
+
+So every image, video or sound costs one encoder pass and one text pass, and its embedding is
+directly comparable with a text query's.
 
 Each image becomes `<bos> <|image> 64 x <|image|> <image|> <eos>` (68 tokens).
 A video is sampled at 1 fps (at most 7 frames), each frame runs through the vision encoder,
@@ -26,21 +42,77 @@ Audio becomes `<bos> <|audio> n x <|audio|> <audio|> <eos>` with n = 25 tokens p
 A session loads one audio encoder window. By default (`--audio-window auto`) that is the smallest
 window that holds the longest clip. Shorter clips are zero-padded and only their n valid tokens
 are used (identical to the unpadded result); longer clips are truncated to the window.
-Smaller windows are faster (board, NPU, 8-bit build):
-
-| Window | Audio encoder |
-|---|---|
-| 1.4 s | 302 ms |
-| 2.8 s | 463 ms |
-| 5.6 s | 935 ms |
-| 11.2 s | 2041 ms |
-
-The text pass that follows takes 389 ms (S=128) for clips up to ~4.9 s (124 audio tokens), or
-2185 ms (S=512) for longer ones: an 11 s clip takes about 4.2 s end to end.
+Smaller windows are faster (see the timings below).
 
 The static 384x384 / 64-token geometry is what the HF processor produces for a square image
 at the smallest token budget (70). Inputs are resized to a square, so non-square images and
 video frames are squashed.
+
+### Text body: two sequence lengths
+
+The text body is compiled twice from the same weights, for 128 and for 512 tokens. Each input
+runs in the smallest one that holds its token sequence; shorter sequences are padded and masked,
+so the embedding does not depend on the bucket:
+
+| Input | Tokens | Text body |
+|---|---|---|
+| Text query or short document | up to 128 | S=128 |
+| Longer document | 129-512 | S=512 |
+| Image | 68 | S=128 |
+| Audio up to ~4.9 s | n + 4 <= 128 (n = 25 per second) | S=128 |
+| Audio longer than ~4.9 s (up to 11.2 s: 284 tokens) | up to 512 | S=512 |
+| Video (up to 7 frames x 66 + 2 = 464) | up to 512 | S=512 |
+
+- S=128 is about 5.6x faster than S=512, and most queries and every image fit in it.
+- 512 is the largest bucket because the model's sliding-window layers reach 512 tokens: up to
+  513 tokens every layer is plain full attention. Longer inputs are rejected, not truncated.
+- Each bucket holds its own copy of the weights (8-bit: 165 MB + 186 MB). If the requested
+  networks do not fit in the NPU's mapping limit (the bf16 build with all modalities), the
+  S=128 bucket is not loaded and everything runs at S=512, which is slower but gives the same
+  embeddings.
+
+## Inference time (SL2610 series)
+
+Measured on an SL2619 board, one network per process, NPU time per call after a warm-up run.
+The 8-bit build, the default, is compiled with the newer compiler optimisations (slicing,
+prefetch and K-chunked matmuls); the 4-bit and bf16 builds will be rebuilt with them.
+
+| Network | 8-bit (default) | 4-bit (`main`) | bf16 |
+|---|---|---|---|
+| text S=128 | 389 ms | 549 ms | 440 ms |
+| text S=512 | 2185 ms | 2825 ms | 2128 ms |
+| vision 384x384 (per image or frame) | 2734 ms | 3310 ms | 3909 ms |
+| audio 1.4 s window | 302 ms | 279 ms | 332 ms |
+| audio 2.8 s window | 463 ms | 600 ms | 527 ms |
+| audio 5.6 s window | 935 ms | 1337 ms | 955 ms |
+| audio 11.2 s window | 2041 ms | 2670 ms | 1886 ms |
+
+| Network | 8-bit RAM / file | 4-bit RAM / file | bf16 RAM / file |
+|---|---|---|---|
+| text S=128 | 198 / 165 MB | 122 / 87 MB | 304 / 278 MB |
+| text S=512 | 220 / 186 MB | 140 / 103 MB | 316 / 288 MB |
+| vision 384x384 | 330 / 303 MB | 157 / 122 MB | 364 / 339 MB |
+| audio 1.4 s | 352 / 328 MB | 210 / 180 MB | 601 / 589 MB |
+| audio 2.8 s | 355 / 331 MB | 211 / 181 MB | 602 / 591 MB |
+| audio 5.6 s | 361 / 337 MB | 217 / 186 MB | 605 / 593 MB |
+| audio 11.2 s | 381 / 357 MB | 227 / 196 MB | 610 / 598 MB |
+
+End to end per input with the 8-bit build (encoder + text body; host preprocessing adds about
+50 ms per image, 25 ms per sound, and 1-2 s to decode a video):
+
+| Input | Networks | Time |
+|---|---|---|
+| Text query | text S=128 | 0.39 s |
+| Long document | text S=512 | 2.2 s |
+| Image | vision + text S=128 | 3.1 s |
+| Video, 7 frames | 7 x vision + text S=512 | 21.3 s |
+| Sound up to 1.4 s | audio 1.4 s + text S=128 | 0.69 s |
+| Sound up to 2.8 s | audio 2.8 s + text S=128 | 0.85 s |
+| Sound up to 4.9 s | audio 5.6 s + text S=128 | 1.3 s |
+| Sound 4.9-5.6 s | audio 5.6 s + text S=512 | 3.1 s |
+| Sound 5.6-11.2 s | audio 11.2 s + text S=512 | 4.2 s |
+
+The 8-bit timings are the same when all the networks run in one session (`--examples`).
 
 ## Usage
 
