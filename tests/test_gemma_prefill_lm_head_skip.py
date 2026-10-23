@@ -125,6 +125,7 @@ class TestGemmaPrefillLMHeadSkip:
     def test_prefill_tokens_starts_after_warmup(self):
         runner = RecordingGemma()
         runner._warmup_len = 4
+        runner._turn_pos = 4  # post-reset position (reset() sets it from _warmup_len)
 
         next_token, pos = runner.prefill_tokens([10, 11])
 

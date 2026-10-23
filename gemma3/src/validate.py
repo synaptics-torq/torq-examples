@@ -290,6 +290,7 @@ class TextGenerationValidator(BaseValidator):
             sys.stdout.flush()
 
             prompt = self.build_prompt(src_text)
+            self.gemma3.reset()
             raw_output = self.gemma3.run(prompt)
             hypothesis = normalize_translation(raw_output)
             hypotheses.append(hypothesis)
