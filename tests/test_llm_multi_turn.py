@@ -14,7 +14,6 @@ import pytest
 from gemma3.src.runner import Gemma3Static
 from qwen2_5.src.runner import QwenStatic
 from qwen3.src.runner import Qwen3Static
-from utils.inference import ManagedSelfAttnCacheRunner
 
 
 def _load(name, path):
@@ -46,16 +45,11 @@ class Device:
 
 
 class Cache:
-    shift_kv = ManagedSelfAttnCacheRunner.shift_kv
     infer_time_ms = 0
 
     def __init__(self, capacity):
-        self._n_kv = 1
         self._kv_cache = [Device(np.zeros((1, 1, capacity, 1), dtype=np.int64))]
         self.calls = []
-
-    def allocate_device_array(self, array):
-        return Device(array)
 
     @property
     def tokens(self):
@@ -76,6 +70,29 @@ class Cache:
 
     def reset_kv(self):
         self.tokens[:] = 0
+
+
+class PositionCache(Cache):
+    """Store each key's encoded position alongside its token."""
+
+    def __init__(self, capacity):
+        super().__init__(capacity)
+        self._kv_cache = [Device(np.zeros((1, 1, capacity, 2), dtype=np.int64))]
+
+    @property
+    def tokens(self):
+        return self._kv_cache[0].to_host()[0, 0, :, 0]
+
+    def infer(self, inputs):
+        pos = int(inputs[1][0, 0])
+        positions = self._kv_cache[0].to_host()[0, 0, :, 1]
+        np.testing.assert_array_equal(positions[:pos], np.arange(pos))
+        result = super().infer(inputs)
+        positions[pos:pos + inputs[0].shape[1]] = np.arange(pos, pos + inputs[0].shape[1])
+        return result
+
+    def reset_kv(self):
+        self._kv_cache[0].to_host()[:] = 0
 
 
 def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=128):
@@ -101,6 +118,7 @@ def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=
     runner._tokenizer = Tokenizer()
     runner._model = Cache(capacity)
     runner._model.tokens[:runner._warmup_len] = 7
+    runner._cache_tokens = runner._model.tokens[:runner._warmup_len].tolist()
     runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()] if instruct else []
     runner._prefill_model = runner._model if batched else None
     runner._prefill_size = 2 if batched else None
@@ -141,16 +159,18 @@ def test_closing_stream_preserves_last_yielded_token():
 
 
 @pytest.mark.parametrize("instruct", [False, True])
-def test_turn_start_shift_uses_occupied_cache(instruct):
+def test_turn_start_rollover_uses_occupied_cache(instruct):
     runner = _runner(instruct=instruct, cap=1, capacity=8)
     runner._cache_keep_n = 3
     runner._turn_pos = 6
-    runner._model.tokens[:6] = [1, 2, 3, 4, 5, 6]
+    runner._model.tokens[runner._warmup_len:6] = [1, 2, 3, 4, 5, 6][runner._warmup_len:]
+    runner._cache_tokens = runner._model.tokens[:6].tolist()
     runner._pending_token = 99
     prefix = runner._model.tokens[:runner._warmup_len].tolist()
     runner.run("next")
-    expected = prefix + [4, 5, 6, 99] + runner._build_prompt_tokens("next")
-    expected = expected[:8]
+    prompt = runner._build_prompt_tokens("next")
+    keep = min(3, 8 - len(prefix) - 1 - len(prompt))
+    expected = prefix + [4, 5, 6][-keep:] + [99] + prompt
     assert runner._model.tokens[:len(expected)].tolist() == expected
 
 
@@ -168,52 +188,78 @@ def test_full_cache_without_window_discards_previous_prediction():
     runner = _runner(cap=1, capacity=8)
     runner._turn_pos = 7
     runner._model.tokens[:7] = 6
+    runner._cache_tokens = runner._model.tokens[:7].tolist()
     runner._pending_token = 99
     runner.run("next")
     assert runner._model.tokens.tolist() == [10, 11, 0, 0, 0, 0, 0, 0]
 
 
-def test_full_cache_with_no_room_does_not_sample_placeholder_token():
-    runner = _runner(cap=1, capacity=8)
+@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
+@pytest.mark.parametrize("instruct", [False, True])
+@pytest.mark.parametrize("batched", [False, True])
+def test_full_cache_reserves_room_for_complete_prompt(cls, instruct, batched):
+    runner = _runner(cls, instruct, batched, cap=1, capacity=8)
     runner._turn_pos = 8
     runner._cache_keep_n = 8
     runner._pending_token = 99
-    assert runner.run("next") == ""
-    assert runner._model.calls == []
+    runner._model.tokens[runner._warmup_len:] = list(range(8))[runner._warmup_len:]
+    runner._cache_tokens = runner._model.tokens.tolist()
+    assert runner.run("next") == "20"
+    prompt = runner._build_prompt_tokens("next")
+    assert runner._model.tokens[-len(prompt) - 1:].tolist() == [99] + prompt
 
 
-def test_oversized_window_stops_without_writing_past_cache():
-    runner = _runner(capacity=8)
-    runner._cache_keep_n = 9
-    runner._eos_token_id = 98
-    runner._end_of_turn_id = 98
-    assert runner.run("next")
-    assert runner._turn_pos == 8
+@pytest.mark.parametrize("instruct", [False, True])
+@pytest.mark.parametrize("keep", [6, 8, 9])
+def test_large_window_frees_space_on_every_rollover(instruct, keep):
+    runner = _runner(instruct=instruct, cap=20, capacity=8)
+    runner._cache_keep_n = keep
+    runner._eos_token_id = runner._end_of_turn_id = 98
+    assert len(runner.run("next").split()) == 20
+    assert runner._turn_pos <= 8
 
 
-def test_short_history_does_not_retain_unoccupied_entries():
+def test_oversized_prompt_takes_priority_over_history():
     runner = _runner(cap=1, capacity=8)
     runner._cache_keep_n = 5
     runner._turn_pos = 2
     runner._model.tokens[:2] = [4, 5]
+    runner._cache_tokens = [4, 5]
     runner._pending_token = 99
     runner._tokenizer = Mock()
     runner._tokenizer.encode.return_value = SimpleNamespace(ids=[10] * 8)
     runner._tokenizer.decode.return_value = "answer"
     runner.run("long")
-    assert runner._model.tokens.tolist() == [4, 5, 99, 10, 10, 10, 10, 10]
+    assert runner._model.tokens.tolist() == [10] * 8
 
 
 def test_in_turn_rollover_then_next_turn_preserves_pending_token():
     runner = _runner(capacity=8)
     runner._turn_pos = 6
     runner._model.tokens[:6] = [1, 2, 3, 4, 5, 6]
+    runner._cache_tokens = runner._model.tokens[:6].tolist()
     runner._cache_keep_n = 3
     assert runner.run("next") == "20 21 99"
     assert runner._model.tokens[:5].tolist() == [6, 10, 11, 20, 21]
     runner._max_gen_tokens = 1
     runner.run("next")
     assert runner._model.tokens[:8].tolist() == [6, 10, 11, 20, 21, 99, 10, 11]
+
+
+@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
+@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("instruct", [False, True])
+def test_default_window_recomputes_key_positions_across_turns(cls, batched, instruct):
+    runner = _runner(cls, instruct=instruct, batched=batched, capacity=8)
+    runner._model = PositionCache(8)
+    runner._model.tokens[:runner._warmup_len] = 7
+    runner._model._kv_cache[0].to_host()[0, 0, :runner._warmup_len, 1] = np.arange(runner._warmup_len)
+    runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()]
+    runner._prefill_model = runner._model if batched else None
+    runner._cache_keep_n = 2
+    for _ in range(4):
+        assert runner.run("next") == "20 21 99"
+        assert runner._cache_tokens == runner._model.tokens[:runner._turn_pos].tolist()
 
 
 def test_failed_step_does_not_advance_cache_position():

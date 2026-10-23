@@ -121,6 +121,7 @@ def _split_model(body):
 def _liquid():
     runner = LiquidStatic.__new__(LiquidStatic)
     runner._logger = logging.getLogger("test_liquid_prefill")
+    runner._cache_tokens = []
     return runner
 
 
