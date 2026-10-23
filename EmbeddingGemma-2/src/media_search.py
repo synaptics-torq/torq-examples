@@ -158,6 +158,9 @@ def _label(m: dict) -> str:
 
 
 def cmd_search(args):
+    if not Path(args.index).exists():
+        sys.exit(f"No index at {args.index}. Build one first, for example with the sample library:\n"
+                 f"  python src/media_search.py index --media-dir media --fetch-samples")
     embeddings, meta = load_entries(Path(args.index))
     if args.text:
         model = open_model(args, set())
