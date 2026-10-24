@@ -101,6 +101,7 @@ def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=
     runner._instruct_model = instruct
     runner._bos_token_id = 1
     runner._eos_token_id = 99
+    runner._eos_token_ids = [99]
     runner._nl_token_id = 8
     runner._double_nl_token_id = 9
     if cls is Gemma3Static:
@@ -215,6 +216,7 @@ def test_large_window_frees_space_on_every_rollover(instruct, keep):
     runner = _runner(instruct=instruct, cap=20, capacity=8)
     runner._cache_keep_n = keep
     runner._eos_token_id = runner._end_of_turn_id = 98
+    runner._eos_token_ids = [98]
     assert len(runner.run("next").split()) == 20
     assert runner._turn_pos <= 8
 

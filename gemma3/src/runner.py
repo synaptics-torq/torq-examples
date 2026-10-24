@@ -106,7 +106,7 @@ class Gemma3Static(DecoderOnlyLLMRunner):
         return [self._bos_token_id] + self.tokenize(self._sys_prompt or "", "system")
 
     def _should_stop(self, token: int, gen: list[int]) -> bool:
-        if token == self._eos_token_id:
+        if token in self._eos_token_ids:
             return True
         if self._end_of_turn_id is not None and token == self._end_of_turn_id:
             return True

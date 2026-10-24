@@ -226,6 +226,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_top_k",
         "_bos_token_id",
         "_eos_token_id",
+        "_eos_token_ids",
         "_bos_token",
         "_eos_token",
         "_reset_cache_state",
@@ -323,7 +324,12 @@ class DecoderOnlyLLMRunner(ABC):
             self._config = json.load(f)
 
         self._bos_token_id = self._config["bos_token_id"]
-        self._eos_token_id = self._config["eos_token_id"]
+        # Checkpoints may list several stop IDs (FunctionGemma: [1, 50],
+        # where 50 is <start_function_response>); keep the first for display
+        # and honor every configured stop.
+        eos_token_id = self._config["eos_token_id"]
+        self._eos_token_ids = eos_token_id if isinstance(eos_token_id, list) else [eos_token_id]
+        self._eos_token_id = self._eos_token_ids[0]
         self._tokenizer = Tokenizer.from_file(str(self._model_dir / "tokenizer.json"))
         self._bos_token = self._tokenizer.decode(
             [self._bos_token_id], skip_special_tokens=False
@@ -450,9 +456,12 @@ class DecoderOnlyLLMRunner(ABC):
         """Build reusable prefix tokens to prefill after cache reset."""
         return []
 
+    def _decode_generated_tokens(self, tokens: list[int]) -> str:
+        return self._tokenizer.decode(tokens)
+
     def _should_stop(self, token: int, gen: list[int]) -> bool:
         """Return True when generation should stop after *token*."""
-        return token == self._eos_token_id
+        return token in self._eos_token_ids
 
     def _stop(self, token: int, gen: list[int]) -> bool:
         """Compatibility alias for older subclasses/tests."""
@@ -1062,7 +1071,7 @@ class DecoderOnlyLLMRunner(ABC):
             self._pending_token = next_tok
             self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
 
-            prev_text = self._tokenizer.decode([next_tok])
+            prev_text = self._decode_generated_tokens([next_tok])
             yield_start_ns = time.perf_counter_ns()
             yield prev_text
             yield_ns += time.perf_counter_ns() - yield_start_ns
@@ -1099,7 +1108,7 @@ class DecoderOnlyLLMRunner(ABC):
                 _raise_if_stopped(should_stop)
                 gen.append(next_tok)
                 pos += 1
-                full_text = self._tokenizer.decode(gen)
+                full_text = self._decode_generated_tokens(gen)
                 chunk = full_text[len(prev_text) :]
                 yield_start_ns = time.perf_counter_ns()
                 yield chunk

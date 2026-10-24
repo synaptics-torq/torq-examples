@@ -24,6 +24,7 @@ logger = logging.getLogger("setup")
 
 DEMOS = [
     "gemma3",
+    "functiongemma",
     "qwen2_5",
     "qwen3",
     "LiquidAI-LFM2.5",
@@ -96,6 +97,12 @@ def setup_demo(
                 [DEFAULT_MODEL],
                 model_version=model_version,
                 no_update=no_update,
+                enable_prefill=enable_prefill,
+            )
+        elif name == "functiongemma":
+            from functiongemma.setup_demo import setup_functiongemma
+            setup_functiongemma(
+                model_version=model_version, no_update=no_update,
                 enable_prefill=enable_prefill,
             )
         elif name == "qwen2_5":

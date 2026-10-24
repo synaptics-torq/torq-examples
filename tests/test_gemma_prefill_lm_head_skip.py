@@ -215,6 +215,7 @@ class TestGemmaPrefillLMHeadSkip:
     def test_gemma_stop_policy_handles_eos_eot_and_newlines(self):
         runner = Gemma3Static.__new__(Gemma3Static)
         runner._eos_token_id = 1
+        runner._eos_token_ids = [1]
         runner._end_of_turn_id = 2
         runner._instruct_model = True
 
