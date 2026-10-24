@@ -22,8 +22,10 @@ Backends:
 import gc
 import json
 import logging
+import mmap
 import os
 import time
+import weakref
 from pathlib import Path
 
 import ml_dtypes
@@ -38,34 +40,11 @@ except ImportError:  # run as a script from src/
 logger = logging.getLogger("EmbeddingGemma2.runner")
 
 
-def _release_file_cache(model_dir: Path):
-    """Free the page cache before a network is mapped into the NPU. The NPU's IOMMU is 32-bit,
-    so its page tables and each network's memory (large physically contiguous blocks) must sit
-    below 4 GB; cached file pages fragment that memory, and anything placed in the RAM above
-    4 GB fails to map or gives an all-zero output. As root the whole cache is dropped; otherwise
-    only the model files' pages are released, which helps less."""
-    os.sync()
-    try:
-        with open("/proc/sys/vm/drop_caches", "w") as f:
-            f.write("3\n")
-        return
-    except OSError:
-        pass
-    for p in model_dir.iterdir():
-        if not p.is_file():
-            continue
-        try:
-            fd = os.open(p, os.O_RDONLY)
-        except OSError:
-            continue
-        try:
-            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
-        finally:
-            os.close(fd)
-
-
 class _Component:
     """One static graph on one backend, loaded on first use."""
+
+    # loaded NPU networks of this process, for _release_model_pages
+    _loaded: "weakref.WeakSet[_Component]" = weakref.WeakSet()
 
     def __init__(self, path: Path, backend: str, ort_threads: int = 0):
         self.path, self.backend, self.ort_threads = path, backend, ort_threads
@@ -77,6 +56,7 @@ class _Component:
             from torq.runtime import VMFBInferenceRunner
 
             self._impl = VMFBInferenceRunner(str(self.path))
+            _Component._loaded.add(self)
         else:
             import onnxruntime as ort
 
@@ -85,6 +65,31 @@ class _Component:
                 so.intra_op_num_threads = self.ort_threads
             self._impl = ort.InferenceSession(str(self.path), so, providers=["CPUExecutionProvider"])
         logger.info("loaded %s (%s)", self.path.name, self.backend)
+
+    def _release_pages(self):
+        """Drop this vmfb's file pages from the process's mapping and from the page cache."""
+        mm = getattr(self._impl, "_mmap", None)
+        if mm is not None:
+            mm.madvise(mmap.MADV_DONTNEED)
+        try:
+            fd = os.open(self.path, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.posix_fadvise(fd, 0, 0, os.POSIX_FADV_DONTNEED)
+        finally:
+            os.close(fd)
+
+    @staticmethod
+    def _release_model_pages():
+        """Release the pages of every vmfb this process has loaded before a network is mapped
+        into the NPU. The NPU's IOMMU is 32-bit, so each network's memory (large physically
+        contiguous blocks) and its page tables must sit below 4 GB; the cached vmfb files
+        (~1 GB) fragment that memory, and a block placed in the RAM above 4 GB fails to map or
+        gives an all-zero output. Only this process's model files are touched; the pages are
+        read back from eMMC if they are needed again."""
+        for comp in list(_Component._loaded):
+            comp._release_pages()
 
     def close(self):
         """Drop the network; the runtime unmaps it from the NPU when the runner is collected."""
@@ -96,7 +101,7 @@ class _Component:
             self._load()
         if self.backend == "torq":
             shapes = [tuple(t.shape) for t in self._impl.inputs_info]
-            _release_file_cache(self.path.parent)  # the first run maps the network into the NPU
+            _Component._release_model_pages()  # the first run maps the network into the NPU
         else:
             shapes = [tuple(i.shape) for i in self._impl.get_inputs()]
         self(*[np.zeros(sh, dtype=np.float32) for sh in shapes])
