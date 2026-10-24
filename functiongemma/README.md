@@ -29,6 +29,8 @@ Run `python src/infer.py -h` to see all available inference options.
 
 ## Behavior
 
+To add tools or use a fine-tuned checkpoint, see [Adding FunctionGemma tools](ADDING_TOOLS.md).
+
 The runner warms the KV cache with BOS and the developer instruction and tool declarations. It preserves special tokens when decoding function calls, executes one complete call at a time from an explicit function registry, and appends the result without a new chat turn header. The pending `<start_function_response>` token is replayed before the response. A turn can make at most five sequential calls.
 
 The built-in `get_temperature(city)` uses an offline sample table, not live weather. Try `What is the temperature in London?`; a successful call is `get_temperature(city='London')`, returning `18`. Unknown functions and execution failures become tool error responses. The demo does not execute arbitrary code. Add tools to `DEFAULT_TOOLS` and `FUNCTIONS` in `src/function_tools.py`; the declaration renderer supports the demo's object parameters with scalar properties.
