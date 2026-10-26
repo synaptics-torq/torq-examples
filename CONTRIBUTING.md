@@ -33,6 +33,8 @@ An example folder must contain:
 
 The setup demo_script entry point must use the `utils.model_setup.demo_main` function.
 
+Text-generation demos pass `supports_prefill=True` to `demo_main` and forward `enable_prefill` to the shared `setup_demo` or `download_models` helper. Those helpers download and track an optional `transformer_prefill.vmfb` when requested, preserve the recorded selection during inference-time refresh, and stop tracking it when setup runs without the flag (keeping the local file). Native prefill entries in the main model need no extra setup. Keep prefill policy out of demo-specific asset download and completeness hooks.
+
 The infer script entry point must use the `utils.tasks.[task_category].infer_main` function.
 
 The validate script entry point must use the `utils.tasks.[task_category].validate_main` function.

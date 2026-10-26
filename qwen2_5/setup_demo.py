@@ -113,6 +113,7 @@ def setup_qwen25(
     models: list[str] | None = None,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
     """Set up the Qwen2.5 demo."""
     if models is None:
@@ -127,6 +128,7 @@ def setup_qwen25(
         download=_download_qwen25,
         model_version=model_version,
         no_update=no_update,
+        enable_prefill=enable_prefill,
         tracked_files_present=_qwen25_files_present,
     )
 
@@ -136,5 +138,6 @@ if __name__ == "__main__":
         setup_qwen25,
         description="Download Qwen2.5-0.5B-Instruct (GPTQ INT4) model files.",
         default_models=_DEFAULT_MODELS,
+        supports_prefill=True,
         repo_map=QWEN25_HF_REPO_MAP,
     )

@@ -105,7 +105,9 @@ def test_liquid_download_updates_prefill_on_existing_copy(tmp_path):
     with (
         mock.patch.object(model_setup, "get_hf_revision", return_value="same-sha"),
         mock.patch.object(setup, "hf_file_exists", return_value=True),
+        mock.patch.object(model_setup, "hf_file_exists", new=setup.hf_file_exists),
         mock.patch.object(setup, "download_from_hf", side_effect=download),
+        mock.patch.object(model_setup, "download_from_hf", new=setup.download_from_hf),
     ):
         model_dir = setup.download_liquid(base_dir=tmp_path)["default"]
         setup.download_liquid(base_dir=tmp_path, enable_prefill=True)

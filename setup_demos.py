@@ -37,10 +37,8 @@ DEMOS = [
     "EmbeddingGemma-2",
 ]
 
-# Demos whose setup supports the --with-batch-prefill flag (their models have a
-# batched prefill build). The flag is forwarded only to these; every other demo
-# is set up exactly as before and just gets a warning.
-_PREFILL_DEMOS: Final[frozenset[str]] = frozenset({"gemma3", "LiquidAI-LFM2.5"})
+# Text-generation demos share optional sibling prefill setup.
+_PREFILL_DEMOS: Final[frozenset[str]] = frozenset({"gemma3", "functiongemma", "qwen2_5", "qwen3", "LiquidAI-LFM2.5"})
 
 
 def _site_packages_dir() -> str:
@@ -107,10 +105,10 @@ def setup_demo(
             )
         elif name == "qwen2_5":
             from qwen2_5.setup_demo import setup_qwen25
-            setup_qwen25(["instruct"], model_version=model_version, no_update=no_update)
+            setup_qwen25(["instruct"], model_version=model_version, no_update=no_update, enable_prefill=enable_prefill)
         elif name == "qwen3":
             from qwen3.setup_demo import setup_qwen3
-            setup_qwen3(["instruct"], model_version=model_version, no_update=no_update)
+            setup_qwen3(["instruct"], model_version=model_version, no_update=no_update, enable_prefill=enable_prefill)
         elif name == "LiquidAI-LFM2.5":
             _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
             _mod.setup_liquid(
@@ -182,11 +180,12 @@ if __name__ == "__main__":
         "--with-batch-prefill",
         action="store_true",
         help=(
-            "Also download and track the optional batched prefill model "
-            "(transformer_prefill.vmfb) for the demos that have one "
-            f"({', '.join(sorted(_PREFILL_DEMOS))}). It is an extra model, so "
-            "it uses more memory, and its prompt-chunk size is fixed. "
-            "Warns and is ignored for the other demos."
+            "Set up optional batch prefill for text LLM demos "
+            f"({', '.join(sorted(_PREFILL_DEMOS))}). Legacy model "
+            "tags publish a separate fixed-size build "
+            "(transformer_prefill.vmfb): this flag downloads and tracks it. "
+            "Native tags compile the prefill family into transformer.vmfb itself, "
+            "so the flag is a no-op there. Warns and is ignored for the other demos."
         ),
     )
     add_logging_args(parser)

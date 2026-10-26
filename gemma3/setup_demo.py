@@ -20,7 +20,6 @@ from utils.model_setup import (
     download_models,
     ensure_demo_models,
     setup_demo,
-    sync_prefill_tracking,
 )
 
 logger = logging.getLogger("Gemma3.setup")
@@ -40,7 +39,6 @@ _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
     ("model.vmfb",),
 )
 _GEMMA3_TRIM_LUT_FILENAME: Final[str] = "token_id_lut.npy"
-_GEMMA3_PREFILL_FILENAME: Final[str] = "transformer_prefill.vmfb"
 _GEMMA3_REQUIRED_FILES: Final[tuple[str, ...]] = (
     "token_embeddings.npy",
     "config.json",
@@ -118,15 +116,8 @@ def _download_gemma3(
     base_dir: Path,
     *,
     revision: str | None = None,
-    enable_prefill: bool = False,
 ) -> list[str]:
-    """Download all Gemma3 files; return the manifest file list.
-
-    The optional batched prefill model (``transformer_prefill.vmfb``) is
-    downloaded only when ``enable_prefill`` is set, or when the existing
-    manifest already tracks it, so repairing a previously enabled copy does
-    not silently drop the prefill build.
-    """
+    """Download core gemma3 assets; prefill is handled by shared setup."""
     manifest_files = _download_gemma3_model(repo_id, base_dir, revision=revision)
     for filename in _GEMMA3_REQUIRED_FILES:
         download_from_hf(repo_id, filename, base_dir=base_dir, revision=revision)
@@ -138,23 +129,6 @@ def _download_gemma3(
     if lut_file is not None:
         manifest_files.append(lut_file)
 
-    manifest = read_manifest(Path(base_dir) / repo_id)
-    tracks_prefill = (
-        bool(manifest) and _GEMMA3_PREFILL_FILENAME in manifest.get("files", [])
-    )
-    if enable_prefill or tracks_prefill:
-        local_dir = Path(base_dir) / repo_id
-        if (local_dir / _GEMMA3_PREFILL_FILENAME).exists():
-            manifest_files.append(_GEMMA3_PREFILL_FILENAME)
-        elif _download_optional_if_exists(
-            repo_id, _GEMMA3_PREFILL_FILENAME, base_dir, revision=revision
-        ):
-            manifest_files.append(_GEMMA3_PREFILL_FILENAME)
-        elif enable_prefill:
-            logger.warning(
-                "--with-batch-prefill: no %s in %s; continuing without a batched "
-                "prefill model.", _GEMMA3_PREFILL_FILENAME, repo_id,
-            )
     return manifest_files
 
 
@@ -237,9 +211,8 @@ def download_gemma3(
         GEMMA3_HF_REPO_MAP,
         models,
         files_present=_has_gemma3_files,
-        download=lambda repo_id, base_dir, *, revision=None: _download_gemma3(
-            repo_id, base_dir, revision=revision, enable_prefill=enable_prefill
-        ),
+        download=_download_gemma3,
+        enable_prefill=enable_prefill,
         label="gemma3",
         base_dir=base_dir,
         model_version=model_version,
@@ -272,56 +245,22 @@ def setup_gemma3(
     no_update: bool = False,
     enable_prefill: bool = False,
 ):
-    """Set up the gemma3 demo (check requirements, then download/refresh).
-
-    ``enable_prefill`` additionally downloads and tracks the optional batched
-    prefill model (``transformer_prefill.vmfb``): an extra model, so it uses
-    more memory, with a fixed 64-token prompt chunk size. Without it, a
-    tracked prefill model is removed from the manifest (the local file is
-    kept but left untracked), so it stays excluded on later runs.
-    """
+    """Set up the Gemma3 demo with shared optional prefill setup."""
     if models is None:
         models = _DEFAULT_MODELS
 
-    def _tracked_complete(model_dir: Path) -> bool:
-        """A complete copy — plus, with ``--with-batch-prefill``, a prefill model that is
-        tracked or at least present locally. The download hook is incremental
-        (``download_from_hf`` skips existing files), so marking a complete copy
-        incomplete only fetches the missing prefill build, or warns when the
-        repo has none."""
-        if not _gemma3_files_present(model_dir):
-            return False
-        if enable_prefill:
-            manifest = read_manifest(model_dir)
-            files = manifest.get("files", []) if manifest else []
-            if (
-                _GEMMA3_PREFILL_FILENAME not in files
-                and not (model_dir / _GEMMA3_PREFILL_FILENAME).exists()
-            ):
-                return False
-        return True
-
-    result = setup_demo(
+    return setup_demo(
         GEMMA3_HF_REPO_MAP,
         models,
         demo_name="gemma3",
         requirements=Path(__file__).parent / "requirements.txt",
         files_present=_has_gemma3_files,
-        download=lambda repo_id, base_dir, *, revision=None: _download_gemma3(
-            repo_id, base_dir, revision=revision, enable_prefill=enable_prefill
-        ),
+        download=_download_gemma3,
+        enable_prefill=enable_prefill,
         model_version=model_version,
         no_update=no_update,
-        tracked_files_present=_tracked_complete,
+        tracked_files_present=_gemma3_files_present,
     )
-    for name, model_dir in result.items():
-        sync_prefill_tracking(
-            model_dir,
-            resolve_repo_id(name, GEMMA3_HF_REPO_MAP),
-            _GEMMA3_PREFILL_FILENAME,
-            enable_prefill=enable_prefill,
-        )
-    return result
 
 
 if __name__ == "__main__":

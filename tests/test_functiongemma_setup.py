@@ -35,6 +35,5 @@ def test_functiongemma_setup_uses_own_requirements_and_shared_layout(tmp_path):
     assert kwargs["model_version"] == "v2.3.0"
     assert kwargs["no_update"] is True
     assert not kwargs["files_present"](tmp_path)
-    with mock.patch.object(setup, "_download_gemma3", return_value=["transformer.vmfb"]) as download:
-        assert kwargs["download"]("org/model", tmp_path, revision="abc") == ["transformer.vmfb"]
-    download.assert_called_once_with("org/model", tmp_path, revision="abc", enable_prefill=True)
+    assert kwargs["download"] is setup._download_gemma3
+    assert kwargs["enable_prefill"] is True

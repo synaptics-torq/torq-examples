@@ -30,6 +30,8 @@ from utils.download import (
     ModelStatus,
     base_dir_for,
     default_models_dir,
+    download_from_hf,
+    hf_file_exists,
     ensure_model,
     get_hf_file_info,
     get_hf_revision,
@@ -52,6 +54,7 @@ __all__ = [
 ]
 
 logger = logging.getLogger(__name__)
+_PREFILL_FILENAME = "transformer_prefill.vmfb"
 
 # Demo-specific hooks: ``files_present`` checks whether the demo's assets are
 # complete in a model dir; ``download`` fetches whatever is missing and returns
@@ -84,6 +87,7 @@ def refresh_model(
     files_present: FilesPresent,
     download: DownloadFn,
     tracked_files_present: FilesPresent | None = None,
+    enable_prefill: bool | None = None,
 ) -> ModelStatus:
     """Check ``model_dir`` and refresh it so it tracks ``version``.
 
@@ -93,6 +97,10 @@ def refresh_model(
     ``version`` currently points to so an upstream tag move is detected.
     Untracked copies (``--no-update``, ``record=False``) are checked against
     ``files_present`` only and never resolve or record a version.
+
+    ``enable_prefill`` downloads/tracks the optional sibling when True,
+    untracks it (keeping the file) when False, and preserves its manifest
+    selection when None. Native entries need no separate download.
     """
     model_dir = Path(model_dir)
     previously_tracked: set[str] | None = None
@@ -110,19 +118,60 @@ def refresh_model(
     else:
         present = files_present(model_dir)
         revision = None
+    want_prefill = enable_prefill or (
+        enable_prefill is None and _PREFILL_FILENAME in (previously_tracked or ())
+    )
+    if want_prefill and present and not (model_dir / _PREFILL_FILENAME).exists():
+        if _PREFILL_FILENAME in (previously_tracked or ()):
+            present = False
+        else:
+            manifest = read_manifest(model_dir)
+            try:
+                present = not hf_file_exists(
+                    repo_id, _PREFILL_FILENAME,
+                    revision=manifest.get("revision") if manifest else version,
+                )
+            except Exception:
+                # Keep a functional core copy usable when the Hub is unavailable.
+                pass
+
+    def download_files():
+        files = download(repo_id, base_dir, revision=version)
+        if want_prefill and _PREFILL_FILENAME not in files:
+            if (model_dir / _PREFILL_FILENAME).exists() or hf_file_exists(
+                repo_id, _PREFILL_FILENAME, revision=version
+            ):
+                download_from_hf(
+                    repo_id, _PREFILL_FILENAME, base_dir=base_dir, revision=version
+                )
+                files.append(_PREFILL_FILENAME)
+            elif enable_prefill:
+                logger.info(
+                    "No separate %s in %s; nothing extra to download. "
+                    "Native prefill entries, when present, are part of the main model.",
+                    _PREFILL_FILENAME, repo_id,
+                )
+        return files
+
     status = ensure_model(
         model_dir,
         repo_id,
         files_present=present,
         version=version if record else None,
         revision=revision,
-        download=lambda: download(repo_id, base_dir, revision=version),
+        download=download_files,
         record=record,
     )
+    if enable_prefill is not None:
+        sync_prefill_tracking(
+            model_dir, repo_id, _PREFILL_FILENAME, enable_prefill=enable_prefill
+        )
     if previously_tracked is not None:
         new_manifest = read_manifest(model_dir)
         now_tracked = set(new_manifest.get("files", [])) if new_manifest is not None else set()
         dropped = previously_tracked - now_tracked
+        if enable_prefill is False:
+            dropped.discard(_PREFILL_FILENAME)
         if dropped:
             # e.g. a tag move to a revision that no longer publishes an
             # optional file (a batched prefill build, a LUT): the refresh
@@ -147,6 +196,7 @@ def download_models(
     no_update: bool = False,
     preserve_version: bool = True,
     tracked_files_present: FilesPresent | None = None,
+    enable_prefill: bool | None = None,
 ) -> dict[str, Path]:
     """Download/refresh ``models``; return ``{name: model_dir}``.
 
@@ -158,6 +208,9 @@ def download_models(
     writing a manifest, so the models are never tracked or refreshed (at your
     own risk); absent an explicit version it downloads the repo's latest
     (HEAD) revision rather than the built-in version tag.
+
+    ``enable_prefill`` uses the shared optional sibling policy in
+    :func:`refresh_model`; None preserves the recorded selection.
 
     Existing manifest versions are preserved unless a version is requested
     explicitly or ``preserve_version=False``. ``label`` is used in log messages.
@@ -200,6 +253,7 @@ def download_models(
                 files_present=files_present,
                 download=download,
                 tracked_files_present=tracked_files_present,
+                enable_prefill=enable_prefill,
             )
         except Exception as exc:
             raise DownloadError(f"Unable to download {label} files from {repo_id}") from exc
@@ -367,6 +421,7 @@ def setup_demo(
     model_version: str | None = None,
     no_update: bool = False,
     tracked_files_present: FilesPresent | None = None,
+    enable_prefill: bool | None = None,
 ) -> dict[str, Path]:
     """Set up a demo: check its requirements, then download/refresh its models.
 
@@ -387,6 +442,7 @@ def setup_demo(
         no_update=no_update,
         preserve_version=False,
         tracked_files_present=tracked_files_present,
+        enable_prefill=enable_prefill,
     )
     logger.info("%s setup complete.", demo_name)
     return result
@@ -425,12 +481,13 @@ def demo_main(
         parser.add_argument(
             "--with-batch-prefill", action="store_true", default=False,
             help=(
-                "Also download and track the optional batched prefill model "
-                "(transformer_prefill.vmfb). It is an extra model, so it uses "
-                "more memory, and its prompt-chunk size is fixed. "
-                "No-op with a warning for repos that have no prefill model; "
-                "re-running setup without the flag stops tracking it (the "
-                "local file is kept)."
+                "Set up the batch-prefill-capable model variant. Legacy tags "
+                "publish a separate fixed-size build (transformer_prefill.vmfb, "
+                "an extra model, so it uses more memory): this flag downloads "
+                "and tracks it. Native tags compile the prefill family into "
+                "transformer.vmfb itself, so the flag is a no-op there. "
+                "Re-running setup without the flag stops tracking a downloaded "
+                "separate prefill model and the local file is kept."
             ),
         )
     add_logging_args(parser)

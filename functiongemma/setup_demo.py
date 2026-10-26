@@ -16,7 +16,7 @@ from gemma3.setup_demo import (
     local_gemma3_model_path,
 )
 from utils.download import resolve_repo_id
-from utils.model_setup import demo_main, ensure_demo_models, setup_demo, sync_prefill_tracking
+from utils.model_setup import demo_main, ensure_demo_models, setup_demo
 
 DEFAULT_MODEL = "default"
 FUNCTIONGEMMA_HF_REPO_MAP = {DEFAULT_MODEL: "Synaptics/functiongemma-270m-it-torq"}
@@ -41,26 +41,17 @@ def ensure_functiongemma_models(model_dir, *, refresh=True):
 
 
 def setup_functiongemma(models=None, model_version=None, no_update=False, enable_prefill=False):
-    result = setup_demo(
+    return setup_demo(
         FUNCTIONGEMMA_HF_REPO_MAP,
         [DEFAULT_MODEL] if models is None else models,
         demo_name="functiongemma",
         requirements=Path(__file__).parent / "requirements.txt",
         files_present=_has_gemma3_files,
-        download=lambda repo_id, base_dir, *, revision=None: _download_gemma3(
-            repo_id, base_dir, revision=revision, enable_prefill=enable_prefill
-        ),
+        download=_download_gemma3,
         model_version=model_version, no_update=no_update,
-        tracked_files_present=lambda path: _gemma3_files_present(path) and (
-            not enable_prefill or (path / "transformer_prefill.vmfb").exists()
-        ),
+        tracked_files_present=_gemma3_files_present,
+        enable_prefill=enable_prefill,
     )
-    for name, model_dir in result.items():
-        sync_prefill_tracking(
-            model_dir, resolve_repo_id(name, FUNCTIONGEMMA_HF_REPO_MAP),
-            "transformer_prefill.vmfb", enable_prefill=enable_prefill,
-        )
-    return result
 
 
 if __name__ == "__main__":

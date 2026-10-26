@@ -113,6 +113,7 @@ def setup_qwen3(
     models: list[str] | None = None,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
     """Set up the Qwen3 demo."""
     if models is None:
@@ -127,6 +128,7 @@ def setup_qwen3(
         download=_download_qwen3,
         model_version=model_version,
         no_update=no_update,
+        enable_prefill=enable_prefill,
         tracked_files_present=_qwen3_files_present,
     )
 
@@ -136,5 +138,6 @@ if __name__ == "__main__":
         setup_qwen3,
         description="Download Qwen3-0.6B (GPTQ INT4) model files.",
         default_models=_DEFAULT_MODELS,
+        supports_prefill=True,
         repo_map=QWEN3_HF_REPO_MAP,
     )
