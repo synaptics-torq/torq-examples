@@ -3,10 +3,10 @@
 Face detection on an image file using a Torq VMFB model.
 
 This Torq example runs the detector only.
+
 ## Setup
 
-See repo [README.md](../README.md) for installing the virtual environment and
-base dependencies.
+See repo [README.md](../README.md) for installing the virtual environment and base dependencies.
 
 Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
@@ -22,8 +22,7 @@ From the repo root, run:
 python setup_demos.py face_id
 ```
 
-This verifies the Python dependencies and downloads the detector model from
-Hugging Face.
+This verifies the Python dependencies and downloads the detector model from Hugging Face.
 
 Downloaded assets are stored at:
 
@@ -54,11 +53,9 @@ python src/infer.py \
   --device torq
 ```
 
-The command writes an annotated image to `face_detection.jpg` and detection
-data to `face_detection_results.json`.
+The command writes an annotated image to `face_detection.jpg` and detection data to `face_detection_results.json`.
 
-The JSON bounding box uses pixel coordinates in the original image, in this
-format:
+The JSON bounding box uses pixel coordinates in the original image, in this format:
 
 ```text
 [x, y, width, height]
@@ -68,8 +65,8 @@ where `x` and `y` are the top-left corner of the face.
 
 ### Options
 
-- `--model`: path to `face_detection.vmfb` (required)
-- `--image`: input image path (required)
+- `--model`: required path to `face_detection.vmfb`
+- `--image`: required input image path
 - `--output`: annotated output image, default `face_detection.jpg`
 - `--json-results`: detection JSON output, default `face_detection_results.json`
 - `--device`: Torq device URI, default `torq`
@@ -78,5 +75,3 @@ where `x` and `y` are the top-left corner of the face.
 - `--confidence-threshold`: minimum detection confidence, default `0.6`
 
 Use `python src/infer.py -h` to see all options.
-
-

@@ -7,24 +7,24 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 | Demo | Description |
 |------|-------------|
 | [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
-| [functiongemma](functiongemma/) | Offline function calling with FunctionGemma 270M (BF16 recommended; precision comparison included) |
+| [functiongemma](functiongemma/) | Offline function calling with FunctionGemma 270M; BF16 recommended, with a precision comparison |
 | [qwen2.5](qwen2_5/) | Interactive chat with Qwen2.5 0.5B Instruct |
-| [qwen3](qwen3/) | Interactive chat with Qwen3 0.6B (non-thinking mode) |
-| [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
-| [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
+| [qwen3](qwen3/) | Interactive chat with Qwen3 0.6B in non-thinking mode |
+| [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny English |
+| [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny English |
 | [object_detection](object_detection/) | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
-| [LiquidAI-LFM2.5](LiquidAI/LiquidAI-LFM2.5/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
-| [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M (INT8) |
+| [LiquidAI-LFM2.5](LiquidAI/LiquidAI-LFM2.5/) | Interactive text chat with LiquidAI LFM2.5 230M / 350M |
+| [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M INT8 |
 | [pose_estimation](pose_estimation/) | YOLOv8n pose estimation |
 | [Face_ID](Face_ID/) | Face detection on an image file |
-| [EmbeddingGemma-2](EmbeddingGemma-2/) | Multimodal embeddings (text, image, video, audio) with Google EmbeddingGemma-2, and search over a media folder |
+| [EmbeddingGemma-2](EmbeddingGemma-2/) | Text, image, video and audio embeddings with Google EmbeddingGemma-2, and search over a media folder |
 
 
 ## Setup
 
-Requires Python 3. 
+Requires Python 3.
 
-1. Use a virtual environment and install requirements. 
+1. Use a virtual environment and install requirements.
 
     From the repo root:
 
@@ -45,7 +45,7 @@ Requires Python 3.
     cd ..
     ```
 
-    Examples: 
+    Examples:
     ```sh
     # Example: Gemma 3
     cd gemma3
@@ -61,7 +61,7 @@ Requires Python 3.
 3. Run the setup script to install the repo on your Python path and download model assets:
 
 
-    From the repo root: 
+    From the repo root:
     ```sh
     # Set up a specific demo
     python setup_demos.py gemma3
@@ -76,18 +76,18 @@ Downloaded models are stored in `./models/` by default. Override with the `$MODE
 
 ### Model versions
 
-This repo's version is recorded in the `VERSION` file at the root and tracks the torq-compiler release the demos are tested against. Built-in model repos on Hugging Face carry matching tags, so a checkout of examples `2.2.0` downloads and maintains the models at tag `v2.2.0`. Setup **fails loudly** if that version does not exist in a model repo.
+This repo's version is recorded in the `VERSION` file at the root and tracks the torq-compiler release the demos are tested against. Built-in model repos on Hugging Face carry matching tags, so a checkout of examples `2.2.0` downloads and maintains the models at tag `v2.2.0`. Setup fails if that version does not exist in a model repo.
 
-- Re-running setup or starting a demo re-checks the tracked tag and refreshes the local copy if the tag moved upstream or local files went missing/corrupt. When the tag moved, only the files whose content actually changed are re-downloaded (the manifest records per-file hashes); a copy whose manifest predates per-file tracking is re-downloaded in full once and then upgrades its manifest.
-- A model is **never** upgraded to a newer version on its own: it stays on the version it was set up with until you explicitly change it. There is no `latest` tracking.
-- `--model-version vX.Y.Z` (per-demo `setup_demo.py` or `setup_demos.py`) pins a specific model version. A pinned version is kept in sync with its own tag but never upgraded.
+- Re-running setup or starting a demo re-checks the tracked tag and refreshes the local copy if the tag moved upstream or local files went missing/corrupt. When the tag moved, only the files whose content actually changed are re-downloaded, using the per-file hashes recorded in the manifest; a copy whose manifest predates per-file tracking is re-downloaded in full once and then upgrades its manifest.
+- A model is never upgraded to a newer version on its own: it stays on the version it was set up with until you explicitly change it. There is no `latest` tracking.
+- `--model-version vX.Y.Z` in a per-demo `setup_demo.py` or `setup_demos.py` pins a specific model version. A pinned version is kept in sync with its own tag but never upgraded.
 - `name:version` in a model argument pins a single model, e.g. `python setup_demo.py default:v2.0.0 custom/gemma3`.
-- Custom (non-Synaptics) repos have no default version: `python setup_demo.py custom/gemma3` downloads the repo's latest (HEAD) revision, untracked.
-- `--no-update` downloads without writing a `.manifest.json`; the model is then excluded from the tracking system entirely (no checks, no refreshes), at your own risk.
+- Custom repos outside Synaptics have no default version: `python setup_demo.py custom/gemma3` downloads the repo's latest HEAD revision, untracked.
+- `--no-update` downloads without writing a `.manifest.json`; the model is then excluded from the tracking system entirely, with no checks or refreshes, at your own risk.
 
 ### Offline / airgapped runs
 
-Version checks use a short timeout (default 5s; override with `TORQ_HF_CHECK_TIMEOUT`) and fall back to the local files with a warning when Hugging Face is unreachable, so the demos run fully offline once their models are present. To skip the check entirely (for fast or airgapped runs), pass `--no-refresh` to a demo's `infer.py`.
+Version checks time out after 5 seconds by default; override this with `TORQ_HF_CHECK_TIMEOUT`. When Hugging Face is unreachable, the demos warn and use local files, so they run fully offline once their models are present. For fast or airgapped runs, pass `--no-refresh` to a demo's `infer.py` to skip the check entirely.
 
 > [!TIP]
 > Some models may require a HuggingFace access token. Set `HF_TOKEN` in your environment before running setup:
@@ -107,7 +107,7 @@ Each demo lives in its own directory. To run a demo, `cd` into its directory and
 python src/infer.py -m ../models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb --instruct-model
 ```
 
-The `-m`/`--model` (or `--model-dir`) flag is optional in every demo: it defaults to the model the demo's setup downloaded, and fails with a pointer to `setup_demos.py` when no local model is present.
+The `-m`/`--model` or `--model-dir` flag is optional in every demo: it defaults to the model the demo's setup downloaded, and fails with a pointer to `setup_demos.py` when no local model is present.
 
 Run `python src/infer.py -h` to see all available inference options.
 

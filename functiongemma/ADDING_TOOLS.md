@@ -39,14 +39,15 @@ FUNCTIONS["get_country"] = get_country
 ```
 
 Good function calling practices:
+
 * Use short, distinct function names and descriptions.
 * Keep property names identical to the callable's keyword arguments, and list mandatory arguments in `required`.
-* The declaration renderer supports object parameters with scalar properties (`string`, `number`, `integer`, `boolean`) and does not render nested property schemas, array item schemas, enums, or defaults. Keep tools within that subset unless you also extend the renderer and its tests. The parser's ability to read nested values does not imply support for declaring their schemas.
+* The declaration renderer supports object parameters with scalar properties of type `string`, `number`, `integer` or `boolean` and does not render nested property schemas, array item schemas, enums, or defaults. Keep tools within that subset unless you also extend the renderer and its tests. The parser's ability to read nested values does not imply support for declaring their schemas.
 * Validate arguments inside the callable. The dispatcher catches missing or unexpected keyword arguments, but it does not enforce schema types or Python annotations. Keep execution in the explicit registry and validate any paths, destinations, or actions a future tool accepts.
-* Return small values such as strings, numbers, booleans, lists, or dictionaries with simple identifier keys. 
+* Return small values such as strings, numbers, booleans, lists, or dictionaries with simple identifier keys.
 
 > [!TIP]
-> Expected failures can raise `ValueError`; the CLI sends execution exceptions back to the model as `{"error": "..."}`. Avoid putting secrets into exception messages. 
+> Expected failures can raise `ValueError`; the CLI sends execution exceptions back to the model as `{"error": "..."}`. Avoid putting secrets into exception messages.
 
 The CLI loads `DEFAULT_TOOLS` when constructing its runner; restart it after edits. Python callers can instead pass `tools=[...]` to `FunctionGemmaStatic`, but the standard CLI still executes calls through `FUNCTIONS`. A custom declaration list must have matching registered implementations.
 
@@ -69,7 +70,7 @@ Try each request in a fresh CLI session first:
 | What is the temperature in London? | `get_temperature(city='London')` -> `18` |
 | What country is Atlantis in? | `get_country(city='Atlantis')` -> an unknown-city tool error |
 
-Look for the CLI's `[function]` and `[result]` lines since a plausible text answer alone does not prove the tool ran. Note that the calls above are acceptance targets and not guaranteed model outputs. Also try paraphrases, missing arguments, requests needing no tool, and a second user turn. 
+Look for the CLI's `[function]` and `[result]` lines since a plausible text answer alone does not prove the tool ran. Note that the calls above are acceptance targets and not guaranteed model outputs. Also try paraphrases, missing arguments, requests needing no tool, and a second user turn.
 
 Tool declarations consume the compiled model's context along with user prompts, history, generated calls, and tool results. Adding tools can exhaust a small export's capacity. Shorten declarations, replace unused tools in both registries, or use an export compiled for a larger context. Raising `--max-inp-len` or `--max-seq-len` cannot enlarge the compiled KV cache. Oversized prompts are rejected, and partial-history sliding windows are disabled for this demo.
 

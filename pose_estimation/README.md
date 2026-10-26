@@ -15,16 +15,14 @@ python setup_demos.py pose_estimation
 
 This verifies Python dependencies for the demo and downloads the pose estimation assets from Hugging Face.
 
-By default the demo downloads the model version matching this repo's `VERSION` file (see the
-[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead,
-use:
+By default the demo downloads the model version matching this repo's `VERSION` file. The [repo README](../README.md) describes the versioning scheme. To pin a specific release tag instead, use:
 
 ```sh
 cd pose_estimation
 python setup_demo.py --model-version v2.2.0
 ```
 
-A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
+A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking and does not write a `.manifest.json`, at your own risk.
 
 Downloaded assets are stored at:
 
@@ -33,6 +31,7 @@ models/Synaptics/yolov8-pose-nano-320-int8-torq/
 ```
 
 The setup downloads:
+
 - `yolo_pose.vmfb`
 - any files present under `samples/` in the Hugging Face repo
 
@@ -81,9 +80,10 @@ python src/infer.py \
   --display
 ```
 
-`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
+`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` or `cpu`. The default is `dmabuf`.
 
 Image inference options:
+
 - `--device`: Torq device URI, defaults to `torq`
 - `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
 - `--device-io`: preallocate input buffers and keep outputs as device arrays
@@ -157,6 +157,7 @@ python src/infer_video.py \
 For camera input, use `--camera-device auto` or a specific `/dev/video*` path. For video files and RTSP streams, you will usually want `--rotate 0`.
 
 Video inference options:
+
 - `--output`: save annotated video to a file
 - `--json-results`: JSON output path for detections, default `pose_results.json`
 - `--display`: show annotated frames live

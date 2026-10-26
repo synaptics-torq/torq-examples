@@ -16,14 +16,14 @@ From the repository root on the board:
 python functiongemma/src/infer.py -m /path/to/compiled/transformer.vmfb --no-refresh --no-batch-prefill-model
 ```
 
-`-m`/`--model` defaults to the model downloaded during setup. Pass `-m` to use a different (e.g. a custom fine-tuned HF repo) model instead.
+`-m`/`--model` defaults to the model downloaded during setup. Pass `-m` to use a different model, such as one from a custom fine-tuned HF repo.
 
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
-When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions (default: 2). It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits.
+When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions. The default is 2 tokens. It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits.
 
 Run `python src/infer.py -h` to see all available inference options.
 
@@ -35,7 +35,7 @@ The runner warms the KV cache with BOS and the developer instruction and tool de
 
 The built-in `get_temperature(city)` uses an offline sample table, not live weather. Try `What is the temperature in London?`; a successful call is `get_temperature(city='London')`, returning `18`. Unknown functions and execution failures become tool error responses. The demo does not execute arbitrary code. Add tools to `DEFAULT_TOOLS` and `FUNCTIONS` in `src/function_tools.py`; the declaration renderer supports the demo's object parameters with scalar properties.
 
-`--max-inp-len` includes the developer prefix and the current prompt. Oversized prompts are rejected rather than truncated. Sliding cache windows are disabled because retaining a few trailing tokens loses the function-call context. If a new user prompt cannot fit after the conversation history, the runner starts from its developer prefix. Tool responses that cannot fit, interrupted turns, malformed calls (including calls that omit the required response-start stop), multiple simultaneous calls, and exchanges that exhaust their generation budget discard the conversation before the next user prompt.
+`--max-inp-len` includes the developer prefix and the current prompt. Oversized prompts are rejected rather than truncated. Sliding cache windows are disabled because retaining a few trailing tokens loses the function-call context. If a new user prompt cannot fit after the conversation history, the runner starts from its developer prefix. Tool responses that cannot fit, interrupted turns, malformed calls, multiple simultaneous calls, and exchanges that exhaust their generation budget discard the conversation before the next user prompt. Calls that omit the required response-start stop are malformed.
 
 > [!NOTE]
 > Google documents [single-turn and parallel calls as the model's trained workflows](https://ai.google.dev/gemma/docs/functiongemma/formatting-and-best-practices); multi-turn state tracking and dependent chains require additional training or application state management. This demo currently accepts one call at a time and rejects simultaneous calls.

@@ -33,7 +33,7 @@ An example folder must contain:
 
 The setup demo_script entry point must use the `utils.model_setup.demo_main` function.
 
-Text-generation demos pass `supports_prefill=True` to `demo_main` and forward `enable_prefill` to the shared `setup_demo` or `download_models` helper. Those helpers download and track an optional `transformer_prefill.vmfb` when requested, preserve the recorded selection during inference-time refresh, and stop tracking it when setup runs without the flag (keeping the local file). Native prefill entries in the main model need no extra setup. Keep prefill policy out of demo-specific asset download and completeness hooks.
+Text-generation demos pass `supports_prefill=True` to `demo_main` and forward `enable_prefill` to the shared `setup_demo` or `download_models` helper. Those helpers download and track an optional `transformer_prefill.vmfb` when requested, preserve the recorded selection during inference-time refresh, and stop tracking it when setup runs without the flag while keeping the local file. Native prefill entries in the main model need no extra setup. Keep prefill policy out of demo-specific asset download and completeness hooks.
 
 The infer script entry point must use the `utils.tasks.[task_category].infer_main` function.
 
@@ -56,21 +56,16 @@ To add a new task category:
 3. Implement the `infer_main` and `validate_main` functions.
 4. Add at least one test in the `tests/tasks/[task_category]/` folder for the new task category.
 
-The tests are run on the host, in an environment where a torq-compiler wheel is installed. They
-run compilation of models in an appropriate environment for each example 
-(see `requirements_compile.txt`) and setup and execute the examples in a target board
-using the `torq.utils.boards` tooling.
+The tests are run on the host, in an environment where a torq-compiler wheel is installed. They compile models in the environment specified by each example's `requirements_compile.txt`, then set up and execute the examples on a target board using the `torq.utils.boards` tooling.
 
 Tests have two phases:
 
-1. Setup phase: upload example to the target board and run any necessary setup commands, then 
-   download all assets required for the test ( input data, expected results).
+1. Setup phase: upload example to the target board and run any necessary setup commands, then download all assets required for the test, including input data and expected results.
 2. Execution phase: run the inference for the test on the target board and compare the output against the expected results.
 
 Tests rely on the command line interface provided by the example scripts to execute the setup and validation phases.
 
-The execution phase outputs a PASS/FAIL result based on some criteria (e.g. comparison with expected results) and
-performance metrics in the following format:
+The execution phase outputs a PASS/FAIL result based on criteria such as comparison with expected results and performance metrics in the following format:
 
 ```json
 {
@@ -88,7 +83,7 @@ performance metrics in the following format:
 
 where unit is one of:
 
-- `ns` (nanoseconds)
-- `hz` (rates)
-- `percent` (percentage)
-- `bytes` (memory usage)
+- `ns`: nanoseconds
+- `hz`: rates
+- `percent`: percentage
+- `bytes`: memory usage

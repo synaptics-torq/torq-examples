@@ -1,8 +1,6 @@
 # Qwen3 Demo
 
-Interactive chat with [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) on the
-Torq NPU, in thinking mode: the model reasons in a `<think>` block before it
-answers. The weights are INT4, calibrated with GPTQ.
+Interactive chat with [Qwen3-0.6B](https://huggingface.co/Qwen/Qwen3-0.6B) on the Torq NPU, in thinking mode: the model reasons in a `<think>` block before it answers. The weights are INT4, calibrated with GPTQ.
 
 ## Setup
 
@@ -22,12 +20,9 @@ From the repo root, run:
 python setup_demos.py qwen3
 ```
 
-This downloads the model files to `models/Synaptics/Qwen3-0.6B-GPTQ-int4-torq/`:
-`transformer.vmfb`, `lm_head.vmfb.trim`, `token_embeddings.npy`, `token_id_lut.npy`,
-`config.json` and `tokenizer.json`.
+This downloads the model files to `models/Synaptics/Qwen3-0.6B-GPTQ-int4-torq/`: `transformer.vmfb`, `lm_head.vmfb.trim`, `token_embeddings.npy`, `token_id_lut.npy`, `config.json` and `tokenizer.json`.
 
-By default the demo downloads the model version matching this repo's `VERSION` file (see the
-[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
+By default the demo downloads the model version matching this repo's `VERSION` file. The [repo README](../README.md) describes the versioning scheme. To pin a specific release tag instead, use:
 
 ```sh
 cd qwen3
@@ -43,45 +38,30 @@ cd qwen3
 python src/infer.py --instruct-model
 ```
 
-`-m`/`--model` defaults to the downloaded `transformer.vmfb`. The sibling
-`lm_head.vmfb.trim` is picked up automatically. The context window (system prompt +
-conversation + answer) is fixed when the model is exported: 256 tokens for the hosted
-model, or the value of `torq-export-model qwen -t/--max-gen-tokens` for your own export.
+`-m`/`--model` defaults to the downloaded `transformer.vmfb`. The sibling `lm_head.vmfb.trim` is picked up automatically. The context window covers the system prompt, conversation and answer. Its size is fixed when the model is exported: 256 tokens for the hosted model, or the value of `torq-export-model qwen -t/--max-gen-tokens` for your own export.
 
 ### Thinking mode
 
-By default the model thinks before it answers. While it thinks, the demo shows
-`[thinking...]`, and then it prints only the answer. Thinking gives better
-answers on reasoning, word problems and code, but it takes time: a short
-question usually needs 100 to 300 thinking tokens, which is about 20 to 50 s
-before the answer starts.
+By default the model thinks before it answers. While it thinks, the demo shows `[thinking...]`, and then it prints only the answer. Thinking gives better answers on reasoning, word problems and code, but it takes time: a short question usually needs 100 to 300 thinking tokens, which is about 20 to 50 s before the answer starts.
 
 | Option | Effect |
 |---|---|
 | `--show-thinking` | Print the `<think>` block before the answer |
-| `--no-thinking` | Answer at once, without reasoning (faster, less accurate) |
+| `--no-thinking` | Answer at once without reasoning; faster, less accurate |
 
-The context window also holds the thinking. When the context is full before
-the model finishes thinking, the demo stops and prints a note instead of an
-answer. Use `--no-thinking` for long questions, or export the model with a
-larger context.
+The context window also holds the thinking. When the context is full before the model finishes thinking, the demo stops and prints a note instead of an answer. Use `--no-thinking` for long questions, or export the model with a larger context.
 
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
 
-Type `exit` or `quit` to stop the chat session. Run `python src/infer.py -h` to see all
-available inference options.
+Type `exit` or `quit` to stop the chat session. Run `python src/infer.py -h` to see all available inference options.
 
 ## Build the model
 
-The model files on Hugging Face come from one
-[torq-tools](https://github.com/synaptics-torq/torq-tools) command (see its
-`src/torq/models/qwen/README.md`):
+The model files on Hugging Face come from one [torq-tools](https://github.com/synaptics-torq/torq-tools) command, documented in its `src/torq/models/qwen/README.md`:
 
 ```sh
 torq-export-model qwen -s qwen3-0.6b
 ```
 
-It writes `transformer.vmfb`, `lm_head.vmfb.trim` and the host files to
-`models/<hf-repo>/export/torq/converted/static/`. Pass that `transformer.vmfb`
-with `-m` to use your own build.
+It writes `transformer.vmfb`, `lm_head.vmfb.trim` and the host files to `models/<hf-repo>/export/torq/converted/static/`. Pass that `transformer.vmfb` with `-m` to use your own build.

@@ -1,6 +1,6 @@
 # Object Detection Demo
 
-YOLOv8n and YOLO26 (nano + small) object detection using Torq VMFB models.
+YOLOv8n and the nano and small variants of YOLO26 object detection using Torq VMFB models.
 
 ## Setup
 
@@ -22,25 +22,24 @@ python setup_demos.py object_detection
 
 This verifies Python dependencies for the demo and downloads the object detection assets from Hugging Face.
 
-By default the demo downloads the model version matching this repo's `VERSION` file (see the
-[repo README](../README.md) for the versioning scheme). To pin a specific release tag instead,
-use:
+By default the demo downloads the model version matching this repo's `VERSION` file. The [repo README](../README.md) describes the versioning scheme. To pin a specific release tag instead, use:
 
 ```sh
 cd object_detection
 python setup_demo.py --model-version v2.2.0
 ```
 
-A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking entirely (no `.manifest.json`), at your own risk.
+A pinned version is kept in sync with its own tag but never upgraded. `--no-update` skips model tracking and does not write a `.manifest.json`, at your own risk.
 
-The YOLO26 repo has no version tags yet, so its models are downloaded at the repo's latest (HEAD) revision and left untracked: re-runs only repair missing files rather than following a tag.
+The YOLO26 repo has no version tags yet, so its models are downloaded at the repo's latest HEAD revision and left untracked: re-runs only repair missing files rather than following a tag.
 
-Downloaded assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/` (YOLOv8n) and `models/Synaptics/yolov26n_od/` (YOLO26n and YOLO26s).
+Downloaded YOLOv8n assets are stored at `models/Synaptics/yolov8-od-nano-320-int8-torq/`. YOLO26n and YOLO26s assets are stored at `models/Synaptics/yolov26n_od/`.
 
 The setup downloads, for each model:
-- the model VMFBs (`yolo_od.vmfb`, or `yolo26n_npu.vmfb` and `yolo26s_npu.vmfb`)
+
+- the model VMFBs: `yolo_od.vmfb`, or `yolo26n_npu.vmfb` and `yolo26s_npu.vmfb`
 - `labels.json`
-- sample media from the Hugging Face repo (under `samples/`, or at the repo root such as `bus.jpg`)
+- sample media from `samples/` in the Hugging Face repo or from its root, such as `bus.jpg`
 
 ## Running
 
@@ -69,7 +68,7 @@ export DISPLAY_WIDTH=480
 
 ### Image inference
 
-`--model` is optional: it defaults to the model file setup downloaded for `--variant` (the YOLOv8n model by default).
+`--model` is optional: it defaults to the model file setup downloaded for `--variant`. The default is the YOLOv8n model.
 
 ```sh
 python src/infer.py \
@@ -91,8 +90,7 @@ python src/infer.py \
   --display
 ```
 
-For YOLO26, pass `--variant yolo26n` (or `--variant yolo26s` with `yolo26s_npu.vmfb`) so the
-NMS-free head is decoded with the right quantization parameters:
+For YOLO26, pass `--variant yolo26n`, or `--variant yolo26s` with `yolo26s_npu.vmfb`, so the NMS-free head is decoded with the right quantization parameters:
 
 ```sh
 python src/infer.py \
@@ -103,15 +101,14 @@ python src/infer.py \
   --device-io
 ```
 
-On `samples/soccer.jpg` both sizes detect all five players (YOLO26s additionally
-picks up the sports ball).
+On `samples/soccer.jpg` both sizes detect all five players. YOLO26s also picks up the sports ball.
 
-Measured on an SL2610 board (320x320 int8, `iree-benchmark-module`, 10 reps): YOLO26n ~13 ms,
-YOLO26s ~33 ms per inference.
+Measured on an SL2610 board with 320x320 int8 input and 10 repetitions of `iree-benchmark-module`: YOLO26n ~13 ms, YOLO26s ~33 ms per inference.
 
-`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` (default) or `cpu`.
+`--tda` selects the Torq buffer allocator and lets you choose `dmabuf` or `cpu`. The default is `dmabuf`.
 
 Image inference options:
+
 - `--model`: model VMFB path, defaults to the one setup_demo.py downloaded for `--variant`
 - `--variant {yolo26n,yolo26s,yolov8}`: model head variant, defaults to `yolov8`
 - `--labels`: label JSON file to map class IDs to names
@@ -182,6 +179,7 @@ python src/infer_video.py \
 For camera input, use `--camera-device auto` or a specific `/dev/video*` path. For video files and RTSP streams, you will usually want `--rotate 0`.
 
 Video inference options:
+
 - `--model`: model VMFB path, defaults to the one setup_demo.py downloaded for `--variant`
 - `--variant {yolo26n,yolo26s,yolov8}`: model head variant, defaults to `yolov8`
 - `--output`: save annotated video to a file
