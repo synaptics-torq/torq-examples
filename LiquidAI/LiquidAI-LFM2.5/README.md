@@ -25,11 +25,14 @@ python setup_demos.py LiquidAI-LFM2.5
 The model version defaults to the one matching this repo's `VERSION` file (see the
 [repo README](../../README.md) for the versioning scheme); `setup_demos.py` and the demo's
 `setup_demo.py` both support `--model-version` to pin a specific release tag and `--no-update`
-to skip model tracking entirely. By default setup does **not** download the optional
-batched prefill model; pass `--with-batch-prefill` to also fetch and track
-`transformer_prefill.vmfb` (an extra model, so it uses more memory, with a fixed
-64-token prompt chunk size; a no-op with a warning for repos that have no prefill
-model). Re-running setup without the flag removes it from tracking (the local file
+to skip model tracking entirely. Batched prompt prefill comes from the model itself:
+model tags publish either a **native single-file build** — a lone
+`transformer.vmfb` with the prefill family (`main_4`, `main_16`, `main_64`,
+`main_256`) compiled in, sharing one weight load, nothing extra to download —
+or a **legacy split build** with a separate fixed-64-token
+`transformer_prefill.vmfb`, which setup downloads only with `--with-batch-prefill`
+(an extra model, so it uses more memory). Re-running setup without the flag
+removes a downloaded `transformer_prefill.vmfb` from tracking (the local file
 is kept but no longer checked or refreshed).
 
 This fetches the artifacts from
@@ -38,8 +41,8 @@ into `models/Synaptics/LiquidAI-LFM2.5-230M/`:
 
 ```
 models/Synaptics/LiquidAI-LFM2.5-230M/
-├── transformer.vmfb           ← decoder body (hidden output, 256-token KV cache)
-├── transformer_prefill.vmfb   ← optional: batched prefill build (setup only downloads it with the --with-batch-prefill flag)
+├── transformer.vmfb           ← decoder body (hidden output, 256-token KV cache; native builds carry main_4/main_16/main_64/main_256 prefill entries inside)
+├── transformer_prefill.vmfb   ← optional legacy split build: batched prefill (setup only downloads it with the --with-batch-prefill flag)
 ├── lm_head.vmfb               ← standalone lm_head (hidden -> logits; skipped during prefill)
 ├── token_embeddings.npy       ← CPU-side embedding LUT
 ├── config.json
@@ -85,15 +88,24 @@ format + system-prompt warm-up (drop it for a base/completion model). Run
 > inputs as NumPy arrays.
 
 > [!TIP]
-> When the model directory contains a `transformer_prefill.vmfb` (a fixed-size
-> batched prefill model exported alongside `transformer.vmfb`), the demo picks
-> it up automatically: complete prompt chunks run through the prefill model and
-> only the final prompt unit samples a token, so time-to-first-token drops
-> sharply. The prefill build has the lm_head baked in for its final position.
+> Batched prompt prefill is picked up automatically when available, in this
+> order:
+>
+> * **Native prefill family** — a `transformer.vmfb` compiled with the native
+>   batch prefill feature contains `main` plus `main_4`, `main_16`, `main_64`,
+>   `main_256` entries in one image that shares a single weight load. The demo
+>   chunks the prompt with the largest entry that fits (a 21-token prompt runs
+>   as `main_16`, `main_4`, `main`), all but the final unit skip the LM head, and
+>   time-to-first-token drops sharply (about 10x on the 230M build tested).
+> * **Sibling prefill model** — when the main model has no native entries, a
+>   `transformer_prefill.vmfb` next to it (a fixed-size batched prefill model
+>   exported alongside `transformer.vmfb`) is picked up automatically; that
+>   build has the lm_head baked in for its final position.
+>
 > Any prompt remainder and all generated tokens still use `transformer.vmfb`,
-> and both paths share the same KV cache. Use `--batch-prefill-model PATH` to point
-> at a specific prefill model, or `--no-batch-prefill-model` to force single-token
-> prompt prefill.
+> and the chunked and decode paths share the same KV/conv cache. Use
+> `--batch-prefill-model PATH` to force a specific sibling prefill model, or
+> `--no-batch-prefill-model` to force single-token prompt prefill.
 
 ## Model notes
 
