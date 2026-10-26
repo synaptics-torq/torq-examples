@@ -170,7 +170,7 @@ class TestStepBuffers:
         runner._llm_tokens_step(body, [1, 2, 3, 4], 8, compute_logits=False, sample_next=False)
 
         inputs, kwargs = body.infer_calls[0]
-        assert kwargs == {}
+        assert kwargs == {"entry": None}
         token_in, pos_in, mask_in = inputs
         assert token_in is runner._prefill_emb_buf
         assert np.array_equal(token_in[0], runner._token_embeddings[[1, 2, 3, 4]])
@@ -333,6 +333,7 @@ class RecordingPrefill(LiquidStatic):
     def __init__(self):
         self.calls = []
         # _prefill() branches on these.
+        self._native_prefill_entries = []
         self._prefill_model = None
         self._prefill_size = None
 

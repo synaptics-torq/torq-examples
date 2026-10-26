@@ -238,7 +238,7 @@ class ScriptedCache:
     def tokens(self):
         return self._kv_cache[0].to_host().reshape(-1)
 
-    def infer(self, inputs):
+    def infer(self, inputs, *, entry=None):
         tokens = inputs[0][0].tolist()
         pos = int(inputs[1][0, 0])
         assert 0 <= pos and pos + len(tokens) <= len(self.tokens)
@@ -288,6 +288,7 @@ def _tools_runner(script: dict[int, int], capacity: int = 64, tokenizer: TextTok
     runner._pos_buf = np.zeros((1, 1), dtype=np.int64)
     runner._extra_step_inputs = []
     runner._prefill_model = None
+    runner._native_prefill_entries = []
     runner._prefill_size = None
     runner._pending_token = None
     runner._cache_tokens = []

@@ -55,8 +55,10 @@ class Cache:
     def tokens(self):
         return self._kv_cache[0].to_host().reshape(-1)
 
-    def infer(self, inputs):
+    def infer(self, inputs, *, entry=None):
         tokens = inputs[0][0].tolist()
+        if entry is not None:
+            assert entry == f"main_{len(tokens)}"
         pos = int(inputs[1][0, 0])
         assert 0 <= pos and pos + len(tokens) <= len(self.tokens)
         self.calls.append((tokens, pos))
@@ -83,11 +85,11 @@ class PositionCache(Cache):
     def tokens(self):
         return self._kv_cache[0].to_host()[0, 0, :, 0]
 
-    def infer(self, inputs):
+    def infer(self, inputs, *, entry=None):
         pos = int(inputs[1][0, 0])
         positions = self._kv_cache[0].to_host()[0, 0, :, 1]
         np.testing.assert_array_equal(positions[:pos], np.arange(pos))
-        result = super().infer(inputs)
+        result = super().infer(inputs, entry=entry)
         positions[pos:pos + inputs[0].shape[1]] = np.arange(pos, pos + inputs[0].shape[1])
         return result
 
@@ -121,7 +123,10 @@ def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=
     runner._model.tokens[:runner._warmup_len] = 7
     runner._cache_tokens = runner._model.tokens[:runner._warmup_len].tolist()
     runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()] if instruct else []
-    runner._prefill_model = runner._model if batched else None
+    runner._prefill_model = runner._model if batched is True else None
+    runner._native_prefill_entries = [2] if batched == "native" else []
+    runner._native_prefill_emb_buf = None
+    runner._native_prefill_id_buf = np.zeros((1, 2), dtype=np.int64)
     runner._prefill_size = 2 if batched else None
     runner._prefill_emb_buf = runner._emb_buf = None
     runner._prefill_id_buf = np.zeros((1, 2), dtype=np.int64)
@@ -136,7 +141,7 @@ def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=
 
 @pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static, LiquidStatic])
 @pytest.mark.parametrize("instruct", [False, True])
-@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("batched", [False, True, "native"])
 @pytest.mark.parametrize("cap", [None, 1])
 def test_next_turn_preserves_final_prediction(cls, instruct, batched, cap):
     runner = _runner(cls, instruct, batched, cap)
@@ -197,7 +202,7 @@ def test_full_cache_without_window_discards_previous_prediction():
 
 @pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
 @pytest.mark.parametrize("instruct", [False, True])
-@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("batched", [False, True, "native"])
 def test_full_cache_reserves_room_for_complete_prompt(cls, instruct, batched):
     runner = _runner(cls, instruct, batched, cap=1, capacity=8)
     runner._turn_pos = 8
@@ -249,7 +254,7 @@ def test_in_turn_rollover_then_next_turn_preserves_pending_token():
 
 
 @pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
-@pytest.mark.parametrize("batched", [False, True])
+@pytest.mark.parametrize("batched", [False, True, "native"])
 @pytest.mark.parametrize("instruct", [False, True])
 def test_default_window_recomputes_key_positions_across_turns(cls, batched, instruct):
     runner = _runner(cls, instruct=instruct, batched=batched, capacity=8)
@@ -257,7 +262,7 @@ def test_default_window_recomputes_key_positions_across_turns(cls, batched, inst
     runner._model.tokens[:runner._warmup_len] = 7
     runner._model._kv_cache[0].to_host()[0, 0, :runner._warmup_len, 1] = np.arange(runner._warmup_len)
     runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()]
-    runner._prefill_model = runner._model if batched else None
+    runner._prefill_model = runner._model if batched is True else None
     runner._cache_keep_n = 2
     for _ in range(4):
         assert runner.run("next") == "20 21 99"
