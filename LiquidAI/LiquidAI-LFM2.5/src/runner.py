@@ -34,10 +34,13 @@ class LiquidStatic(DecoderOnlyLLMRunner):
     metadata, so legacy two-input exports keep working unchanged. With
     ``lm_head_path`` the decoder is split into a body (hidden output) and a
     standalone lm_head, so prefill tokens skip the ``[1024, 65536]`` lm_head
-    -> lower TTFT. An optional sibling ``transformer_prefill.vmfb`` (a
-    fixed-size batched prompt-chunk build with the lm_head baked in) is picked
-    up automatically; complete prompt chunks run through it on the shared KV
-    cache and only the final prompt unit needs a sampled token.
+    -> lower TTFT. Prompt chunks then use whichever batched prefill is
+    available: a native prefill family compiled into the model itself
+    (``main_4``/``main_16``/… entries, invoked by name on the same loaded
+    weights), else an optional sibling ``transformer_prefill.vmfb`` (a
+    fixed-size batched prompt-chunk build with the lm_head baked in); both
+    run complete prompt chunks on the shared KV state and only the final
+    prompt unit needs a sampled token.
     """
 
     __slots__ = ("_instruct_model", "_sys_prompt", "_nl_token_id", "_double_nl_token_id")
