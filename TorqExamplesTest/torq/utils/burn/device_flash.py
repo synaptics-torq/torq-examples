@@ -101,6 +101,29 @@ def resolve_values(args, required_keys=None, config_keys=None):
     return {name: values[name] for name in required_environment_keys}
 
 
+# --- U-Boot version check ---------------------------------------------------
+
+# Requires a trailing '-' or line break so a partially received line is not matched.
+UBOOT_VERSION_PATTERN = re.compile(r'U-Boot\s+([^\s-]+)(?=[-\r\n])')
+
+
+def parse_uboot_build_version(version_output):
+    match = UBOOT_VERSION_PATTERN.search(version_output)
+    if not match:
+        return None
+    build_version = re.search(r'(\d{12})$', match.group(1))
+    return build_version.group(1) if build_version else None
+
+
+def image_needs_upgrade(current_version, build_version=None):
+    build_version = build_version or os.environ.get('BUILD_VERSION')
+    if not build_version or len(build_version) != 12 or not build_version.isdigit():
+        raise ValueError('BUILD_VERSION must use the YYYYMMDDHHMM format')
+    if current_version is None:
+        return True
+    return int(current_version) < int(build_version)
+
+
 # --- firmware image preparation ---------------------------------------------
 
 def _get_tftp_ip():
@@ -169,6 +192,16 @@ def _build_image_url(build_version=None, profile=None):
             encoded_profile,
         )
     )
+
+
+def _parse_image_url(image_url):
+    match = re.search(
+        r'/(\d{12})/LinuxSDK-Serpens/([^/]+)/',
+        unquote(urlparse(image_url).path),
+    )
+    if not match:
+        return None, None
+    return match.group(1), match.group(2)
 
 
 def _build_image_local(build_version=None, profile=None, tftp_root=None):
@@ -303,23 +336,26 @@ def _find_emmc_image(download_root):
     return shallowest[0]
 
 
-def _prepare_image(image_url=None, image_local=None, archive_prefix=None):
+def _prepare_image(
+    image_url=None, image_local=None, archive_prefix=None,
+    build_version=None, profile=None,
+):
     if image_local:
         image_local = Path(image_local).expanduser()
     elif os.environ.get('IMAGE_LOCAL'):
         image_local = Path(os.environ['IMAGE_LOCAL']).expanduser()
     else:
-        image_local = _build_image_local()
+        image_local = _build_image_local(build_version, profile)
     local_emmc_image = image_local / 'eMMCimg'
-    if not image_url:
-        if not local_emmc_image.is_dir() or not _is_usable_emmc_image(local_emmc_image):
-            raise ValueError(
-                'IMAGE_URL was not provided and no local eMMC image exists at {}'.format(
-                    local_emmc_image
-                )
-            )
+    if local_emmc_image.is_dir() and _is_usable_emmc_image(local_emmc_image):
         print('Using local eMMC image at {}'.format(local_emmc_image), flush=True)
         return local_emmc_image
+    if not image_url:
+        raise ValueError(
+            'IMAGE_URL was not provided and no local eMMC image exists at {}'.format(
+                local_emmc_image
+            )
+        )
 
     parsed_url = urlparse(image_url)
     if parsed_url.scheme not in ('http', 'https') or not parsed_url.netloc:
@@ -381,10 +417,21 @@ def _prepare_image(image_url=None, image_local=None, archive_prefix=None):
 
 
 def prepare_tftp_image(image_url=None):
-    if not image_url:
+    build_version = profile = None
+    if image_url:
+        build_version, profile = _parse_image_url(image_url)
+        if build_version and profile:
+            os.environ['BUILD_VERSION'] = build_version
+            os.environ['PROFILE'] = profile
+    else:
         image_url = _build_image_url()
-    _prepare_image(image_url, archive_prefix='eMMCimg_')
-    return _build_tftppath()
+    _prepare_image(
+        image_url,
+        archive_prefix='eMMCimg_',
+        build_version=build_version,
+        profile=profile,
+    )
+    return _build_tftppath(build_version, profile)
 
 
 # --- platform-info artifact generation --------------------------------------
@@ -395,6 +442,10 @@ def _resolve_platforms(config_path, sections=None, tftppath=None):
     platforms = []
     for section_name in section_names:
         resolved = _read_config(config_path, section_name)
+        if tftppath:
+            for key in ('BUILD_VERSION', 'PROFILE'):
+                if os.environ.get(key):
+                    resolved[key] = os.environ[key]
         section_tftppath = tftppath or _build_tftppath(
             resolved.get('BUILD_VERSION'), resolved.get('PROFILE')
         )

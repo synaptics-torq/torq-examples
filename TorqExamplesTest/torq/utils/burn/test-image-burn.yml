@@ -9,7 +9,7 @@ on:
         default: ''
         type: string
       profile:
-        description: Profile name used to build TFTPPATH; defaults to sl2619_scarthgap when omitted
+        description: Profile name used to build TFTPPATH; defaults to sl2619_oobe_scarthgap when omitted
         required: false
         default: ''
         type: string
@@ -54,8 +54,8 @@ jobs:
         working-directory: python/torq/utils/burn
         env:
           BUILD_VERSION: ${{ inputs.build_version }}
-          PROFILE: ${{ inputs.profile != '' && inputs.profile || 'sl2619_scarthgap' }}
-          IMAGE_URL: ${{ inputs.image_url }}
+          PROFILE: ${{ inputs.profile != '' && inputs.profile || 'sl2619_oobe_scarthgap' }}
+          IMAGE_URL: ${{ inputs.image_url || 'http://iotmmswfileserver.synaptics.com:8000/magnolia/202610/20261024/202610242301/LinuxSDK-Serpens/sl2619_oobe_scarthgap/Eng_Build' }}
           # TODO: internal URL, move to a repo/org variable before open-sourcing
           IMAGE_BASE_URL: http://iotmmswfileserver.synaptics.com:8000/magnolia
         run: |
@@ -66,12 +66,14 @@ jobs:
           if [ -z "${BUILD_VERSION:-}" ] && [ -n "${GITHUB_WORKSPACE:-}" ]; then
             BUILD_VERSION="$(cat "$GITHUB_WORKSPACE/scripts/astra_build_version.txt")"
           fi
-          if [ -z "$BUILD_VERSION" ] || [ -z "$PROFILE" ]; then
-            echo "Missing environment variables: BUILD_VERSION and PROFILE are required" >&2
+          if [ -z "${IMAGE_URL:-}" ] && { [ -z "${BUILD_VERSION:-}" ] || [ -z "${PROFILE:-}" ]; }; then
+            echo "Missing environment variables: BUILD_VERSION and PROFILE are required when IMAGE_URL is not set" >&2
             exit 1
           fi
-          export BUILD_VERSION PROFILE
-          python case_runner.py --config "$CONFIG_PATH"
+          export BUILD_VERSION="${BUILD_VERSION:-}" PROFILE="${PROFILE:-}"
+          COMMAND=(case_runner.py --config "$CONFIG_PATH")
+          set -o pipefail
+          python "${COMMAND[@]}" 2>&1 | tee upgrade-syna-image.log
 
       - name: Upload SYNA U-Boot artifacts
         if: always()

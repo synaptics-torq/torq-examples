@@ -11,11 +11,16 @@ import time
 import unittest
 from pathlib import Path
 
-if __package__ in (None, ''):
-    python_root = Path(__file__).resolve().parents[3]
-    if str(python_root) not in sys.path:
-        sys.path.insert(0, str(python_root))
+CASE_ROOT = Path(__file__).resolve().parent
+PYTHON_ROOT = CASE_ROOT.parents[2]
+if str(PYTHON_ROOT) not in sys.path:
+    sys.path.insert(0, str(PYTHON_ROOT))
 
+from torq.utils.burn.device_flash import (
+    UBOOT_VERSION_PATTERN,
+    parse_uboot_build_version,
+    image_needs_upgrade,
+)
 from torq.utils.burn.serial_wrapper import SerialThread, SerialTimeoutException
 
 
@@ -223,6 +228,30 @@ class SynaUbootTest(unittest.TestCase):
         finally:
             self.serial.close_logger(console_data)
 
+    def check_image_upgrade(self):
+        self.enter_spi_mode()
+        try:
+            _, _, version_output = self.serial_exec_shell(
+                'version', [UBOOT_VERSION_PATTERN],
+                all_output=False, timeout=SPI_MODE_ENTER_TIMEOUT,
+            )
+        except RuntimeError:
+            self.logger.warning('No U-Boot version line found; need flashing')
+            return True
+        current_version = parse_uboot_build_version(version_output)
+        target_version = os.getenv('BUILD_VERSION')
+        if image_needs_upgrade(current_version, target_version):
+            self.logger.info(
+                'Current build %s is older than %s; need flashing',
+                current_version, target_version,
+            )
+            return True
+        self.logger.info(
+            'Current build %s is not older than %s; skipping flash',
+            current_version, target_version,
+        )
+        return False
+
     def test_burn_emmc(self):
         self.assertTrue(EMMC_TFTPPATH, 'TFTPPATH is required')
         self.assertTrue(EMMC_TFTPIP, 'TFTPIP is required')
@@ -230,6 +259,10 @@ class SynaUbootTest(unittest.TestCase):
         print(flush=True)
         console_data = self.serial.create_logger()
         try:
+            if not self.check_image_upgrade():
+                # No upgrade needed; reset out of U-Boot to boot the existing eMMC image.
+                self.serial.write('reset\n')
+                return
             error_reason = None
             for _ in range(3):
                 self.enter_spi_mode()
