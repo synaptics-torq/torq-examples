@@ -23,7 +23,7 @@ python functiongemma/src/infer.py -m /path/to/compiled/transformer.vmfb --no-ref
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
-When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions (default: 2). It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits.
+When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions (default: 64). It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits.
 
 Run `python src/infer.py -h` to see all available inference options.
 

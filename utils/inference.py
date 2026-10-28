@@ -813,7 +813,11 @@ def add_llm_inference_args(
         inference_group.add_argument(
             "--kv-cache-window",
             type=int,
-            default=2,
+            # With multi-turn chat the window is the context the model keeps when the
+            # cache fills: with very few entries it loses the question and the answer so
+            # far, and ends its turn at once. 64 entries keep enough of both; the rollover
+            # replays them, which pauses the answer one time (about 3 s on Gemma 3 270M).
+            default=64,
             metavar="N",
             help=(
                 "Enable sliding-window KV cache: when the cache is full, keep the most "

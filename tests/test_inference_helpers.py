@@ -47,7 +47,7 @@ def test_llm_args_defaults():
     assert args.max_gen_tokens is None
     assert args.instruct_model is False
     assert args.threads is None
-    assert args.kv_cache_window == 2 and args.no_kv_cache_window is False
+    assert args.kv_cache_window == 64 and args.no_kv_cache_window is False
     assert args.temperature == 0.0 and args.top_p == 1.0 and args.top_k == 64
     assert args.no_refresh is False
     assert args.tda == "dmabuf" and args.device_io is True
