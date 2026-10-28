@@ -403,3 +403,58 @@ class TestChunkedPrefillOrchestration:
             ("token", 1, 0, {"compute_logits": False, "sample_next": False}),
             ("token", 2, 1, {"compute_logits": True, "sample_next": True}),
         ]
+
+
+class TestPrefillChunkSizes:
+    """A prefill model can export extra chunk sizes as ``main_<B>`` functions."""
+
+    def test_extra_entries_found_on_the_prefill_body(self):
+        runner = _liquid()
+        decode_body = FakeBody(_decode_inputs(), _decode_outputs())
+        model, _ = _split_model(decode_body)
+        runner._model = model
+        runner._max_seq_len = 16
+        prefill_body = FakeBody(
+            _decode_inputs(token_shape=((1, 4, HIDDEN), F32)), _decode_outputs()
+        )
+        prefill_body.function_names = ["main", "main_2", "main_1", "main_x", "main_64"]
+        TestPrefillModelSetup()._setup(runner, prefill_body)
+
+        # main_1 is a decode step, main_64 exceeds the 16-token window, main_x
+        # is not a chunk size.
+        assert runner._find_prefill_entries() == {4: None, 2: "main_2"}
+
+    def test_single_size_prefill_model_has_one_entry(self):
+        runner = _liquid()
+        decode_body = FakeBody(_decode_inputs(), _decode_outputs())
+        model, _ = _split_model(decode_body)
+        runner._model = model
+        runner._max_seq_len = 16
+        prefill_body = FakeBody(
+            _decode_inputs(token_shape=((1, 4, HIDDEN), F32)), _decode_outputs()
+        )
+        TestPrefillModelSetup()._setup(runner, prefill_body)
+
+        assert runner._find_prefill_entries() == {4: None}
+
+    def test_greedy_plan(self):
+        assert LiquidStatic._plan_prefill_chunks(70, [32, 16, 8, 4]) == [32, 32, 4, 1, 1]
+        assert LiquidStatic._plan_prefill_chunks(3, [32, 16, 8, 4]) == [1, 1, 1]
+
+    def test_prompt_chunked_over_every_size(self):
+        runner = RecordingPrefill()
+        runner._warmup_len = 0
+        runner._prefill_size = 4
+        runner._prefill_model = object()
+        runner._prefill_entries = {4: None, 2: "main_2"}
+
+        next_token, pos = runner._prefill([1, 2, 3, 4, 5, 6, 7], start=0)
+
+        assert (next_token, pos) == (107, 7)
+        assert runner.calls == [
+            ("chunk", (1, 2, 3, 4), 0,
+             {"compute_logits": False, "sample_next": False, "entry": None}),
+            ("chunk", (5, 6), 4,
+             {"compute_logits": False, "sample_next": False, "entry": "main_2"}),
+            ("token", 7, 6, {"compute_logits": True, "sample_next": True}),
+        ]

@@ -35,8 +35,8 @@ class FakeBody:
     def __init__(self):
         self.calls = []
 
-    def infer(self, inputs):
-        self.calls.append(inputs)
+    def infer(self, inputs, **kwargs):
+        self.calls.append((inputs, kwargs))
         return ["hidden"]
 
 
@@ -177,6 +177,7 @@ class TestGemmaPrefillLMHeadSkip:
 
         assert token == 0
         assert len(body.calls) == 1
+        assert body.calls[0][1] == {"entry": None}
         assert len(model._lm_head.calls) == 1
 
     def test_llm_step_rejects_sampling_without_logits(self):
@@ -239,7 +240,7 @@ class TestGemmaPrefillLMHeadSkip:
         runner._infer_time_ms = 0.0
 
         assert runner.infer(["input"], skip_lm_head=True) == ["hidden"]
-        assert body.calls == [["input"]]
+        assert body.calls == [(["input"], {"entry": None})]
 
     def test_split_runner_accepts_matching_body_and_lm_head_metadata(self):
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
