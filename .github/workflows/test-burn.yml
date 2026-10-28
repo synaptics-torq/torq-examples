@@ -1,0 +1,22 @@
+name: Run SYNA U-Boot image flash
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ wip/ci_cd_test ]
+    paths:
+      - '.github/workflows/test-burn.yml'
+
+permissions:
+  contents: read
+
+# No concurrency here: sharing the called workflow's group would deadlock.
+jobs:
+  syna-uboot-flash:
+    uses: synaptics-torq/torq-compiler-dev/.github/workflows/test-image-burn.yml@wip/burn_image
+    with:
+      image_url: http://iotmmswfileserver.synaptics.com:8000/magnolia/202610/20261024/202610242301/LinuxSDK-Serpens/sl2619_oobe_scarthgap/Eng_Build
+      # Keep in sync with the @ref above so workflow and burn code match.
+      ref: wip/burn_image
+    secrets:
+      COMPILER_DEV_TOKEN: ${{ secrets.COMPILER_DEV_TOKEN }}
