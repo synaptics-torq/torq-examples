@@ -15,8 +15,8 @@ cd ..
 ```
 
 From the repo root — downloads the model from HuggingFace (230M by default;
-`350m` and the w8a8 SL2619 builds `230m-w8a8`/`350m-w8a8` are also available
-via the demo's own `setup_demo.py`):
+`350m`, the w8a8 SL2619 builds `230m-w8a8`/`350m-w8a8` and the 4-bit
+`350m-qad-q4_0` build are also available via the demo's own `setup_demo.py`):
 
 ```sh
 python setup_demos.py LiquidAI-LFM2.5
@@ -56,6 +56,47 @@ models/Synaptics/LiquidAI-LFM2.5-230M/
 > repos (the new exporter's SL2619 w8a8 builds). Besides `transformer.vmfb`
 > and `lm_head.vmfb` they publish a batched prefill model in
 > `transformer_prefill.vmfb`, which setup downloads with the `--with-batch-prefill` flag.
+
+### LFM2.5-350M QAD Q4_0
+
+`350m-qad-q4_0` is Liquid AI's
+[quantization-aware-distilled Q4_0 checkpoint](https://huggingface.co/blog/LiquidAI/qad)
+(`LFM2.5-350M-QAD-Q4_0.gguf` from
+[`LiquidAI/LFM2.5-350M-GGUF`](https://huggingface.co/LiquidAI/LFM2.5-350M-GGUF)),
+running on the NPU with the GGUF's own weights, from
+[`Synaptics/LiquidAI-LFM2.5-350M-QAD-Q4_0-torq`](https://huggingface.co/Synaptics/LiquidAI-LFM2.5-350M-QAD-Q4_0-torq):
+
+```sh
+cd LiquidAI/LiquidAI-LFM2.5
+python setup_demo.py 350m-qad-q4_0:main --with-batch-prefill
+python src/infer.py \
+  -m ../../models/Synaptics/LiquidAI-LFM2.5-350M-QAD-Q4_0-torq/transformer.vmfb \
+  --instruct-model
+```
+
+> [!IMPORTANT]
+> This build needs a Torq runtime newer than the 2.3.0 release (torq-compiler `main`
+> from 2026-10-27 or later): the 2.3.0 runtime rejects it with `required module
+> features [Ch] are not available`. The model repo has no `v2.3.0` tag yet, so pin
+> `:main` as above; without it setup stops on the missing tag.
+
+The layout is the same as the other builds: `transformer.vmfb` (decode, read-only KV
+cache), `transformer_prefill.vmfb` (batched prefill, **8 tokens** per chunk),
+`lm_head.vmfb` and `token_embeddings.npy`. Nothing is re-quantized: every Q4_0 matrix of
+the decoder keeps the GGUF's 4-bit codes and fp16 block scales (INT4, block 32), and the
+Q6_K tied embedding / lm_head keeps its 6-bit codes and per-16 scales (INT8, block 16).
+The 8-token prefill chunk keeps time to first token low for chat-length prompts (the
+part of a prompt that does not fill a chunk runs at decode speed).
+
+Measured on SL2619 (2 GHz CPU, 1 GHz NPU), greedy, against llama.cpp running the same
+GGUF on the board's CPU (2 threads):
+
+| | Torq NPU | llama.cpp CPU |
+|---|---|---|
+| Decode | 13.96 tok/s (demo 13.5-13.7) | 14.27 tok/s |
+| Prefill, 8-token chunks | 73.2 tok/s | 50.4 tok/s |
+| Time to first token, short chat prompt | ~0.2-0.5 s | |
+| Next-token top-1 vs llama.cpp, 841 chat-answer positions | 98.2% (mismatches are near-ties) | |
 
 ## Running
 
