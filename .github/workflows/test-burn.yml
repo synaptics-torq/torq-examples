@@ -10,13 +10,59 @@ on:
 permissions:
   contents: read
 
-# No concurrency here: sharing the called workflow's group would deadlock.
+concurrency:
+  group: syna-uboot-burn-astra-sh
+  cancel-in-progress: false
+
 jobs:
   syna-uboot-flash:
-    uses: synaptics-torq/torq-compiler-dev/.github/workflows/test-image-burn.yml@wip/burn_image
-    with:
-      image_url: http://iotmmswfileserver.synaptics.com:8000/magnolia/202610/20261024/202610242301/LinuxSDK-Serpens/sl2619_oobe_scarthgap/Eng_Build
-      # Keep in sync with the @ref above so workflow and burn code match.
-      ref: wip/burn_image
-    secrets:
-      COMPILER_DEV_TOKEN: ${{ secrets.COMPILER_DEV_TOKEN }}
+    runs-on: astra-machina-sl-sh
+    defaults:
+      run:
+        working-directory: TorqExamplesTest/torq/utils/burn
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          clean: true
+
+      - name: Create Python virtual environment
+        run: python -m venv .venv
+
+      - name: Install device_toolkit dependencies
+        run: |
+          . .venv/bin/activate
+          python -m pip install --upgrade pip
+          python -m pip install 'pyserial>=3.0.0' pytest
+
+      # BUILD_VERSION and PROFILE are parsed from IMAGE_URL by device_flash.prepare_tftp_image.
+      - name: Run SYNA U-Boot image flash
+        env:
+          IMAGE_URL: http://iotmmswfileserver.synaptics.com:8000/magnolia/202610/20261024/202610242301/LinuxSDK-Serpens/sl2619_oobe_scarthgap/Eng_Build
+        run: |
+          set -eu
+          . .venv/bin/activate
+          CONFIG_PATH="${CONFIG_PATH:-$HOME/cases/env_config.ini}"
+          test -f "$CONFIG_PATH"
+          set -o pipefail
+          python case_runner.py --config "$CONFIG_PATH" 2>&1 | tee upgrade-syna-image.log
+
+      - name: Upload SYNA U-Boot artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: syna-uboot-burn-${{ github.run_id }}
+          path: |
+            TorqExamplesTest/torq/utils/platforminfo.json
+          if-no-files-found: warn
+
+      - name: Upload SYNA U-Boot diagnostic logs
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: syna-uboot-burn-diagnostics-${{ github.run_id }}
+          path: |
+            TorqExamplesTest/torq/utils/burn/log/**
+            TorqExamplesTest/torq/utils/burn/upgrade-syna-image.log
+            TorqExamplesTest/torq/utils/upgrade-syna.*.log
+          if-no-files-found: warn

@@ -8,11 +8,11 @@ from pathlib import Path
 
 
 CASE_ROOT = Path(__file__).resolve().parent
-REPOSITORY_ROOT = CASE_ROOT.parent
 PYTHON_ROOT = CASE_ROOT.parents[2]
 if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
+from torq.utils.burn.device_flash import BOARD_BUILD_VERSION_FILENAME
 from torq.utils.burn.runner_common import (
     add_common_arguments,
     build_process_environment,
@@ -31,6 +31,11 @@ def build_parser():
         action='store_true',
         help='Use the PDU for AC power cycling',
     )
+    parser.add_argument(
+        '--force-flash',
+        action='store_true',
+        help='Flash even if the running U-Boot version is not older than BUILD_VERSION',
+    )
     return parser
 
 
@@ -43,15 +48,17 @@ def _run_section(args, section, tftppath, has_multiple_sections):
         required_keys=required_keys,
     )
     if environment is None:
-        return 2
+        return 2, None
 
+    log_folder = CASE_ROOT / 'log' / section
     process_environment = build_process_environment(
         environment,
         extra_variables={
             'TFTPPATH': tftppath,
             'TFTPIP': tftppath.split(':', 1)[0],
             'USE_PDU_AC': '1' if args.use_pdu_ac else '0',
-            'SYNA_LOG_FOLDER': str(CASE_ROOT / 'log' / section),
+            'FORCE_FLASH': '1' if args.force_flash else '0',
+            'SYNA_LOG_FOLDER': str(log_folder),
         },
         pythonpath_entries=(PYTHON_ROOT,),
     )
@@ -60,21 +67,27 @@ def _run_section(args, section, tftppath, has_multiple_sections):
         section,
         bool(args.junitxml and has_multiple_sections),
     )
-    return run_pytest(
+    status = run_pytest(
         test_file=CASE_ROOT / 'SYNA_UbootTest.py',
         junitxml=report,
-        work_dir=REPOSITORY_ROOT,
+        work_dir=CASE_ROOT,
         environment=process_environment,
         section=section,
         log_prefix='upgrade-syna',
     )
+    board_version_file = log_folder / BOARD_BUILD_VERSION_FILENAME
+    board_version = None
+    if status == 0 and board_version_file.is_file():
+        board_version = board_version_file.read_text(encoding='utf-8').strip()
+        board_version_file.unlink()
+    return status, board_version
 
 def main(argv=None) -> int:
     args = build_parser().parse_args(sys.argv[1:] if argv is None else argv)
     return run_case(
         args,
         case_name='SYNA_Uboot',
-        output_path=REPOSITORY_ROOT / 'platforminfo.json',
+        output_path=CASE_ROOT / 'platforminfo.json',
         section_runner=_run_section,
     )
 

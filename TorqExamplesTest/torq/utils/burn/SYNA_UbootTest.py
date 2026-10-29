@@ -17,6 +17,7 @@ if str(PYTHON_ROOT) not in sys.path:
     sys.path.insert(0, str(PYTHON_ROOT))
 
 from torq.utils.burn.device_flash import (
+    BOARD_BUILD_VERSION_FILENAME,
     UBOOT_VERSION_PATTERN,
     parse_uboot_build_version,
     image_needs_upgrade,
@@ -27,6 +28,7 @@ from torq.utils.burn.serial_wrapper import SerialThread, SerialTimeoutException
 SERIAL_PORT = os.getenv('SERIAL_PORT')
 EMMC_TFTPPATH = os.getenv('TFTPPATH')
 EMMC_TFTPIP = os.getenv('TFTPIP')
+FORCE_FLASH = os.getenv('FORCE_FLASH') == '1'
 
 UBOOT_PREFIX = '=>'
 ANSI_ESCAPE_PATTERN = re.compile(r'\x1b(?:\[[0-?]*[ -/]*[@-~]|.)')
@@ -228,17 +230,44 @@ class SynaUbootTest(unittest.TestCase):
         finally:
             self.serial.close_logger(console_data)
 
+    def read_uboot_build_version(self):
+        _, _, version_output = self.serial_exec_shell(
+            'version', [UBOOT_VERSION_PATTERN],
+            all_output=False, timeout=SPI_MODE_ENTER_TIMEOUT,
+        )
+        return parse_uboot_build_version(version_output)
+
+    def verify_flashed_version(self):
+        self.logger.info('Rebooting to verify flashed U-Boot version')
+        self.suite_logger.info('[STEP] Verify U-Boot version after flash')
+        self.serial.write('reset\n')
+        # Let the old prompt echo drain so enter_spi_mode only matches the new U-Boot prompt.
+        time.sleep(1)
+        self.enter_spi_mode()
+        try:
+            current_version = self.read_uboot_build_version()
+        except RuntimeError:
+            self.logger.warning('No U-Boot version line found after flash')
+            return
+        target_version = os.getenv('BUILD_VERSION')
+        # Running U-Boot may not come from eMMC (e.g. SPI boot), so a mismatch is not fatal.
+        if current_version != target_version:
+            message = 'U-Boot build {} does not match flashed build {}'.format(
+                current_version, target_version,
+            )
+            self.logger.warning(message)
+            if os.getenv('GITHUB_ACTIONS') == 'true':
+                print('::warning title=U-Boot version mismatch::{}'.format(message), flush=True)
+            return
+        self.logger.info('U-Boot build %s matches flashed build', current_version)
+
     def check_image_upgrade(self):
         self.enter_spi_mode()
         try:
-            _, _, version_output = self.serial_exec_shell(
-                'version', [UBOOT_VERSION_PATTERN],
-                all_output=False, timeout=SPI_MODE_ENTER_TIMEOUT,
-            )
+            current_version = self.read_uboot_build_version()
         except RuntimeError:
             self.logger.warning('No U-Boot version line found; need flashing')
             return True
-        current_version = parse_uboot_build_version(version_output)
         target_version = os.getenv('BUILD_VERSION')
         if image_needs_upgrade(current_version, target_version):
             self.logger.info(
@@ -250,6 +279,9 @@ class SynaUbootTest(unittest.TestCase):
             'Current build %s is not older than %s; skipping flash',
             current_version, target_version,
         )
+        (LOG_FOLDER / BOARD_BUILD_VERSION_FILENAME).write_text(
+            current_version, encoding='utf-8',
+        )
         return False
 
     def test_burn_emmc(self):
@@ -259,7 +291,9 @@ class SynaUbootTest(unittest.TestCase):
         print(flush=True)
         console_data = self.serial.create_logger()
         try:
-            if not self.check_image_upgrade():
+            if FORCE_FLASH:
+                self.logger.info('FORCE_FLASH set; skipping U-Boot version check')
+            elif not self.check_image_upgrade():
                 # No upgrade needed; reset out of U-Boot to boot the existing eMMC image.
                 self.serial.write('reset\n')
                 return
@@ -293,8 +327,9 @@ class SynaUbootTest(unittest.TestCase):
                     self.serial_exec_shell(
                         '', [UBOOT_PREFIX], timeout=SPI_MODE_ENTER_TIMEOUT,
                     )
-                    self.logger.info('Booting from eMMC')
-                    self.suite_logger.info('[STEP] Boot from eMMC')
+                    self.verify_flashed_version()
+                    self.logger.info('Resetting...')
+                    self.suite_logger.info('[STEP] Reset')
                     self.serial.write('reset\n')
                     time.sleep(5)
                     return

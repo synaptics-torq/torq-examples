@@ -105,6 +105,8 @@ def resolve_values(args, required_keys=None, config_keys=None):
 
 # Requires a trailing '-' or line break so a partially received line is not matched.
 UBOOT_VERSION_PATTERN = re.compile(r'U-Boot\s+([^\s-]+)(?=[-\r\n])')
+# Written to the section log folder when flashing is skipped.
+BOARD_BUILD_VERSION_FILENAME = 'board_build_version.txt'
 
 
 def parse_uboot_build_version(version_output):
@@ -436,7 +438,7 @@ def prepare_tftp_image(image_url=None):
 
 # --- platform-info artifact generation --------------------------------------
 
-def _resolve_platforms(config_path, sections=None, tftppath=None):
+def _resolve_platforms(config_path, sections=None, tftppath=None, board_versions=None):
     section_names = sections or list_config_sections(config_path)
 
     platforms = []
@@ -449,6 +451,8 @@ def _resolve_platforms(config_path, sections=None, tftppath=None):
         section_tftppath = tftppath or _build_tftppath(
             resolved.get('BUILD_VERSION'), resolved.get('PROFILE')
         )
+        if board_versions and board_versions.get(section_name):
+            resolved['BUILD_VERSION'] = board_versions[section_name]
         resolved['TFTPPATH'] = section_tftppath
         resolved['TFTPIP'] = section_tftppath.split(':', 1)[0]
         resolved['CONFIG_SECTION'] = section_name
@@ -456,7 +460,7 @@ def _resolve_platforms(config_path, sections=None, tftppath=None):
     return platforms
 
 
-def generate_platform_info(args, output_path=None, sections=None, tftppath=None):
+def generate_platform_info(args, output_path=None, sections=None, tftppath=None, board_versions=None):
     if output_path is None:
         LOGGER.warning('Skipping platform info generation: no output path provided')
         return
@@ -471,6 +475,7 @@ def generate_platform_info(args, output_path=None, sections=None, tftppath=None)
         args.config,
         sections=section_names,
         tftppath=tftppath,
+        board_versions=board_versions,
     )
     if not platforms:
         LOGGER.warning('Skipping platform info generation: no platforms resolved')

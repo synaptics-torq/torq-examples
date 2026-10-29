@@ -196,6 +196,9 @@ def run_pytest(test_file, junitxml, work_dir, environment, section, log_prefix, 
 def run_case(args, case_name, output_path, section_runner, continue_on_failure=True):
     """Run configured sections and generate platform info if all pass.
 
+    ``section_runner`` returns ``(status, board_version)``; ``board_version`` is the
+    build version read from the board, used instead of BUILD_VERSION when set.
+
     Returns 0 on success.
     Returns 1 when a section fails.
     Returns 2 for configuration or platform-info errors.
@@ -209,9 +212,12 @@ def run_case(args, case_name, output_path, section_runner, continue_on_failure=T
 
     print('Configured sections: {}'.format(', '.join(sections)), flush=True)
     overall_status = 0
+    board_versions = {}
     for section in sections:
         print('Starting actual flash for {}'.format(section), flush=True)
-        status = section_runner(args, section, tftppath, len(sections) > 1)
+        status, board_version = section_runner(args, section, tftppath, len(sections) > 1)
+        if board_version:
+            board_versions[section] = board_version
         if status != 0:
             overall_status = 1
             if not continue_on_failure:
@@ -224,6 +230,7 @@ def run_case(args, case_name, output_path, section_runner, continue_on_failure=T
                 output_path=output_path,
                 sections=sections,
                 tftppath=tftppath,
+                board_versions=board_versions,
             )
         except ValueError as error:
             print('{}: {}'.format(case_name, error), file=sys.stderr)
