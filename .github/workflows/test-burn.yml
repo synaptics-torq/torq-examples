@@ -10,59 +10,39 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: syna-uboot-burn-astra-sh
-  cancel-in-progress: false
-
 jobs:
   syna-uboot-flash:
-    runs-on: astra-machina-sl-sh
-    defaults:
-      run:
-        working-directory: TorqExamplesTest/torq/utils/burn
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      GH_TOKEN: ${{ secrets.COMPILER_DEV_TOKEN }}
+      REPO: synaptics-torq/torq-compiler-dev
+      WORKFLOW: test-image-burn.yml
+      REF: wip/burn_image
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          clean: true
-
-      - name: Create Python virtual environment
-        run: python -m venv .venv
-
-      - name: Install device_toolkit dependencies
-        run: |
-          . .venv/bin/activate
-          python -m pip install --upgrade pip
-          python -m pip install 'pyserial>=3.0.0' pytest
-
-      # BUILD_VERSION and PROFILE are parsed from IMAGE_URL by device_flash.prepare_tftp_image.
-      - name: Run SYNA U-Boot image flash
+      - name: Trigger burn workflow in torq-compiler-dev
         env:
-          IMAGE_URL: http://iotmmswfileserver.synaptics.com:8000/magnolia/202610/20261024/202610242301/LinuxSDK-Serpens/sl2619_oobe_scarthgap/Eng_Build
+          IMAGE_URL: ${{ vars.IMAGE_URL }}
         run: |
           set -eu
-          . .venv/bin/activate
-          CONFIG_PATH="${CONFIG_PATH:-$HOME/cases/env_config.ini}"
-          test -f "$CONFIG_PATH"
-          set -o pipefail
-          python case_runner.py --config "$CONFIG_PATH" 2>&1 | tee upgrade-syna-image.log
+          START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          gh workflow run "$WORKFLOW" -R "$REPO" --ref "$REF" -f image_url="$IMAGE_URL"
+          echo "START=$START" >> "$GITHUB_ENV"
 
-      - name: Upload SYNA U-Boot artifacts
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: syna-uboot-burn-${{ github.run_id }}
-          path: |
-            TorqExamplesTest/torq/utils/platforminfo.json
-          if-no-files-found: warn
-
-      - name: Upload SYNA U-Boot diagnostic logs
-        if: failure()
-        uses: actions/upload-artifact@v7
-        with:
-          name: syna-uboot-burn-diagnostics-${{ github.run_id }}
-          path: |
-            TorqExamplesTest/torq/utils/burn/log/**
-            TorqExamplesTest/torq/utils/burn/upgrade-syna-image.log
-            TorqExamplesTest/torq/utils/upgrade-syna.*.log
-          if-no-files-found: warn
+      - name: Wait for burn workflow to finish
+        run: |
+          set -eu
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            RUN_ID="$(gh run list -R "$REPO" --workflow "$WORKFLOW" --branch "$REF" \
+              --event workflow_dispatch --created ">=$START" --limit 1 \
+              --json databaseId --jq '.[0].databaseId // empty')"
+            [ -n "$RUN_ID" ] && break
+            sleep 10
+          done
+          if [ -z "$RUN_ID" ]; then
+            echo "Triggered run not found in $REPO" >&2
+            exit 1
+          fi
+          echo "Watching $REPO run $RUN_ID"
+          gh run watch "$RUN_ID" -R "$REPO" --exit-status --interval 30
