@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     env:
-      GH_TOKEN: ${{ secrets.COMPILER_DEV_TOKEN }}
+      GH_TOKEN: ${{ secrets.JENKINS_API_TOKEN }}
       REPO: synaptics-torq/torq-compiler-dev
       WORKFLOW: test.yml
       REF: wip/for_test_examples
