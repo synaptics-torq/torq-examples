@@ -17,7 +17,7 @@ from Face_ID.src.postprocess import decode_face_outputs
 from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
-from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
+from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_for_inference
 
 MODEL_WIDTH = 1280
 MODEL_HEIGHT = 704
@@ -118,6 +118,7 @@ def main() -> None:
         raise SystemExit(f"Unable to read image: {image_path}")
 
     input_tensor, letterbox = preprocess_image(image)
+    setup_npu_for_inference()
     runner = VMFBInferenceRunner(
         str(model_path),
         device_uri=args.device,

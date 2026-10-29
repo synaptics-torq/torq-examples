@@ -20,8 +20,10 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
+from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference  # noqa: E402
 
 
 def _fmt_timings(t: dict) -> str:
@@ -111,4 +113,8 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    setup_npu_for_inference()
+    try:
+        main()
+    finally:
+        cleanup_npu_after_inference()
