@@ -17,8 +17,8 @@ jobs:
     env:
       GH_TOKEN: ${{ secrets.COMPILER_DEV_TOKEN }}
       REPO: synaptics-torq/torq-compiler-dev
-      WORKFLOW: test-image-burn.yml
-      REF: wip/burn_image
+      WORKFLOW: test.yml
+      REF: wip/for_test_examples
     steps:
       - name: Trigger burn workflow in torq-compiler-dev
         env:
