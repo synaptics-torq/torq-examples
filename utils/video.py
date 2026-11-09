@@ -10,6 +10,8 @@ import os
 import subprocess
 import threading
 
+from utils.metrics import add_metrics_args
+
 
 def configure_camera(device, controls):
     if not controls:
@@ -267,6 +269,8 @@ def build_video_argparser(description, default_json_results="results.json", mode
     parser.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=180,
                         help="Rotate camera feed (degrees clockwise)")
 
+    add_metrics_args(parser)
+
     cam_group = parser.add_argument_group("Camera Config")
     cam_group.add_argument("--camera-control-device",
                            help="V4L2 device for controls (e.g. /dev/v4l-subdev2)")
@@ -281,7 +285,7 @@ def build_video_argparser(description, default_json_results="results.json", mode
     return parser
 
 
-def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
+def run_video_inference_loop(args, process_fn, ui_title, display_ui=None, metrics=None):
     """Run the main video inference loop.
 
     Args:
@@ -289,6 +293,8 @@ def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
         process_fn: callable(bgr_frame) ->
             (annotated_frame, frame_detections, infer_time_ms, log_str)
         ui_title: title string shown in the on-screen display overlay
+        metrics: optional MetricsRun; per-frame latency (ns) and the loop's
+            fps (at each 10-frame update) are recorded
     """
     import sys
     import time
@@ -414,6 +420,9 @@ def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
             else:
                 annotated, frame_detections, infer_time, log_str = process_fn(bgr_frame)
 
+            if metrics is not None:
+                metrics.add("latency", int(infer_time * 1e6))
+
             if log_str != last_log_str:
                 print("\n", end="", flush=True)
             else:
@@ -456,6 +465,8 @@ def run_video_inference_loop(args, process_fn, ui_title, display_ui=None):
                 now = time.time()
                 fps = 10.0 / (now - fps_time)
                 fps_time = now
+                if metrics is not None:
+                    metrics.add("frames_per_second", fps)
 
     except KeyboardInterrupt:
         print("Interrupted by user.")

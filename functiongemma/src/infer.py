@@ -25,6 +25,7 @@ from utils.inference import (
 )
 from utils.terminal import InferenceStopInput
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.runtime import (
     build_runtime_flags,
@@ -59,7 +60,7 @@ def _think(show: bool) -> None:
     sys.stdout.flush()
 
 
-def run_function_loop(runner: FunctionGemmaStatic) -> None:
+def run_function_loop(runner: FunctionGemmaStatic, metrics=None) -> None:
     """Function-calling chat loop for FunctionGemma exports.
 
     Each user turn generates until the model emits a function call (stopping
@@ -127,6 +128,9 @@ def run_function_loop(runner: FunctionGemmaStatic) -> None:
             _think(False)
             decode_ms = runner.last_infer_time - runner.time_to_first_token
             tps = runner.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
+            if metrics is not None:
+                metrics.add("time_to_first_token", int(runner.time_to_first_token * 1e6))
+                metrics.add("tokens_per_second", tps)
             print(
                 format_answer(
                     answer.replace("<end_of_turn>", "").replace("<eos>", ""),
@@ -172,7 +176,8 @@ def main(args: argparse.Namespace):
             prefill_model_path=args.batch_prefill_model,
             disable_prefill=args.no_batch_prefill_model,
         )
-        run_function_loop(runner)
+        with MetricsRun(args.metrics_out) as m:
+            run_function_loop(runner, m)
     finally:
         cleanup_npu_after_inference()
 

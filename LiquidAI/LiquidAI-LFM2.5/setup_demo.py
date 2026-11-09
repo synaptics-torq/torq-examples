@@ -283,8 +283,9 @@ def download_liquid(
     return result
 
 
-def setup_liquid(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
     enable_prefill: bool = False,
@@ -302,7 +303,7 @@ def setup_liquid(
 
 if __name__ == "__main__":
     demo_main(
-        setup_liquid,
+        setup,
         description="Download LFM2.5 (Liquid) model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=_HF_REPO_MAP,

@@ -1,0 +1,5 @@
+{
+  "name": "EmbeddingGemma-2",
+  "description": "EmbeddingGemma-2 maps text, images, video and audio into one 768-dimensional embedding space.",
+  "task_category": "feature_extraction"
+}

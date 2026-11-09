@@ -25,6 +25,7 @@ from utils.pose_estimation import (
     preprocess_frame_cv,
 )
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 
 
@@ -72,7 +73,8 @@ def main():
 
     runner = setup_npu_and_runner(args, runtime_flags)
     try:
-        run_video_inference_loop(args, make_process_fn(runner), "Pose Estimation")
+        with MetricsRun(args.metrics_out) as m:
+            run_video_inference_loop(args, make_process_fn(runner), "Pose Estimation", metrics=m)
     finally:
         cleanup_npu_after_inference()
 

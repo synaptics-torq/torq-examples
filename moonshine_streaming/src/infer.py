@@ -37,6 +37,7 @@ from moonshine_streaming.setup_demo import (
 )
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.npu import configure_npu_userspace_frequency
 
@@ -252,7 +253,8 @@ def main(args: argparse.Namespace):
     terminal = TerminalListener()
     state    = model.create_state()
 
-    stats = _Stats() if args.verbose else None
+    stats = _Stats()
+    metrics = MetricsRun(args.metrics_out)
 
     def worker():
         tokens              = []
@@ -270,22 +272,20 @@ def main(args: argparse.Namespace):
         lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
 
         def _encode(chunk):
-            if stats is not None:
-                t0 = time.perf_counter()
+            t0 = time.perf_counter()
             model.process_audio_chunk(state, chunk)
             model.encode(state, is_final=False)
-            if stats is not None:
-                stats.encode_ms += (time.perf_counter() - t0) * 1000
+            stats.encode_ms += (time.perf_counter() - t0) * 1000
 
         def _decode():
-            if stats is not None:
-                t0 = time.perf_counter()
+            t0 = time.perf_counter()
             if args.full_decode:
                 tokens = model.decode(state)
             else:
                 tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
-            if stats is not None:
-                stats.decode_ms    += (time.perf_counter() - t0) * 1000
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            stats.decode_ms += elapsed_ms
+            metrics.add("latency", int(elapsed_ms * 1e6))
             return tokens
 
         def _finalize(count):
@@ -379,15 +379,15 @@ def main(args: argparse.Namespace):
             audio_queue.task_done()
 
     def print_verbose_summary():
-        if stats is None:
-            return
         audio_s = len(wav_audio) / input_sample_rate
         work_s  = (stats.encode_ms + stats.decode_ms) / 1000
         rtf     = work_s / audio_s if audio_s else 0.0
-        print(
-            f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
-            file=sys.stderr,
-        )
+        metrics.add("real_time_factor", rtf * 100)
+        if args.verbose:
+            print(
+                f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
+                file=sys.stderr,
+            )
 
     def feed_wav_to_queue():
         """Push the WAV file onto audio_queue in fixed-size blocks, then signal
@@ -418,15 +418,16 @@ def main(args: argparse.Namespace):
     sys.stdout.flush()
     try:
         print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
-        try:
-            feed_wav_to_queue()
-            worker_thread.join()
-        except KeyboardInterrupt:
-            print("\n\nInterrupted...", file=sys.stderr)
-            running = False
-            worker_thread.join(timeout=1.0)
-        finally:
-            print_verbose_summary()
+        with metrics:
+            try:
+                feed_wav_to_queue()
+                worker_thread.join()
+            except KeyboardInterrupt:
+                print("\n\nInterrupted...", file=sys.stderr)
+                running = False
+                worker_thread.join(timeout=1.0)
+            finally:
+                print_verbose_summary()
     finally:
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()

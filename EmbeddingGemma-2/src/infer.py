@@ -20,12 +20,19 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
+from utils.metrics import MetricsRun, add_metrics_args  # noqa: E402
 
 
 def _fmt_timings(t: dict) -> str:
     return ", ".join(f"{k}={v:.1f}" if isinstance(v, float) else f"{k}={v}" for k, v in t.items())
+
+
+def _total_ms(t: dict) -> float:
+    """The sum of the ms values _fmt_timings prints for one encode (frames is not ms)."""
+    return sum(v for v in t.values() if isinstance(v, float))
 
 
 def main():
@@ -45,6 +52,7 @@ def main():
     ap.add_argument("--dim", type=int, default=768, choices=[768, 512, 256, 128], help="Matryoshka dimension")
     ap.add_argument("--top", type=int, default=5, help="Matches listed per query (default: %(default)s)")
     ap.add_argument("-v", "--verbose", action="store_true")
+    add_metrics_args(ap)
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
@@ -78,23 +86,29 @@ def main():
     model = EmbeddingGemma2(args.model_dir, backend=args.backend, ort_threads=args.ort_threads,
                             modalities=tuple(modalities), audio_frames=audio_frames)
 
-    Q = []
-    for q in args.queries:
-        Q.append(model.encode_text(q, args.prompt, args.dim))
-        print(f"[text]  {q!r:40.40}  {_fmt_timings(model.timings)}")
-    items, names = [], []
-    for d in args.documents:
-        items.append(model.encode_text(d, "document", args.dim)); names.append(f"doc:{d[:30]}")
-        print(f"[doc]   {d!r:40.40}  {_fmt_timings(model.timings)}")
-    for p in args.images:
-        items.append(model.encode_image(p, args.dim)); names.append(f"image:{Path(p).name}")
-        print(f"[image] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
-    for p in args.audios:
-        items.append(model.encode_audio(p, args.dim)); names.append(f"audio:{Path(p).name}")
-        print(f"[audio] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
-    for p in args.videos:
-        items.append(model.encode_video(p, dim=args.dim)); names.append(f"video:{Path(p).name}")
-        print(f"[video] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
+    with MetricsRun(args.metrics_out) as m:
+        Q = []
+        for q in args.queries:
+            Q.append(model.encode_text(q, args.prompt, args.dim))
+            m.add("latency_text", int(_total_ms(model.timings) * 1e6))
+            print(f"[text]  {q!r:40.40}  {_fmt_timings(model.timings)}")
+        items, names = [], []
+        for d in args.documents:
+            items.append(model.encode_text(d, "document", args.dim)); names.append(f"doc:{d[:30]}")
+            m.add("latency_text", int(_total_ms(model.timings) * 1e6))
+            print(f"[doc]   {d!r:40.40}  {_fmt_timings(model.timings)}")
+        for p in args.images:
+            items.append(model.encode_image(p, args.dim)); names.append(f"image:{Path(p).name}")
+            m.add("latency_image", int(_total_ms(model.timings) * 1e6))
+            print(f"[image] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
+        for p in args.audios:
+            items.append(model.encode_audio(p, args.dim)); names.append(f"audio:{Path(p).name}")
+            m.add("latency_audio", int(_total_ms(model.timings) * 1e6))
+            print(f"[audio] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
+        for p in args.videos:
+            items.append(model.encode_video(p, dim=args.dim)); names.append(f"video:{Path(p).name}")
+            m.add("latency_video", int(_total_ms(model.timings) * 1e6))
+            print(f"[video] {Path(p).name:40.40}  {_fmt_timings(model.timings)}")
 
     if not Q:
         return

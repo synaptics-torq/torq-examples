@@ -28,6 +28,7 @@ from utils.object_detection import (
     preprocess_frame_cv,
 )
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 
 
@@ -90,7 +91,11 @@ def main():
             labels = {str(k): v for k, v in data["names"].items()} if "names" in data else data
 
     try:
-        run_video_inference_loop(args, make_process_fn(runner, labels, VARIANTS[args.variant]), "Object Detection")
+        with MetricsRun(args.metrics_out) as m:
+            run_video_inference_loop(
+                args, make_process_fn(runner, labels, VARIANTS[args.variant]),
+                "Object Detection", metrics=m,
+            )
     finally:
         cleanup_npu_after_inference()
 

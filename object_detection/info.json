@@ -1,0 +1,5 @@
+{
+  "name": "object_detection",
+  "description": "YOLOv8n and YOLO26 (nano + small) object detection using Torq VMFB models.",
+  "task_category": "object_detection"
+}

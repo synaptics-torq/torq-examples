@@ -109,12 +109,15 @@ def ensure_qwen3_models(model_dir: str | Path, *, refresh: bool = True) -> None:
     )
 
 
-def setup_qwen3(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
-    """Set up the Qwen3 demo."""
+    """Set up the Qwen3 demo. ``enable_prefill`` is accepted for a uniform
+    interface and ignored (no batched prefill model)."""
     if models is None:
         models = _DEFAULT_MODELS
 
@@ -133,7 +136,7 @@ def setup_qwen3(
 
 if __name__ == "__main__":
     demo_main(
-        setup_qwen3,
+        setup,
         description="Download Qwen3-0.6B (GPTQ INT4) model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=QWEN3_HF_REPO_MAP,

@@ -1,0 +1,5 @@
+{
+  "name": "qwen3",
+  "description": "Interactive chat with Qwen3-0.6B on the Torq NPU, in thinking mode.",
+  "task_category": "text_generation"
+}

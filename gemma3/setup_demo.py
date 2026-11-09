@@ -227,7 +227,7 @@ def download_gemma3(
 
     Version selection, ``name:version`` specs and ``no_update`` are handled by
     :func:`utils.model_setup.download_models`; ``enable_prefill`` gates the
-    optional prefill model download. Unlike :func:`setup_gemma3`, this does not
+    optional prefill model download. Unlike :func:`setup`, this does not
     check demo requirements, so it can be reused by other projects that manage
     their own environment and models dir.
     """
@@ -266,8 +266,9 @@ def ensure_gemma3_models(model_dir: str | Path, *, refresh: bool = True) -> None
     )
 
 
-def setup_gemma3(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
     enable_prefill: bool = False,
@@ -326,7 +327,7 @@ def setup_gemma3(
 
 if __name__ == "__main__":
     demo_main(
-        setup_gemma3,
+        setup,
         description="Download Gemma3 model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=GEMMA3_HF_REPO_MAP,

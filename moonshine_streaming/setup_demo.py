@@ -49,8 +49,8 @@ def download_moonshine_streaming(
     """Download/refresh the given streaming models; return ``{name: model_dir}``.
 
     Version selection, ``name:version`` specs and ``no_update`` are handled by
-    :func:`utils.model_setup.download_models`. Unlike
-    :func:`setup_moonshine_streaming`, this does not check demo requirements,
+    :func:`utils.model_setup.download_models`. Unlike :func:`setup`, this
+    does not check demo requirements,
     so it can be reused by other projects that manage their own environment
     and models dir.
     """
@@ -111,12 +111,17 @@ def ensure_moonshine_streaming_models(
     )
 
 
-def setup_moonshine_streaming(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
-    """Set up the moonshine_streaming demo (requirements, then models)."""
+    """Set up the moonshine_streaming demo (requirements, then models).
+
+    ``enable_prefill`` is accepted for a uniform interface and ignored (no
+    batched prefill model)."""
     if models is None:
         models = _DEFAULT_MODELS
     return setup_demo(
@@ -133,7 +138,7 @@ def setup_moonshine_streaming(
 
 if __name__ == "__main__":
     demo_main(
-        setup_moonshine_streaming,
+        setup,
         description="Download Moonshine streaming model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=_HF_REPO_MAP,

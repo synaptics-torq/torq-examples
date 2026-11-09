@@ -106,11 +106,22 @@ def download_face_detector(*, base_dir: str | Path | None = None) -> Path:
     return _download_models(FACE_DETECTOR_FILES, base_dir=base_dir)
 
 
-def setup_face_id(*, base_dir: str | Path | None = None) -> Path:
-    """Set up the file-based Torq Face ID example and its models."""
+def setup(
+    models: list[str] | None = None,
+    *,
+    model_version: str | None = None,
+    no_update: bool = False,
+    enable_prefill: bool = False,
+) -> Path:
+    """Set up the file-based Torq Face ID example and its models.
+
+    The demo has a single built-in repo whose downloader tracks the latest
+    revision only, so ``models``, ``model_version``, ``no_update`` and
+    ``enable_prefill`` are accepted for a uniform setup interface and ignored.
+    """
     check_requirements(Path(__file__).parent / "requirements.txt")
-    return download_face_detector(base_dir=base_dir)
+    return download_face_detector()
 
 
 if __name__ == "__main__":
-    setup_face_id()
+    setup()

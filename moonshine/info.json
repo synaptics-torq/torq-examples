@@ -1,0 +1,5 @@
+{
+  "name": "moonshine",
+  "description": "WAV file transcription with Moonshine-tiny English using Torq VMFB models.",
+  "task_category": "automatic_speech_recognition"
+}

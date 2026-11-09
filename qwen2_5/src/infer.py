@@ -12,6 +12,7 @@ from runner import QwenStatic
 from qwen2_5.setup_demo import ensure_qwen25_models, local_qwen25_model_path
 from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -46,12 +47,13 @@ def main(args: argparse.Namespace):
         disable_prefill=args.no_batch_prefill_model,
     )
     try:
-        run_chat_loop(
-            lambda text, should_stop: qwen.run(text, should_stop=should_stop),
-            qwen.run_stream,
-            lambda: print_llm_stats(qwen),
-            debug=args.logging.upper() == "DEBUG",
-        )
+        with MetricsRun(args.metrics_out) as m:
+            run_chat_loop(
+                lambda text, should_stop: qwen.run(text, should_stop=should_stop),
+                qwen.run_stream,
+                lambda: print_llm_stats(qwen, m),
+                debug=args.logging.upper() == "DEBUG",
+            )
     finally:
         cleanup_npu_after_inference()
 

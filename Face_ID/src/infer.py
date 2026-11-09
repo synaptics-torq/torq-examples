@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from Face_ID.src.postprocess import decode_face_outputs
 from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
 from utils.log import configure_logging
+from utils.metrics import MetricsRun, add_metrics_args
 from utils.model_setup import resolve_default_model
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
 
@@ -95,6 +96,7 @@ def main() -> None:
         help="Allocate inputs and keep model outputs device-backed (enabled automatically with --tda dmabuf)",
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
+    add_metrics_args(parser)
     args = parser.parse_args()
     configure_logging("INFO")
     if args.model is None:
@@ -127,7 +129,11 @@ def main() -> None:
     )
     try:
         runner_input = runner.allocate_device_array(input_tensor) if device_io else input_tensor
-        outputs = prepare_outputs(runner.infer([runner_input]))
+        with MetricsRun(args.metrics_out) as m:
+            outputs = prepare_outputs(runner.infer([runner_input]))
+            latency_ns = int(runner.infer_time_ms * 1e6)
+            m.add("latency", latency_ns)
+            m.add("frames_per_second", 1e9 / latency_ns)
         detections = decode_face_outputs(
             outputs,
             box1_scale=6.7147956,

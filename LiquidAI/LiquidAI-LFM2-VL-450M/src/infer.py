@@ -33,6 +33,7 @@ except Exception:
     local_lfm2vl_model_dir = None  # type: ignore[assignment]
 
 from utils.log import add_logging_args, configure_logging  # noqa: E402
+from utils.metrics import MetricsRun, add_metrics_args  # noqa: E402
 from utils.model_setup import resolve_default_model  # noqa: E402
 from utils.terminal import InferenceStopInput  # noqa: E402
 
@@ -51,13 +52,16 @@ def _print_image_stats(vl: LFM2VL) -> None:
           f"prefix {vl.prefix_time:.0f} ms)")
 
 
-def _print_answer_stats(vl: LFM2VL) -> None:
+def _print_answer_stats(vl: LFM2VL, metrics=None) -> None:
     s = vl.stats
+    if metrics is not None:
+        metrics.add("time_to_first_token", int(s["ttft_ms"] * 1e6))
+        metrics.add("tokens_per_second", s["tok_per_s"])
     print(f"  (TTFT {s['ttft_ms']:.0f} ms | prompt {s['prompt_tokens']} tok, "
           f"gen: {s['n_tokens']} tok @ {s['tok_per_s']:.1f} tok/s)")
 
 
-def _ask_once(vl: LFM2VL, question: str, debug: bool) -> None:
+def _ask_once(vl: LFM2VL, question: str, debug: bool, metrics=None) -> None:
     if debug:
         with InferenceStopInput(sys.stdin) as should_stop:
             answer = vl.infer(question, should_stop=should_stop)
@@ -74,7 +78,7 @@ def _ask_once(vl: LFM2VL, question: str, debug: bool) -> None:
                 sys.stdout.write(chunk)
                 sys.stdout.flush()
         print()
-    _print_answer_stats(vl)
+    _print_answer_stats(vl, metrics)
 
 
 def main(args: argparse.Namespace) -> None:
@@ -113,38 +117,39 @@ def main(args: argparse.Namespace) -> None:
                 return
         load_image(image)
 
-        # one-shot: a question on the CLI answers and exits
-        if args.prompt is not None:
-            try:
-                _ask_once(vl, args.prompt, debug)
-            except RuntimeError as e:
-                print(f"  {YELLOW}{e}{RESET}")
-            return
+        with MetricsRun(args.metrics_out) as m:
+            # one-shot: a question on the CLI answers and exits
+            if args.prompt is not None:
+                try:
+                    _ask_once(vl, args.prompt, debug, m)
+                except RuntimeError as e:
+                    print(f"  {YELLOW}{e}{RESET}")
+                return
 
-        print("Ask questions about the image.")
-        print("  /image <path>  encode a new image   /quit  exit")
-        while True:
-            try:
-                line = input("Q: ").strip()
-            except EOFError:
-                break
-            if not line:
-                continue
-            if line.lower() in ("/quit", "quit", "exit", "q"):
-                break
-            if line.startswith("/image"):
-                parts = line.split(maxsplit=1)
-                if len(parts) < 2:
-                    print("  usage: /image <path>")
+            print("Ask questions about the image.")
+            print("  /image <path>  encode a new image   /quit  exit")
+            while True:
+                try:
+                    line = input("Q: ").strip()
+                except EOFError:
+                    break
+                if not line:
                     continue
-                load_image(parts[1].strip())
-                continue
-            try:
-                _ask_once(vl, line, debug)
-            except RuntimeError as e:
-                print(f"  {YELLOW}{e}{RESET}")
-            except KeyboardInterrupt:
-                print(f" {YELLOW}[Interrupt]{RESET} \n")
+                if line.lower() in ("/quit", "quit", "exit", "q"):
+                    break
+                if line.startswith("/image"):
+                    parts = line.split(maxsplit=1)
+                    if len(parts) < 2:
+                        print("  usage: /image <path>")
+                        continue
+                    load_image(parts[1].strip())
+                    continue
+                try:
+                    _ask_once(vl, line, debug, m)
+                except RuntimeError as e:
+                    print(f"  {YELLOW}{e}{RESET}")
+                except KeyboardInterrupt:
+                    print(f" {YELLOW}[Interrupt]{RESET} \n")
 
 
 if __name__ == "__main__":
@@ -174,6 +179,7 @@ if __name__ == "__main__":
     parser.add_argument("-j", "--threads", type=int,
                         help="CPU threads for host work (default: all)")
     add_logging_args(parser)
+    add_metrics_args(parser)
     gen = parser.add_argument_group("generation")
     gen.add_argument("--max-new", type=int, default=128,
                      help="Max tokens to generate per question (default: %(default)s)")

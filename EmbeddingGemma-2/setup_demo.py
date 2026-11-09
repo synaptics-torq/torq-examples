@@ -84,9 +84,12 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
     return list(_REQUIRED_FILES + _EXAMPLE_FILES)
 
 
-def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | None = None,
-                          no_update: bool = False):
-    """Set up the EmbeddingGemma-2 demo (download/refresh the model files)."""
+def setup(models: list[str] | None = None, *, model_version: str | None = None,
+          no_update: bool = False, enable_prefill: bool = False):
+    """Set up the EmbeddingGemma-2 demo (download/refresh the model files).
+
+    ``enable_prefill`` is accepted for a uniform interface and ignored (no
+    batched prefill model)."""
     model_version = model_version or _DEFAULT_MODEL_VERSION
     return setup_demo(
         _HF_REPO_MAP,
@@ -102,7 +105,7 @@ def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | 
 
 if __name__ == "__main__":
     demo_main(
-        setup_embeddinggemma2,
+        setup,
         description="Download EmbeddingGemma-2 model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=_HF_REPO_MAP,

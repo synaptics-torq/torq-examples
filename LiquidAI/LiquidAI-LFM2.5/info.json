@@ -1,0 +1,6 @@
+{
+  "name": "LiquidAI-LFM2.5",
+  "description": "Interactive text chat with LiquidAI LFM2.5 using a Torq VMFB.",
+  "task_category": "text_generation",
+  "batch_prefill": true
+}

@@ -25,6 +25,7 @@ from utils.object_detection import (
 )
 from utils.draw import display_image_gst
 from utils.log import configure_logging
+from utils.metrics import MetricsRun, add_metrics_args
 from utils.model_setup import resolve_default_model
 
 
@@ -91,6 +92,7 @@ def main():
     )
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
+    add_metrics_args(parser)
     args = parser.parse_args()
     configure_logging("INFO")
 
@@ -123,11 +125,15 @@ def main():
             sys.exit(1)
         print("\n[2/4] Inference...")
         try:
-            raw_out = runner.infer(input_data)
+            with MetricsRun(args.metrics_out) as m:
+                raw_out = runner.infer(input_data)
+                print(f"Time: {runner.infer_time_ms:.3f}ms")
+                latency_ns = int(runner.infer_time_ms * 1e6)
+                m.add("latency", latency_ns)
+                m.add("frames_per_second", 1e9 / latency_ns)
         except Exception as exc:
             print(f"Inference failed: {exc}")
             sys.exit(1)
-        print(f"Time: {runner.infer_time_ms:.3f}ms")
 
         print("\n[3/4] Processing...")
         if raw_out.shape != (1, 84, 2100):

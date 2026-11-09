@@ -118,7 +118,7 @@ def download_object_detection(
     Version selection, ``name:version`` specs and ``no_update`` are handled by
     :func:`utils.model_setup.download_models`. The default covers both the
     tracked YOLOv8n model and the (untracked) YOLO26 nano/small repo. Unlike
-    :func:`setup_object_detection`, this does not check demo requirements, so
+    :func:`setup`, this does not check demo requirements, so
     it can be reused by other projects that manage their own environment and
     models dir.
     """
@@ -156,12 +156,17 @@ def ensure_object_detection_models(
     )
 
 
-def setup_object_detection(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
-    """Set up the object detection demo (requirements, then assets)."""
+    """Set up the object detection demo (requirements, then assets).
+
+    ``enable_prefill`` is accepted for a uniform interface and ignored (no
+    batched prefill model)."""
     if models is None:
         models = _DEFAULT_MODELS
     return setup_demo(
@@ -178,7 +183,7 @@ def setup_object_detection(
 
 if __name__ == "__main__":
     demo_main(
-        setup_object_detection,
+        setup,
         description="Set up the object detection demo.",
         default_models=_DEFAULT_MODELS,
         repo_map=_OD_HF_REPO_MAP,

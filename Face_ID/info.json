@@ -1,0 +1,5 @@
+{
+  "name": "face_id",
+  "description": "Face detection on an image file using a Torq VMFB model.",
+  "task_category": "face_recognition"
+}

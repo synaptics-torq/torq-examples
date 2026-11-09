@@ -22,6 +22,7 @@ from moonshine.setup_demo import (
 )
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
 
@@ -48,13 +49,16 @@ def _transcribe(
     return TranscriptionResult(text, audio_duration_ms)
 
 
-def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
+def _print_result(result: TranscriptionResult, runner: MoonshineRunner, metrics=None) -> None:
     ttft = runner.time_to_first_token
     total = runner.last_infer_time
     decode_ms = total - ttft
     decode_tokens = max(0, runner.generated_tokens - 1)
     tps = decode_tokens / decode_ms * 1000 if decode_ms > 0 else 0
     rtf = total / result.audio_duration_ms if result.audio_duration_ms > 0 else 0
+    if metrics is not None:
+        metrics.add("latency", int(total * 1e6))
+        metrics.add("real_time_factor", rtf * 100)
     print(
         f"{GREEN}Transcribed: {result.text}{RESET}"
         f"  ({total:.0f} ms, TTFT: {ttft:.0f} ms, "
@@ -86,9 +90,10 @@ def main(args: argparse.Namespace):
     tokenizer = Tokenizer.from_file(tokenizer_path)
 
     try:
-        for wav in args.inputs:
-            result = _transcribe(wav, runner, tokenizer)
-            _print_result(result, runner)
+        with MetricsRun(args.metrics_out) as m:
+            for wav in args.inputs:
+                result = _transcribe(wav, runner, tokenizer)
+                _print_result(result, runner, m)
     except KeyboardInterrupt:
         logger.info("Stopped by user.")
     finally:

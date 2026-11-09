@@ -6,6 +6,7 @@ the chat loop, and the ``max_gen_tokens`` generation cap."""
 
 import argparse
 import builtins
+import json
 import logging
 import signal
 import subprocess
@@ -24,6 +25,7 @@ from utils.inference import (
     print_llm_stats,
     run_chat_loop,
 )
+from utils.metrics import MetricsRun
 from utils import llm as llm_module
 from utils.llm import DecoderOnlyLLMRunner
 
@@ -294,6 +296,18 @@ def test_print_llm_stats_line():
         print_llm_stats(_FakeStatsRunner())
     line = print_mock.call_args.args[0]
     assert line == "  (123 ms, TTFT: 10 ms, 44.1 tok/s)\n"
+
+
+def test_print_llm_stats_records_metrics(tmp_path, capsys):
+    out = tmp_path / "m.json"
+    with MetricsRun(str(out)) as m:
+        print_llm_stats(_FakeStatsRunner(), m)
+
+    doc = json.loads(out.read_text())
+    assert doc["measurements"]["time_to_first_token"] == 10_000_000.0  # 10 ms in ns
+    assert doc["measurements"]["tokens_per_second"] == pytest.approx(5 / (123.4 - 10.0) * 1000)
+    # The printed line is unchanged.
+    assert capsys.readouterr().out == "  (123 ms, TTFT: 10 ms, 44.1 tok/s)\n\n"
 
 
 def test_inference_interrupted_shared_across_modules():

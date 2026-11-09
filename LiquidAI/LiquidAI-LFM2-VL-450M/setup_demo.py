@@ -150,7 +150,12 @@ def download_lfm2vl_int8(
     return result
 
 
-def setup_liquidvl_int8(models: list[str]):
+def setup(models=None, *, model_version=None, no_update=False, enable_prefill=False):
+    """Set up the LFM2-VL-450M INT8 demo (download the W8 model set).
+
+    ``model_version``, ``no_update`` and ``enable_prefill`` are accepted for a
+    uniform setup interface, but the W8 downloader only tracks the repo's HEAD
+    revision, so they are ignored."""
     download_lfm2vl_int8(models)
     check_requirements(Path(__file__).parent / "requirements.txt")
     logger.info("LFM2-VL-450M INT8 setup complete.")
@@ -172,7 +177,7 @@ if __name__ == "__main__":
     configure_logging(args.logging)
 
     try:
-        setup_liquidvl_int8(args.models)
+        setup(args.models)
     except (DownloadError, MissingRequirementsError, ValueError) as e:
         logger.error("%s", e)
         if e.__cause__:

@@ -5,12 +5,12 @@
 Each example belongs to one of the following task categories based on inputs and outputs:
 
 - object_detection: extract bounding boxes of objects from an image
-- pose_estimation: extract keypoints of poses from an image
+- keypoint_detection: extract keypoints of poses from an image
 - text_generation: generate text based on a given text prompt
-- visual_question_answering: generate text answers about a given image
-- speech_recognition: transcribe audio to text
+- image_text_to_text: generate text answers about a given image
+- automatic_speech_recognition: transcribe audio to text
 
-It is possible to add new task categories as needed.
+It is possible to add new task categories as needed. Category names are [Hugging Face task](https://huggingface.co/tasks) ids written with underscores (`text-generation` -> `text_generation`); `face_recognition` has no Hugging Face equivalent.
 
 ## Structure of an example
 
@@ -33,6 +33,8 @@ An example folder must contain:
 
 The setup demo_script entry point must use the `utils.model_setup.demo_main` function.
 
+The setup module must expose a uniform entry point `setup(models=None, *, model_version=None, no_update=False, enable_prefill=False)`; the top-level `setup_demos.py` discovers demos from their `info.json` files and calls it. Demos without a batched prefill model accept and ignore `enable_prefill` (they also omit the `--with-batch-prefill` flag, which `demo_main` only adds for `supports_prefill=True`).
+
 The infer script entry point must use the `utils.tasks.[task_category].infer_main` function.
 
 The validate script entry point must use the `utils.tasks.[task_category].validate_main` function.
@@ -40,8 +42,10 @@ The validate script entry point must use the `utils.tasks.[task_category].valida
 The info file must be a valid JSON file and should include at least the following fields:
 
 - `name`: the name of the example
+- `description`: a one-sentence description of the example
 - `task_category`: the task category the example belongs to
-- `supported_torq_versions`: a list of Torq versions that the example supports
+
+Demos with a batched prefill model set `"batch_prefill": true`; `setup_demos.py --with-batch-prefill` tracks the extra model for those demos and warns for the rest.
 
 The info file is used by the test framework to run appropriate tests for the example.
 
@@ -74,12 +78,12 @@ performance metrics in the following format:
 {
    "metrics":  [
      {"name": "time_to_first_token", "description": "Time taken to generate the first token", "unit": "ns"},
-     {"name": "tokens_per_second", "description": "Time taken to generate all answer tokens divided by total number of tokens", "unit": "hz"},
+     {"name": "tokens_per_second", "description": "Generated answer tokens divided by the time taken to generate them", "unit": "hz"},
      {"name": "cpu_load", "description": "CPU load during demo execution", "unit": "percent"},
      {"name": "npu_load", "description": "NPU load during demo execution", "unit": "percent"}
    ],
    "measurements" : {
-     "time_to_first_token": 100, "tokens_per_second": 10, "cpu_load": 0.1, "npu_load": 0.9
+     "time_to_first_token": 100, "tokens_per_second": 10, "cpu_load": 10, "npu_load": 90
     }
 }
 ```

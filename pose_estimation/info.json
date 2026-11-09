@@ -1,0 +1,5 @@
+{
+  "name": "pose_estimation",
+  "description": "YOLOv8n pose estimation using a Torq VMFB model.",
+  "task_category": "keypoint_detection"
+}

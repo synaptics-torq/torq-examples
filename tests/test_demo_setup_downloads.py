@@ -13,7 +13,6 @@ import pytest
 
 from gemma3 import setup_demo as gemma_setup
 from moonshine import setup_demo as moonshine_setup
-from moonshine_streaming import setup_demo as moonshine_streaming_setup
 from object_detection import setup_demo as object_detection_setup
 from pose_estimation import setup_demo as pose_setup
 from utils.download import DownloadError, ModelVersionNotFoundError, write_manifest
@@ -84,7 +83,7 @@ def test_setup_default_tracks_examples_version(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"])
+        moonshine_setup.setup(["tiny-en"])
 
     # No explicit version: the built-in repo must be resolved at the
     # torq-examples version, and the manifest must record it.
@@ -106,7 +105,7 @@ def test_setup_pins_explicit_version(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"], model_version=_PINS)
+        moonshine_setup.setup(["tiny-en"], model_version=_PINS)
 
     rev.assert_called_once_with(repo_id, revision=_PINS)
     # The download itself must use the pinned version, not the examples version.
@@ -127,7 +126,7 @@ def test_setup_per_model_version_spec_wins_over_global(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
     ):
-        moonshine_setup.setup_moonshine([f"tiny-en:{_PINS}"], model_version="v9.9.9")
+        moonshine_setup.setup([f"tiny-en:{_PINS}"], model_version="v9.9.9")
 
     # The 'name:version' suffix takes precedence over --model-version.
     rev.assert_called_once_with(repo_id, revision=_PINS)
@@ -146,7 +145,7 @@ def test_setup_custom_repo_defaults_to_head_untracked(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine(["custom/moonshine"])
+        moonshine_setup.setup(["custom/moonshine"])
 
     # Non-Synaptics repo without an explicit version: no revision is passed to
     # the HF helpers (HEAD) and nothing is resolved/tracked.
@@ -170,7 +169,7 @@ def test_setup_custom_repo_with_explicit_version_is_tracked(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
     ):
-        moonshine_setup.setup_moonshine(["custom/moonshine"], model_version="v1.0.0")
+        moonshine_setup.setup(["custom/moonshine"], model_version="v1.0.0")
 
     rev.assert_called_once_with(repo_id, revision="v1.0.0")
     assert _manifest(base_dir / repo_id)["version"] == "v1.0.0"
@@ -190,7 +189,7 @@ def test_setup_missing_version_fails_loudly(tmp_path):
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         try:
-            moonshine_setup.setup_moonshine(["tiny-en"], model_version=_PINS)
+            moonshine_setup.setup(["tiny-en"], model_version=_PINS)
             raise AssertionError("expected DownloadError")
         except DownloadError:
             pass
@@ -208,7 +207,7 @@ def test_setup_missing_examples_version_fails_loudly(tmp_path):
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
         try:
-            moonshine_setup.setup_moonshine(["tiny-en"])
+            moonshine_setup.setup(["tiny-en"])
             raise AssertionError("expected DownloadError")
         except DownloadError as exc:
             assert "VERSION" in str(exc)
@@ -229,7 +228,7 @@ def test_setup_skips_when_revision_matches(tmp_path):
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"])
+        moonshine_setup.setup(["tiny-en"])
 
     download.assert_not_called()
 
@@ -247,7 +246,7 @@ def test_setup_downloads_required_files_and_records_revision(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"])
+        moonshine_setup.setup(["tiny-en"])
 
     downloaded = [call.args[1] for call in download.call_args_list]
     assert downloaded == list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
@@ -280,7 +279,7 @@ def test_setup_refreshes_and_clears_stale_files_on_revision_change(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"])
+        moonshine_setup.setup(["tiny-en"])
 
     # All required files re-downloaded after the stale dir was cleared.
     downloaded = [call.args[1] for call in download.call_args_list]
@@ -309,7 +308,7 @@ def test_setup_offline_uses_local_files(tmp_path):
         mock.patch.object(model_setup, "get_hf_revision", return_value=None),
         mock.patch.object(moonshine_setup, "download_from_hf") as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"])
+        moonshine_setup.setup(["tiny-en"])
 
     download.assert_not_called()
 
@@ -326,7 +325,7 @@ def test_setup_offline_with_missing_files_fails_loudly(tmp_path):
         ),
     ):
         try:
-            moonshine_setup.setup_moonshine(["tiny-en"])
+            moonshine_setup.setup(["tiny-en"])
             raise AssertionError("expected DownloadError")
         except DownloadError:
             pass
@@ -344,7 +343,7 @@ def test_setup_no_update_writes_no_manifest(tmp_path):
         ) as download,
         mock.patch.object(model_setup, "get_hf_revision") as rev,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
+        moonshine_setup.setup(["tiny-en"], no_update=True)
 
     # Untracked: files are downloaded but nothing is resolved or recorded.
     rev.assert_not_called()
@@ -367,7 +366,7 @@ def test_setup_no_update_reuses_existing_files(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
+        moonshine_setup.setup(["tiny-en"], no_update=True)
 
     # The copy is complete, so re-running --no-update must not touch the files.
     download.assert_not_called()
@@ -387,7 +386,7 @@ def test_setup_no_update_downloads_head_not_builtin_version(tmp_path):
         ) as download,
         mock.patch.object(model_setup, "get_hf_revision") as rev,
     ):
-        moonshine_setup.setup_moonshine(["tiny-en"], no_update=True)
+        moonshine_setup.setup(["tiny-en"], no_update=True)
 
     # Untracked and unversioned: the built-in VERSION tag is not used as the
     # download revision (untagged repos cannot resolve it); HEAD is.
@@ -410,7 +409,7 @@ def test_setup_no_update_keeps_explicit_version(tmp_path):
         ) as download,
         mock.patch.object(model_setup, "get_hf_revision") as rev,
     ):
-        moonshine_setup.setup_moonshine(
+        moonshine_setup.setup(
             ["tiny-en"], no_update=True, model_version=_PINS
         )
 
@@ -434,7 +433,7 @@ def test_setup_no_update_keeps_per_model_version_spec(tmp_path):
             moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ) as download,
     ):
-        moonshine_setup.setup_moonshine([f"tiny-en:{_PINS}"], no_update=True)
+        moonshine_setup.setup([f"tiny-en:{_PINS}"], no_update=True)
 
     # A per-model 'name:version' spec wins over the untracked HEAD default.
     assert download.called
@@ -631,7 +630,7 @@ def test_yolo_setup_default_tracks_examples_version(tmp_path):
             object_detection_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
     ):
-        object_detection_setup.setup_object_detection()
+        object_detection_setup.setup()
 
     rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
     assert _manifest(base_dir / repo_id)["version"] == _EXAMPLES_VERSION
@@ -666,7 +665,7 @@ def test_yolo26_setup_downloads_untracked_at_head(tmp_path):
             object_detection_setup, "download_from_hf", side_effect=_fake_download(base_dir)
         ),
     ):
-        object_detection_setup.setup_object_detection()
+        object_detection_setup.setup()
 
     # The yolo26 repo has no version tags, so it is downloaded at HEAD and left
     # untracked; the revision check only happens for the tracked nano repo.
@@ -760,7 +759,7 @@ def test_gemma_skips_when_revision_matches(tmp_path):
         ) as rev,
         mock.patch.object(gemma_setup, "download_from_hf") as download,
     ):
-        gemma_setup.setup_gemma3(["instruct"])
+        gemma_setup.setup(["instruct"])
 
     rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
     download.assert_not_called()
@@ -795,7 +794,7 @@ def test_gemma_repairs_incomplete_download_and_records_lut(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        gemma_setup.setup_gemma3(["instruct"])
+        gemma_setup.setup(["instruct"])
 
     # The existing model.vmfb.trim is preserved (not re-downloaded).
     downloaded = [call.args[1] for call in download.call_args_list]
@@ -836,7 +835,7 @@ def test_gemma_downloads_split_lm_head_pair(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        gemma_setup.setup_gemma3(["instruct"])
+        gemma_setup.setup(["instruct"])
 
     downloaded = [call.args[1] for call in download.call_args_list]
     expected_files = [
@@ -877,7 +876,7 @@ def test_gemma_repairs_existing_split_body_by_fetching_lm_head(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        gemma_setup.setup_gemma3(["instruct"])
+        gemma_setup.setup(["instruct"])
 
     downloaded = [call.args[1] for call in download.call_args_list]
     expected_files = [
@@ -1014,7 +1013,7 @@ def _run_gemma_setup(base_dir: Path, exists, *, enable_prefill: bool):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        gemma_setup.setup_gemma3(["instruct"], enable_prefill=enable_prefill)
+        gemma_setup.setup(["instruct"], enable_prefill=enable_prefill)
     return download
 
 
@@ -1213,7 +1212,7 @@ def test_liquid_w8a8_setup_downloads_prefill(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        liquid_setup.setup_liquid(["230m-w8a8"], enable_prefill=True)
+        liquid_setup.setup(["230m-w8a8"], enable_prefill=True)
 
     downloaded = [call.args[1] for call in download.call_args_list]
     assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
@@ -1244,7 +1243,7 @@ def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        liquid_setup.setup_liquid(["230m"], enable_prefill=True)
+        liquid_setup.setup(["230m"], enable_prefill=True)
 
     downloaded = [call.args[1] for call in download.call_args_list]
     assert downloaded == [
@@ -1278,7 +1277,7 @@ def test_liquid_falls_back_to_legacy_body_set(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        liquid_setup.setup_liquid(["230m"])
+        liquid_setup.setup(["230m"])
 
     downloaded = [call.args[1] for call in download.call_args_list]
     assert downloaded == [
@@ -1398,7 +1397,7 @@ def test_liquid_prefill_not_downloaded_without_flag(tmp_path):
             side_effect=_fake_download(base_dir),
         ) as download,
     ):
-        liquid_setup.setup_liquid(["230m"])
+        liquid_setup.setup(["230m"])
 
     downloaded = [call.args[1] for call in download.call_args_list]
     assert liquid_setup._LIQUID_PREFILL_FILENAME not in downloaded
@@ -1431,7 +1430,7 @@ def test_liquid_prefill_untracking_persists_across_setup_runs(tmp_path):
                 side_effect=_fake_download(base_dir),
             ) as download,
         ):
-            liquid_setup.setup_liquid(["230m"], enable_prefill=enable_prefill)
+            liquid_setup.setup(["230m"], enable_prefill=enable_prefill)
         return download
 
     run_setup(True)
@@ -1472,7 +1471,7 @@ def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
                 side_effect=_fake_download(base_dir),
             ) as download,
         ):
-            liquid_setup.setup_liquid(["230m"], enable_prefill=enable_prefill)
+            liquid_setup.setup(["230m"], enable_prefill=enable_prefill)
         return download
 
     run_setup(False)
@@ -1486,7 +1485,7 @@ def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
     assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
 
 
-# ── prefill opt-in shape ─────────────────────────────────────────────────────
+# ── uniform setup entry point ────────────────────────────────────────────────
 
 
 def _load_setup_module(*path_parts):
@@ -1499,23 +1498,28 @@ def _load_setup_module(*path_parts):
     return module
 
 
-def test_prefill_is_opt_in_per_demo():
-    """Only the demos with a batched prefill model (gemma3, LiquidAI-LFM2.5)
-    expose ``enable_prefill``; every other demo keeps the plain setup
-    interface."""
-    liquidvl_int8_setup = _load_setup_module("LiquidAI", "LiquidAI-LFM2-VL-450M")
-    checks = [
-        (gemma_setup.setup_gemma3, True),
-        (liquid_setup.setup_liquid, True),
-        (moonshine_setup.setup_moonshine, False),
-        (moonshine_streaming_setup.setup_moonshine_streaming, False),
-        (liquidvl_int8_setup.setup_liquidvl_int8, False),
-        (object_detection_setup.setup_object_detection, False),
-        (pose_setup.setup_pose_estimation, False),
-    ]
-    for setup_fn, supports_prefill in checks:
-        params = inspect.signature(setup_fn).parameters
-        assert ("enable_prefill" in params) is supports_prefill, setup_fn.__name__
+def _setup_params(fn) -> dict:
+    """(kind, default) per parameter name; Signature objects do not compare
+    functions' parameters by value, so compare the parameters themselves."""
+    return {
+        name: (param.kind, param.default)
+        for name, param in inspect.signature(fn).parameters.items()
+    }
+
+
+def test_setup_entry_point_signature_is_uniform():
+    """Every demo's setup_demo.py exposes the same ``setup`` entry point:
+    ``setup(models=None, *, model_version=None, no_update=False,
+    enable_prefill=False)``. Demos without a batched prefill model accept and
+    ignore ``enable_prefill``."""
+    import setup_demos
+
+    expected = _setup_params(
+        lambda models=None, *, model_version=None, no_update=False, enable_prefill=False: None
+    )
+    for folder in sorted(setup_demos._DEMO_FOLDERS):
+        module = _load_setup_module(*folder.split("/"))
+        assert _setup_params(module.setup) == expected, folder
 
 
 def test_demo_main_prefill_flag_only_when_opted_in():
@@ -1554,25 +1558,29 @@ def test_demo_main_prefill_flag_only_when_opted_in():
     assert calls == [{"model_version": None, "no_update": False}]
 
 
-def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
-    """``setup_demos.py`` forwards ``enable_prefill`` only to the prefill-capable
-    demos; for every other demo the call is unchanged and just a warning is
-    logged."""
+def test_setup_demos_prefill_forwarded_and_warned(caplog):
+    """``setup_demos.py`` forwards ``enable_prefill`` to every demo's uniform
+    ``setup`` entry point, and warns only for the demos whose info.json has no
+    ``batch_prefill`` (they accept and ignore it)."""
     import setup_demos
-
-    with mock.patch.object(gemma_setup, "setup_gemma3") as gemma_mock:
-        setup_demos.setup_demo("gemma3", enable_prefill=True)
-    gemma_mock.assert_called_once_with(
-        [gemma_setup.DEFAULT_MODEL], model_version=None, no_update=False, enable_prefill=True
-    )
 
     with (
         caplog.at_level(logging.WARNING),
-        mock.patch.object(moonshine_setup, "setup_moonshine") as moonshine_mock,
+        mock.patch.object(gemma_setup, "setup") as gemma_mock,
+    ):
+        setup_demos.setup_demo("gemma3", enable_prefill=True)
+    gemma_mock.assert_called_once_with(
+        model_version=None, no_update=False, enable_prefill=True
+    )
+    assert not [r for r in caplog.records if r.levelno >= logging.WARNING]
+
+    with (
+        caplog.at_level(logging.WARNING),
+        mock.patch.object(moonshine_setup, "setup") as moonshine_mock,
     ):
         setup_demos.setup_demo("moonshine", enable_prefill=True)
     moonshine_mock.assert_called_once_with(
-        ["tiny-en"], model_version=None, no_update=False
+        model_version=None, no_update=False, enable_prefill=True
     )
     warnings = [r for r in caplog.records if r.levelno >= logging.WARNING]
     assert any(
@@ -1584,13 +1592,15 @@ def test_setup_demos_prefill_forwarded_only_to_capable_demos(tmp_path, caplog):
 def test_setup_demos_pose_forwards_version_flags():
     """The root dispatch forwards ``--model-version``/``--no-update`` to
     ``pose_estimation`` like every other tracked demo (the pose branch used to
-    call ``setup_pose_estimation()`` bare, silently dropping both flags)."""
+    call ``setup()`` bare, silently dropping both flags)."""
     import setup_demos
 
-    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+    with mock.patch.object(pose_setup, "setup") as pose_mock:
         setup_demos.setup_demo("pose_estimation", model_version="v2.2.1", no_update=True)
-    pose_mock.assert_called_once_with(model_version="v2.2.1", no_update=True)
+    pose_mock.assert_called_once_with(
+        model_version="v2.2.1", no_update=True, enable_prefill=False
+    )
 
-    with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
+    with mock.patch.object(pose_setup, "setup") as pose_mock:
         setup_demos.setup_demo("pose_estimation")
-    pose_mock.assert_called_once_with(model_version=None, no_update=False)
+    pose_mock.assert_called_once_with(model_version=None, no_update=False, enable_prefill=False)

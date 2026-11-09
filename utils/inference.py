@@ -17,6 +17,7 @@ from torq.runtime import VMFBInferenceRunner
 from iree.runtime import DeviceArray, HalCommandBuffer
 
 from utils.log import add_logging_args
+from utils.metrics import add_metrics_args
 from utils.terminal import InferenceStopInput
 
 StopCheck = Callable[[], bool]
@@ -681,7 +682,7 @@ def add_common_inference_args(
     Adds ``-j/--threads`` (unless *with_threads*), ``--no-refresh`` (unless
     *with_no_refresh*), a "runtime" group with ``--tda`` (default
     *tda_default*), ``--device-io`` (unless *with_allocator*) and
-    ``--runtime-flags``, and the logging args.
+    ``--runtime-flags``, the logging args, and ``--metrics-out``.
     """
     if with_threads:
         parser.add_argument(
@@ -719,6 +720,7 @@ def add_common_inference_args(
         help=_RUNTIME_FLAGS_HELP,
     )
     add_logging_args(parser)
+    add_metrics_args(parser)
 
 
 def add_llm_inference_args(
@@ -866,14 +868,18 @@ def finish_interrupted_output(started_output: bool) -> None:
     sys.stdout.flush()
 
 
-def print_llm_stats(runner) -> None:
+def print_llm_stats(runner, metrics=None) -> None:
     """Print the per-answer stats line for a LLM runner.
 
     Uses the runner's ``last_infer_time`` (total ms), ``time_to_first_token``
     (ms) and ``generated_tokens`` — the same fields every LLM demo reports.
+    With a *metrics* run, the printed TTFT (ns) and tok/s are recorded too.
     """
     decode_ms = runner.last_infer_time - runner.time_to_first_token
     tps = runner.generated_tokens / decode_ms * 1000 if decode_ms > 0 else 0
+    if metrics is not None:
+        metrics.add("time_to_first_token", int(runner.time_to_first_token * 1e6))
+        metrics.add("tokens_per_second", tps)
     print(
         f"  ({runner.last_infer_time:.0f} ms, "
         f"TTFT: {runner.time_to_first_token:.0f} ms, "

@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from runner import LiquidStatic
 from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.runtime import (
     build_runtime_flags,
@@ -63,12 +64,13 @@ def main(args: argparse.Namespace):
         disable_prefill=args.no_batch_prefill_model,
     )
     try:
-        run_chat_loop(
-            lambda text, should_stop: liquid.run(text, should_stop=should_stop),
-            liquid.run_stream,
-            lambda: print_llm_stats(liquid),
-            debug=args.logging.upper() == "DEBUG",
-        )
+        with MetricsRun(args.metrics_out) as m:
+            run_chat_loop(
+                lambda text, should_stop: liquid.run(text, should_stop=should_stop),
+                liquid.run_stream,
+                lambda: print_llm_stats(liquid, m),
+                debug=args.logging.upper() == "DEBUG",
+            )
     finally:
         cleanup_npu_after_inference()
 

@@ -12,6 +12,7 @@ from runner import Qwen3Static, hide_thinking
 from qwen3.setup_demo import ensure_qwen3_models, local_qwen3_model_path
 from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.runtime import (
     build_runtime_flags,
     cleanup_npu_after_inference,
@@ -52,16 +53,17 @@ def main(args: argparse.Namespace):
     )
     hide = args.thinking and not args.show_thinking
     try:
-        run_chat_loop(
-            lambda text, should_stop: "".join(
-                hide_thinking([qwen.run(text, should_stop=should_stop)])
-            ) if hide else qwen.run(text, should_stop=should_stop),
-            lambda text, should_stop=None: hide_thinking(
-                qwen.run_stream(text, should_stop=should_stop)
-            ) if hide else qwen.run_stream(text, should_stop=should_stop),
-            lambda: print_llm_stats(qwen),
-            debug=args.logging.upper() == "DEBUG",
-        )
+        with MetricsRun(args.metrics_out) as m:
+            run_chat_loop(
+                lambda text, should_stop: "".join(
+                    hide_thinking([qwen.run(text, should_stop=should_stop)])
+                ) if hide else qwen.run(text, should_stop=should_stop),
+                lambda text, should_stop=None: hide_thinking(
+                    qwen.run_stream(text, should_stop=should_stop)
+                ) if hide else qwen.run_stream(text, should_stop=should_stop),
+                lambda: print_llm_stats(qwen, m),
+                debug=args.logging.upper() == "DEBUG",
+            )
     finally:
         cleanup_npu_after_inference()
 
