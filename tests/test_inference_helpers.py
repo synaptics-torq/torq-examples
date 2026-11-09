@@ -19,7 +19,6 @@ import pytest
 
 from utils.inference import (
     InferenceInterrupted,
-    add_common_inference_args,
     add_llm_inference_args,
     finish_interrupted_output,
     print_llm_stats,
@@ -28,6 +27,7 @@ from utils.inference import (
 from utils.metrics import MetricsRun
 from utils import llm as llm_module
 from utils.llm import DecoderOnlyLLMRunner
+from utils.runtime import add_common_inference_args
 
 
 # ── add_llm_inference_args / add_common_inference_args ─────────────────────────────────

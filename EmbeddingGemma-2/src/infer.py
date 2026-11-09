@@ -23,7 +23,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
-from utils.metrics import MetricsRun, add_metrics_args  # noqa: E402
+from utils.metrics import MetricsRun  # noqa: E402
+from utils.runtime import RuntimeConfig, add_common_inference_args  # noqa: E402
 
 
 def _fmt_timings(t: dict) -> str:
@@ -52,7 +53,7 @@ def main():
     ap.add_argument("--dim", type=int, default=768, choices=[768, 512, 256, 128], help="Matryoshka dimension")
     ap.add_argument("--top", type=int, default=5, help="Matches listed per query (default: %(default)s)")
     ap.add_argument("-v", "--verbose", action="store_true")
-    add_metrics_args(ap)
+    add_common_inference_args(ap, with_threads=False, with_no_refresh=False)
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
@@ -84,7 +85,8 @@ def main():
                      "run --audios in a separate session from --images/--videos; embeddings from both "
                      "sessions share one space and can be compared directly")
     model = EmbeddingGemma2(args.model_dir, backend=args.backend, ort_threads=args.ort_threads,
-                            modalities=tuple(modalities), audio_frames=audio_frames)
+                            modalities=tuple(modalities), audio_frames=audio_frames,
+                            runtime=RuntimeConfig.from_args(args))
 
     with MetricsRun(args.metrics_out) as m:
         Q = []

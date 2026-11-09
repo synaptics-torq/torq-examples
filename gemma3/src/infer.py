@@ -18,39 +18,32 @@ from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_lo
 from utils.log import configure_logging
 from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
-from utils.runtime import (
-    build_runtime_flags,
-    cleanup_npu_after_inference,
-    setup_npu_for_inference,
-)
+from utils.runtime import RuntimeConfig, npu_clock
 
 
 def main(args: argparse.Namespace):
 
     logging.getLogger("Gemma3").info("Starting assistant...")
     ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
+    runtime = RuntimeConfig.from_args(args)
 
-    setup_npu_for_inference()
-
-    gemma3 = Gemma3Static(
-        args.model,
-        args.max_seq_len,
-        max_prompt_tokens=args.max_inp_len,
-        n_threads=args.threads,
-        instruct_model=args.instruct_model,
-        cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
-        temperature=args.temperature,
-        top_p=args.top_p,
-        top_k=args.top_k,
-        max_gen_tokens=args.max_gen_tokens,
-        runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
-        device_io=args.device_io,
-        lm_head_path=args.lm_head,
-        disable_lm_head=args.no_lm_head,
-        prefill_model_path=args.batch_prefill_model,
-        disable_prefill=args.no_batch_prefill_model,
-    )
-    try:
+    with npu_clock():
+        gemma3 = Gemma3Static(
+            args.model,
+            args.max_seq_len,
+            max_prompt_tokens=args.max_inp_len,
+            runtime=runtime,
+            instruct_model=args.instruct_model,
+            cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
+            temperature=args.temperature,
+            top_p=args.top_p,
+            top_k=args.top_k,
+            max_gen_tokens=args.max_gen_tokens,
+            lm_head_path=args.lm_head,
+            disable_lm_head=args.no_lm_head,
+            prefill_model_path=args.batch_prefill_model,
+            disable_prefill=args.no_batch_prefill_model,
+        )
         with MetricsRun(args.metrics_out) as m:
             run_chat_loop(
                 lambda text, should_stop: gemma3.run(text, should_stop=should_stop),
@@ -58,8 +51,6 @@ def main(args: argparse.Namespace):
                 lambda: print_llm_stats(gemma3, m),
                 debug=args.logging.upper() == "DEBUG",
             )
-    finally:
-        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":

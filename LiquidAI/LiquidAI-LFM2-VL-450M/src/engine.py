@@ -28,7 +28,8 @@ import ml_dtypes
 import numpy as np
 from PIL import Image
 from tokenizers import Tokenizer
-from torq.runtime import VMFBInferenceRunner
+
+from utils.runtime import Model, RuntimeConfig
 
 PATCH: Final[int] = 16
 DOWNSAMPLE: Final[int] = 2  # connector spatial downsample (256 patches -> 64 tokens)
@@ -78,7 +79,7 @@ def _to_pixel_values(rgb256: np.ndarray) -> np.ndarray:
     return x[None, ...]
 
 
-def _bf16_device(runner: VMFBInferenceRunner, arr: np.ndarray):
+def _bf16_device(runner: Model, arr: np.ndarray):
     """Host ndarray -> contiguous device array in the runner's IO (bf16) dtype."""
     io_dtype = np.dtype(runner.inputs_info[0].dtype)
     return runner.allocate_device_array(np.ascontiguousarray(arr.astype(io_dtype)))
@@ -108,13 +109,12 @@ class LFM2VLEngine:
         vision: str | os.PathLike | None = None,
         lm_head: str | os.PathLike | None = None,
         image_decoder_prefix: str | os.PathLike | None = None,
-        tda: str = "dmabuf",
+        runtime: RuntimeConfig | None = None,
         max_new: int = 128,
         max_seq_len: int | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
-        n_threads: int | None = None,
     ):
         self._model_dir = os.fspath(model_dir)
         with open(os.path.join(self._model_dir, "config.json")) as f:
@@ -126,13 +126,11 @@ class LFM2VLEngine:
         if self._token_embeddings.dtype == np.dtype("V2"):  # bf16 stored as raw void2
             self._token_embeddings = self._token_embeddings.view(ml_dtypes.bfloat16)
 
-        self._tda = tda
-        self._flags = [f"--torq_device_allocator={tda}"]
+        self._runtime = runtime or RuntimeConfig()
         self._max_new = max_new
         self._temperature = temperature
         self._top_p = top_p
         self._top_k = top_k
-        self._n_threads = n_threads
 
         # explicit paths win; otherwise the conventional _W8 names in model_dir
         d = self._model_dir
@@ -192,12 +190,8 @@ class LFM2VLEngine:
 
         self._warmup()
 
-    def _mk(self, path: str, function: str) -> VMFBInferenceRunner:
-        return VMFBInferenceRunner(
-            path, function=function, device_uri="torq",
-            n_threads=self._n_threads, runtime_flags=self._flags,
-            device_outputs=True,
-        )
+    def _mk(self, path: str, function: str) -> Model:
+        return Model(path, self._runtime, function=function, device_outputs=True)
 
     def _reset_caches(self) -> None:
         self._caches = [

@@ -32,7 +32,7 @@ import os
 import ml_dtypes
 import numpy as np
 
-from torq.runtime import VMFBInferenceRunner
+from utils.runtime import Model, RuntimeConfig
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -106,7 +106,7 @@ def _load_bfloat16_table(path: str) -> np.ndarray:
 # *_INPUT_ORDER name lists so the rest of this module can feed/read VMFBs by
 # name instead of by position.
 
-def _named_inputs_info(runner: VMFBInferenceRunner, input_order: list, vmfb_path: str) -> dict:
+def _named_inputs_info(runner: Model, input_order: list, vmfb_path: str) -> dict:
     """Pair ``runner.inputs_info`` (positional, no names) with the hardcoded
     input order. A length mismatch means the model was re-exported with a
     different arity — fail loudly rather than silently feed tensors into the
@@ -210,26 +210,19 @@ class MoonshineStaticStreamingModel:
     Args:
         model_dir: Flat directory holding the encoder/decoder ``.vmfb`` files,
             configs, npy tables and tokenizer.
-        runtime_flags: Flags forwarded verbatim to the Torq runtime, or ``None``
-            to use the runtime's own defaults.
-        device_io: Convert host NumPy model inputs to device arrays before
-            inference. Required with the dmabuf device allocator.
+        runtime: The session's ``RuntimeConfig`` (device, allocator, device
+            I/O). ``None`` uses the RuntimeConfig defaults (torq, dmabuf,
+            device I/O on).
     """
-    def __init__(self, model_dir: str, runtime_flags: list[str] | None = None,
-                 device_io: bool = False):
+    def __init__(self, model_dir: str, runtime: RuntimeConfig | None = None):
         # Flat layout: VMFBs, configs, npy tables and tokenizer all live in
         # model_dir. Input names are hardcoded (see *_INPUT_ORDER above).
         self.model_dir = model_dir
-        self._device_io = device_io
+        self._runtime = runtime or RuntimeConfig()
 
         def load_runner(name, input_order, device_outputs=False):
             vmfb = os.path.join(model_dir, name + ".vmfb")
-            runner = VMFBInferenceRunner(
-                vmfb,
-                device_uri="torq://",
-                runtime_flags=runtime_flags,
-                device_outputs=device_outputs,
-            )
+            runner = Model(vmfb, self._runtime, device_outputs=device_outputs)
             return runner, _named_inputs_info(runner, input_order, vmfb)
 
         logger.info("Loading VMFB sessions from %s", model_dir)
@@ -322,12 +315,6 @@ class MoonshineStaticStreamingModel:
             *state.enc_bufs,
         ]
 
-        if self._device_io:
-            encoder_inputs = [
-                self.fused_encoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
-                for x in encoder_inputs
-            ]
-
         res = _to_host(self.fused_encoder.infer(encoder_inputs))
 
         # Unpack outputs:
@@ -419,12 +406,6 @@ class MoonshineStaticStreamingModel:
             decoder_inputs.extend((k_cross_dev[_i], v_cross_dev[_i]))
         position_ids = current_len
         decoder_inputs.extend((cross_attn_bias, position_ids, current_len))
-
-        if self._device_io:
-            decoder_inputs = [
-                self.decoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
-                for x in decoder_inputs
-            ]
 
         dec_out = self.decoder.infer(decoder_inputs)
 

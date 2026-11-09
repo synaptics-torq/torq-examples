@@ -41,7 +41,7 @@ from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
-from utils.runtime import build_runtime_flags
+from utils.runtime import RuntimeConfig, npu_clock
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -415,29 +415,29 @@ class TeacherForcedValidator(BaseValidator):
 
 
 def main(args: argparse.Namespace) -> None:
-    gemma3 = Gemma3Static(
-        args.model,
-        args.max_seq_len,
-        max_prompt_tokens=args.max_inp_len,
-        n_threads=args.threads,
-        instruct_model=args.instruct_model,
-        cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
-        temperature=0.0,   # greedy decoding for reproducibility
-        runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
-        device_io=args.device_io,
-        lm_head_path=args.lm_head,
-        disable_lm_head=args.no_lm_head,
-    )
-    val_cls = VALIDATORS[args.mode]
-    val_cls(
-        args.dataset,
-        gemma3,
-        max_samples=args.max_samples,
-        output_csv=args.output_csv,
-        use_few_shot=args.use_few_shot,
-        few_shot_file=args.few_shot_file,
-        verbose=args.verbose,
-    ).run()
+    runtime = RuntimeConfig.from_args(args)
+    with npu_clock():
+        gemma3 = Gemma3Static(
+            args.model,
+            args.max_seq_len,
+            max_prompt_tokens=args.max_inp_len,
+            runtime=runtime,
+            instruct_model=args.instruct_model,
+            cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
+            temperature=0.0,   # greedy decoding for reproducibility
+            lm_head_path=args.lm_head,
+            disable_lm_head=args.no_lm_head,
+        )
+        val_cls = VALIDATORS[args.mode]
+        val_cls(
+            args.dataset,
+            gemma3,
+            max_samples=args.max_samples,
+            output_csv=args.output_csv,
+            use_few_shot=args.use_few_shot,
+            few_shot_file=args.few_shot_file,
+            verbose=args.verbose,
+        ).run()
 
 
 if __name__ == "__main__":

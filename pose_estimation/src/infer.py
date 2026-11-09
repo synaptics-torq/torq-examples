@@ -14,7 +14,7 @@ from pose_estimation.setup_demo import (
     local_pose_model_path,
 )
 from utils.preprocess import preprocess_image
-from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
+from utils.runtime import Model, RuntimeConfig, add_common_inference_args, npu_clock
 from utils.pose_estimation import (
     dequantize_out,
     postprocess_pose,
@@ -22,8 +22,9 @@ from utils.pose_estimation import (
 )
 from utils.draw import display_image_gst
 from utils.log import configure_logging
-from utils.metrics import MetricsRun, add_metrics_args
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
+from utils.video import setup_display_and_camera
 
 
 def maybe_save_and_display(args, results):
@@ -57,25 +58,11 @@ def main():
     )
     parser.add_argument("--image", required=True)
     parser.add_argument("--device", default="torq")
-    parser.add_argument(
-        "--no-refresh",
-        action="store_true",
-        default=False,
-        help="Skip the model freshness check (offline/airgapped runs)",
-    )
-    parser.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--device-io", action="store_true",
-        help="Preallocate inputs and keep outputs as device arrays",
-    )
+    add_common_inference_args(parser)
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
-    add_metrics_args(parser)
     args = parser.parse_args()
-    configure_logging("INFO")
+    configure_logging(args.logging)
 
     if args.model is None:
         args.model = str(
@@ -93,10 +80,11 @@ def main():
 
     ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
 
-    runtime_flags = build_runtime_flags(args.tda)
-    runner = setup_npu_and_runner(args, runtime_flags)
+    runtime = RuntimeConfig.from_args(args)
+    with npu_clock():
+        setup_display_and_camera(args)
+        model = Model(args.model, runtime)
 
-    try:
         print("\n[1/4] Preprocessing...")
         try:
             input_data, pad_info, orig_shape = preprocess_image(args.image)
@@ -106,9 +94,9 @@ def main():
         print("\n[2/4] Inference...")
         try:
             with MetricsRun(args.metrics_out) as m:
-                raw_out = runner.infer(input_data)
-                print(f"Time: {runner.infer_time_ms:.3f}ms")
-                latency_ns = int(runner.infer_time_ms * 1e6)
+                raw_out = model.run(input_data)[0]
+                print(f"Time: {model.infer_time_ms:.3f}ms")
+                latency_ns = int(model.infer_time_ms * 1e6)
                 m.add("latency", latency_ns)
                 m.add("frames_per_second", 1e9 / latency_ns)
         except Exception as exc:
@@ -133,8 +121,6 @@ def main():
             print(f"  Person {i + 1:<3} Conf: {conf:.4f}  Box: {bbox.astype(int)}")
 
         maybe_save_and_display(args, results)
-    finally:
-        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":

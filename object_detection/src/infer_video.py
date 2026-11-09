@@ -13,13 +13,8 @@ from object_detection.setup_demo import (
     ensure_object_detection_models,
     VARIANT_MODEL_FILES,
 )
-from utils.runtime import (
-    build_runtime_flags,
-    cleanup_npu_after_inference,
-    run_profile_if_requested,
-    setup_npu_and_runner,
-)
-from utils.video import build_video_argparser, run_video_inference_loop
+from utils.runtime import Model, RuntimeConfig, npu_clock, run_profile_if_requested
+from utils.video import build_video_argparser, run_video_inference_loop, setup_display_and_camera
 from utils.object_detection import (
     VARIANTS,
     annotate_frame,
@@ -34,15 +29,15 @@ from utils.model_setup import resolve_default_model
 
 
 
-def make_process_fn(runner, labels, variant):
+def make_process_fn(model, labels, variant):
     def process_fn(bgr_frame):
         input_data, pad_info, orig_shape = preprocess_frame_cv(bgr_frame)
-        raw_out = runner.infer(input_data)
+        raw_out = model.run(input_data)[0]
         outputs = dequantize_out(raw_out, variant["out_scale"], variant["out_zp"])
         detections = postprocess(outputs, orig_shape, pad_info, labels)
         annotated, frame_detections = annotate_frame(bgr_frame, detections)
         log_str = " ".join(f"{lbl} {conf:.2f}" for lbl, conf, _ in detections)
-        return annotated, frame_detections, runner.infer_time_ms, log_str
+        return annotated, frame_detections, model.infer_time_ms, log_str
     return process_fn
 
 
@@ -59,7 +54,7 @@ def main():
         help="Model head variant (default: %(default)s)",
     )
     args = parser.parse_args()
-    configure_logging("INFO")
+    configure_logging(args.logging)
 
     if args.model is None:
         expected = default_model_path(args.variant)
@@ -77,12 +72,10 @@ def main():
         )
 
     ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
-    runtime_flags = build_runtime_flags(args.tda, args.runtime_flags)
+    runtime = RuntimeConfig.from_args(args)
 
-    if run_profile_if_requested(args, runtime_flags):
+    if run_profile_if_requested(args, runtime):
         return
-
-    runner = setup_npu_and_runner(args, runtime_flags)
 
     labels = {}
     if args.labels:
@@ -90,14 +83,14 @@ def main():
             data = json.load(handle)
             labels = {str(k): v for k, v in data["names"].items()} if "names" in data else data
 
-    try:
+    with npu_clock():
+        setup_display_and_camera(args)
+        model = Model(args.model, runtime)
         with MetricsRun(args.metrics_out) as m:
             run_video_inference_loop(
-                args, make_process_fn(runner, labels, VARIANTS[args.variant]),
+                args, make_process_fn(model, labels, VARIANTS[args.variant]),
                 "Object Detection", metrics=m,
             )
-    finally:
-        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":

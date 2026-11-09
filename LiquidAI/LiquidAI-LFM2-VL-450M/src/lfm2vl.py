@@ -9,8 +9,7 @@ Import it, load the models once, then encode images and ask questions:
     sys.path.insert(0, "<repo>/LiquidAI/LiquidAI-LFM2-VL-450M/src")
     from lfm2vl import load_models
 
-    vl = load_models("/path/to/models")        # dmabuf, all models co-resident,
-                                                # NPU clock set for inference
+    vl = load_models("/path/to/models")        # dmabuf, all models co-resident
     vl.encode_image(img_bgr)                    # any HxWx3 BGR np.ndarray
     answer = vl.infer("What is this?")          # -> str
     for chunk in vl.infer_stream("Detail it"):  # streaming text
@@ -48,11 +47,6 @@ class LFM2VL:
 
     def __init__(self, model_dir: str | os.PathLike, **engine_kwargs):
         try:
-            from utils.runtime import setup_npu_for_inference
-            setup_npu_for_inference()
-        except Exception:
-            pass  # devfreq controls unavailable: run at the board default
-        try:
             self._engine = LFM2VLEngine(model_dir, **engine_kwargs)
         except Exception:
             self.close()
@@ -87,15 +81,10 @@ class LFM2VL:
         return self._engine.stats
 
     def close(self) -> None:
-        """Release the NPU contexts and restore the NPU clock."""
+        """Release the NPU contexts."""
         engine = getattr(self, "_engine", None)
         if engine is not None:
             engine.close()
-        try:
-            from utils.runtime import cleanup_npu_after_inference
-            cleanup_npu_after_inference()
-        except Exception:
-            pass
 
     def __enter__(self):
         return self
@@ -111,8 +100,9 @@ def load_models(model_dir: str | os.PathLike, **kwargs) -> LFM2VL:
     ``lm_head.vmfb``, ``decoder_image_2part_*.vmfb`` (A, B), ``config.json``,
     ``tokenizer.json``, ``token_embeddings.npy``.
 
-    Extra kwargs go to the engine (``tda``, ``max_new``, ``temperature``,
-    ``top_p``, ``top_k``, ``max_seq_len``, ``n_threads``). The NPU clock is set
-    for inference (1 GHz where supported) and restored on ``close()``.
+    Extra kwargs go to the engine (``runtime``, ``max_new``, ``temperature``,
+    ``top_p``, ``top_k``, ``max_seq_len``); ``runtime`` is a
+    ``utils.runtime.RuntimeConfig`` (default: torq, dmabuf, device I/O on).
+    The NPU clock is the caller's concern (``utils.runtime.npu_clock``).
     """
     return LFM2VL(model_dir, **kwargs)

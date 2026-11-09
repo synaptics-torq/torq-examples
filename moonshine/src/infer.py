@@ -20,11 +20,10 @@ from moonshine.setup_demo import (
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
-from utils.inference import add_common_inference_args
 from utils.log import configure_logging
 from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
-from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
+from utils.runtime import RuntimeConfig, add_common_inference_args, npu_clock
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -72,16 +71,7 @@ def main(args: argparse.Namespace):
 
     ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
 
-    setup_npu_for_inference()
-
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
-    device_io = args.device_io or args.tda == "dmabuf"
-    runner = MoonshineRunner(
-        args.model_dir,
-        n_threads=args.threads,
-        runtime_flags=runtime_flags,
-        device_io=device_io,
-    )
+    runtime = RuntimeConfig.from_args(args)
 
     tokenizer_path = args.tokenizer
     if tokenizer_path is None:
@@ -89,15 +79,15 @@ def main(args: argparse.Namespace):
         tokenizer_path = candidate if os.path.isfile(candidate) else "tokenizer.json"
     tokenizer = Tokenizer.from_file(tokenizer_path)
 
-    try:
-        with MetricsRun(args.metrics_out) as m:
-            for wav in args.inputs:
-                result = _transcribe(wav, runner, tokenizer)
-                _print_result(result, runner, m)
-    except KeyboardInterrupt:
-        logger.info("Stopped by user.")
-    finally:
-        cleanup_npu_after_inference()
+    with npu_clock():
+        runner = MoonshineRunner(args.model_dir, runtime=runtime)
+        try:
+            with MetricsRun(args.metrics_out) as m:
+                for wav in args.inputs:
+                    result = _transcribe(wav, runner, tokenizer)
+                    _print_result(result, runner, m)
+        except KeyboardInterrupt:
+            logger.info("Stopped by user.")
 
 
 if __name__ == "__main__":
@@ -124,12 +114,7 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Path to tokenizer.json (default: auto-detect in model dir)",
     )
-    add_common_inference_args(
-        parser,
-        tda_default="dmabuf",
-        device_io_default=False,
-        device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
-    )
+    add_common_inference_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
     if args.model_dir is None:

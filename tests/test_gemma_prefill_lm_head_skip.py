@@ -8,6 +8,7 @@ import pytest
 
 from gemma3.src.runner import Gemma3Static
 from utils.inference import SplitLMHeadRunner
+from utils.runtime import RuntimeConfig
 
 
 class RecordingGemma(Gemma3Static):
@@ -245,10 +246,10 @@ class TestGemmaPrefillLMHeadSkip:
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
 
         with patch(
-            "utils.inference.VMFBInferenceRunner",
+            "utils.runtime.VMFBInferenceRunner",
             _fake_vmfb_runner([TensorInfo((1, 1, 256), "float32")]),
         ):
-            runner = SplitLMHeadRunner(body, "lm_head.vmfb")
+            runner = SplitLMHeadRunner(body, "lm_head.vmfb", RuntimeConfig())
 
         assert runner._body is body
 
@@ -256,18 +257,18 @@ class TestGemmaPrefillLMHeadSkip:
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
 
         with patch(
-            "utils.inference.VMFBInferenceRunner",
+            "utils.runtime.VMFBInferenceRunner",
             _fake_vmfb_runner([TensorInfo((1, 1, 128), "float32")]),
         ):
             with pytest.raises(ValueError, match="input shape"):
-                SplitLMHeadRunner(body, "lm_head.vmfb")
+                SplitLMHeadRunner(body, "lm_head.vmfb", RuntimeConfig())
 
     def test_split_runner_rejects_lm_head_dtype_mismatch(self):
         body = MetadataBody([TensorInfo((1, 1, 256), "float32")])
 
         with patch(
-            "utils.inference.VMFBInferenceRunner",
+            "utils.runtime.VMFBInferenceRunner",
             _fake_vmfb_runner([TensorInfo((1, 1, 256), "float16")]),
         ):
             with pytest.raises(ValueError, match="input dtype"):
-                SplitLMHeadRunner(body, "lm_head.vmfb")
+                SplitLMHeadRunner(body, "lm_head.vmfb", RuntimeConfig())

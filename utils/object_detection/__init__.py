@@ -9,7 +9,6 @@ from .postprocess import VARIANTS, postprocess
 from utils.vision import dequantize_out, nms_numpy
 from utils.draw import draw_ui, letterbox_frame
 from utils.preprocess import preprocess_frame_cv, preprocess_image
-from utils.runtime import build_runtime_flags
 from utils.video import (
     FrameGrabber,
     RotatingJsonArrayWriter,
@@ -26,7 +25,6 @@ __all__ = [
     "FrameGrabber",
     "RotatingJsonArrayWriter",
     "annotate_frame",
-    "build_runtime_flags",
     "configure_camera",
     "create_display_pipeline",
     "dequantize_out",

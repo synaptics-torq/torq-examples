@@ -1,13 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import logging
 from pathlib import Path
 from torq.runtime import profile_vmfb_resources
 
 
 if __name__ == "__main__":
     import argparse
+
+    from utils.log import configure_logging
+    from utils.runtime import RuntimeConfig, add_common_inference_args
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -40,36 +42,11 @@ if __name__ == "__main__":
         default=False,
         help="Skip model warm-up before profiling"
     )
-    parser.add_argument(
-        "-j", "--threads",
-        type=int,
-        help="Number of cores to use for CPU execution (default: all)"
-    )
-    runtime_group = parser.add_argument_group("runtime")
-    runtime_group.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    runtime_group.add_argument(
-        "--device-io",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Preallocate inputs and keep cache outputs as device arrays (default: enabled)",
-    )
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=(
-            "[Advanced] Extra flags for the Torq runtime. "
-            "Must be specified last; all remaining arguments are forwarded."
-        ),
-    )
+    add_common_inference_args(parser, with_no_refresh=False)
     args = parser.parse_args()
-    logging.getLogger().setLevel(logging.INFO)
+    configure_logging(args.logging)
 
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
+    runtime = RuntimeConfig.from_args(args)
 
     results = profile_vmfb_resources(
         args.model,
@@ -77,8 +54,8 @@ if __name__ == "__main__":
         n_iters=args.repeat,
         n_threads=args.threads,
         function=args.function,
-        runtime_flags=runtime_flags,
-        device_io=args.device_io,
+        runtime_flags=runtime.flags,
+        device_io=runtime.device_io,
         do_warmup=not args.no_warmup,
     )
     print(results.summary())

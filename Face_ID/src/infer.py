@@ -9,16 +9,15 @@ from pathlib import Path
 
 import cv2
 import numpy as np
-from torq.runtime import VMFBInferenceRunner
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from Face_ID.src.postprocess import decode_face_outputs
 from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
 from utils.log import configure_logging
-from utils.metrics import MetricsRun, add_metrics_args
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
-from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
+from utils.runtime import Model, RuntimeConfig, add_common_inference_args, npu_clock
 
 MODEL_WIDTH = 1280
 MODEL_HEIGHT = 704
@@ -67,13 +66,6 @@ def map_boxes(detections, letterbox, image_shape):
     return mapped
 
 
-def prepare_outputs(outputs):
-    """Copy device-backed model outputs to host arrays for postprocessing."""
-    if not isinstance(outputs, (list, tuple)):
-        outputs = [outputs]
-    return [output.to_host() if hasattr(output, "to_host") else output for output in outputs]
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(description="Detect faces in an image with a Face ID VMFB.")
     parser.add_argument(
@@ -84,21 +76,10 @@ def main() -> None:
     parser.add_argument("--output", default="face_detection.jpg", help="Annotated output image")
     parser.add_argument("--json-results", default="face_detection_results.json")
     parser.add_argument("--device", default="torq")
-    parser.add_argument(
-        "--tda",
-        choices=("cpu", "dmabuf"),
-        default="dmabuf",
-        help="Allocator backing Torq buffers (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--device-io",
-        action="store_true",
-        help="Allocate inputs and keep model outputs device-backed (enabled automatically with --tda dmabuf)",
-    )
+    add_common_inference_args(parser, with_threads=False, with_no_refresh=False)
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
-    add_metrics_args(parser)
     args = parser.parse_args()
-    configure_logging("INFO")
+    configure_logging(args.logging)
     if args.model is None:
         args.model = str(
             resolve_default_model(
@@ -111,7 +92,7 @@ def main() -> None:
                 ),
             )
         )
-    device_io = args.device_io or args.tda == "dmabuf"
+    runtime = RuntimeConfig.from_args(args)
 
     model_path = resolve_input_path(args.model)
     image_path = resolve_input_path(args.image)
@@ -120,18 +101,11 @@ def main() -> None:
         raise SystemExit(f"Unable to read image: {image_path}")
 
     input_tensor, letterbox = preprocess_image(image)
-    runner = VMFBInferenceRunner(
-        str(model_path),
-        device_uri=args.device,
-        function="main",
-        runtime_flags=build_runtime_flags(args.tda),
-        device_outputs=device_io,
-    )
-    try:
-        runner_input = runner.allocate_device_array(input_tensor) if device_io else input_tensor
+    with npu_clock():
+        model = Model(str(model_path), runtime)
         with MetricsRun(args.metrics_out) as m:
-            outputs = prepare_outputs(runner.infer([runner_input]))
-            latency_ns = int(runner.infer_time_ms * 1e6)
+            outputs = model.run(input_tensor)
+            latency_ns = int(model.infer_time_ms * 1e6)
             m.add("latency", latency_ns)
             m.add("frames_per_second", 1e9 / latency_ns)
         detections = decode_face_outputs(
@@ -147,8 +121,6 @@ def main() -> None:
             image_width=MODEL_WIDTH,
             image_height=MODEL_HEIGHT,
         )
-    finally:
-        cleanup_npu_after_inference()
 
     results = map_boxes(detections, letterbox, image.shape)
     for _label, confidence, box in results:

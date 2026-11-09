@@ -14,7 +14,7 @@ preprocessing, writing image/video soft tokens into their placeholder slots,
 mean pooling over real tokens, optional Matryoshka truncation, L2 normalisation.
 
 Backends:
-  * ``torq`` — ``*.vmfb`` on the NPU via ``torq.runtime.VMFBInferenceRunner``.
+  * ``torq`` — ``*.vmfb`` on the NPU via ``utils.runtime.Model``.
   * ``ort``  — the fp32 static ``*.onnx`` graphs on the CPU via onnxruntime
     (identical host code; used as the accuracy/performance baseline).
 """
@@ -67,16 +67,17 @@ def _release_file_cache(model_dir: Path):
 class _Component:
     """One static graph on one backend, loaded on first use."""
 
-    def __init__(self, path: Path, backend: str, ort_threads: int = 0):
+    def __init__(self, path: Path, backend: str, ort_threads: int = 0, runtime=None):
         self.path, self.backend, self.ort_threads = path, backend, ort_threads
+        self.runtime = runtime
         self._impl = None
         self.last_ms = 0.0
 
     def _load(self):
         if self.backend == "torq":
-            from torq.runtime import VMFBInferenceRunner
+            from utils.runtime import Model, RuntimeConfig
 
-            self._impl = VMFBInferenceRunner(str(self.path))
+            self._impl = Model(self.path, self.runtime or RuntimeConfig())
         else:
             import onnxruntime as ort
 
@@ -106,7 +107,7 @@ class _Component:
             self._load()
         t0 = time.perf_counter()
         if self.backend == "torq":
-            outs = self._impl.infer([np.ascontiguousarray(x.astype(ml_dtypes.bfloat16)) for x in inputs])
+            outs = self._impl.run(*[np.ascontiguousarray(x.astype(ml_dtypes.bfloat16)) for x in inputs])
             out = np.asarray(outs[0]).astype(np.float32)
             if any(np.any(x) for x in inputs) and (not np.any(out) or not np.all(np.isfinite(out))):
                 # a wedged NPU can return instantly with an empty output and no error
@@ -129,7 +130,7 @@ class EmbeddingGemma2:
                  image_size: tuple[int, int] | None = None,
                  modalities: tuple[str, ...] = ("text", "image", "video"),
                  npu_budget_mb: float | None = None, warmup: bool | None = None,
-                 audio_frames: int | None = None):
+                 audio_frames: int | None = None, runtime=None):
         self.model_dir = Path(model_dir)
         if backend not in ("torq", "ort"):
             raise ValueError(f"unknown backend {backend!r}")
@@ -154,12 +155,12 @@ class EmbeddingGemma2:
 
         ext = ".vmfb" if backend == "torq" else ".onnx"
         h, w = self.image_size
-        self.vision = _Component(self.model_dir / f"vision_{h}x{w}{ext}", backend, ort_threads)
+        self.vision = _Component(self.model_dir / f"vision_{h}x{w}{ext}", backend, ort_threads, runtime)
         if backend == "torq":
             self.seq_lens = self._fit_buckets(set(modalities), npu_budget_mb or self.NPU_BUDGET_MB)
-        self.text = {s: _Component(self.model_dir / f"text_body_s{s}{ext}", backend, ort_threads)
+        self.text = {s: _Component(self.model_dir / f"text_body_s{s}{ext}", backend, ort_threads, runtime)
                      for s in self.seq_lens}
-        self.audio = _Component(self.model_dir / f"audio_{self.audio_frames}{ext}", backend, ort_threads)
+        self.audio = _Component(self.model_dir / f"audio_{self.audio_frames}{ext}", backend, ort_threads, runtime)
         mel_path = self.model_dir / "mel_filters.npy"
         self.mel_filters = np.load(mel_path) if mel_path.exists() else None
         self.mel_window = np.load(self.model_dir / "mel_window.npy") if mel_path.exists() else None

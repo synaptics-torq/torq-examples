@@ -23,6 +23,7 @@ from utils.inference import (
     StopCheck,
     _raise_if_stopped,
 )
+from utils.runtime import RuntimeConfig
 
 
 _SIDECAR_SUFFIXES: Final[frozenset[str]] = frozenset(
@@ -256,15 +257,13 @@ class DecoderOnlyLLMRunner(ABC):
         model_path: str | os.PathLike,
         max_seq_len: int | None = None,
         max_prompt_tokens: int | None = None,
-        n_threads: int | None = None,
         *,
+        runtime: RuntimeConfig,
         cache_keep_n: int | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
         max_gen_tokens: int | None = None,
-        runtime_flags: list[str] | None = None,
-        device_io: bool = False,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
@@ -287,16 +286,15 @@ class DecoderOnlyLLMRunner(ABC):
         )
         self._model = ManagedSelfAttnCacheRunner(
             model_path,
-            n_threads=n_threads,
-            runtime_flags=runtime_flags,
-            device_io=device_io,
+            n_threads=runtime.threads,
+            runtime_flags=runtime.flags,
+            device_io=runtime.device_io,
         )
         if lm_head_path is not None:
             self._model = SplitLMHeadRunner(
                 self._model,
                 lm_head_path,
-                n_threads=n_threads,
-                runtime_flags=runtime_flags,
+                runtime,
             )
 
         self._validate_decode_model()
@@ -369,7 +367,7 @@ class DecoderOnlyLLMRunner(ABC):
         self._prefill_emb_buf = None
         self._prefill_id_buf = None
         if prefill_path is not None:
-            self._setup_prefill_model(prefill_path, n_threads, runtime_flags, device_io)
+            self._setup_prefill_model(prefill_path, runtime)
             prefill_token_info = self._prefill_model.inputs_info[0]
             if self._token_embeddings is not None:
                 self._prefill_emb_buf = np.zeros(
@@ -703,9 +701,7 @@ class DecoderOnlyLLMRunner(ABC):
     def _setup_prefill_model(
         self,
         prefill_path: str | os.PathLike,
-        n_threads: int | None,
-        runtime_flags: list[str] | None,
-        device_io: bool,
+        runtime: RuntimeConfig,
     ) -> None:
         """Load the fixed-size batched prefill model for prompt chunks."""
         decode_body = (
@@ -715,9 +711,9 @@ class DecoderOnlyLLMRunner(ABC):
         )
         prefill_body = ManagedSelfAttnCacheRunner(
             prefill_path,
-            n_threads=n_threads,
-            runtime_flags=runtime_flags,
-            device_io=device_io,
+            n_threads=runtime.threads,
+            runtime_flags=runtime.flags,
+            device_io=runtime.device_io,
         )
         prefill_size = self._query_prefill_size(prefill_body)
         if prefill_size > self._max_seq_len:

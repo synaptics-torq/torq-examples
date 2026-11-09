@@ -23,6 +23,7 @@ if str(_LIQUID_SRC) not in sys.path:
 from runner import LiquidStatic  # noqa: E402
 from utils import llm as llm_module  # noqa: E402
 from utils.inference import SplitLMHeadRunner, VMFBInferenceRunner  # noqa: E402
+from utils.runtime import RuntimeConfig  # noqa: E402
 
 # The stub numpy installed by tests/conftest.py has no array APIs; the buffer
 # tests below exercise real numpy semantics and are skipped where numpy is
@@ -202,7 +203,7 @@ class TestPrefillModelSetup:
         with patch.object(
             llm_module, "ManagedSelfAttnCacheRunner", return_value=prefill_body
         ):
-            runner._setup_prefill_model("transformer_prefill.vmfb", None, None, False)
+            runner._setup_prefill_model("transformer_prefill.vmfb", RuntimeConfig())
 
     def test_hidden_state_prefill_reuses_shared_head(self):
         runner = _liquid()

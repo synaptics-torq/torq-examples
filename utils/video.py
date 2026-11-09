@@ -8,9 +8,10 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import threading
 
-from utils.metrics import add_metrics_args
+from utils.runtime import add_common_inference_args
 
 
 def configure_camera(device, controls):
@@ -48,6 +49,30 @@ def configure_camera(device, controls):
 
         if not success:
             print(f"[Camera] Warning: Failed to set {logical_name}={value} on {device}. Tried: {' | '.join(errors)}")
+
+
+def setup_display_and_camera(args):
+    """Display env vars and V4L2 camera controls for the video inference scripts."""
+    if getattr(args, "display", False):
+        os.environ.setdefault("XDG_RUNTIME_DIR", "/var/run/user/0")
+        os.environ.setdefault("WAYLAND_DISPLAY", "wayland-1")
+
+    if getattr(args, "camera_device", None):
+        try:
+            args.camera_device = resolve_camera_device(args.camera_device)
+        except RuntimeError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+        ctrl_device = args.camera_control_device or args.camera_device
+        configure_camera(ctrl_device, {
+            "brightness": args.brightness,
+            "contrast": args.contrast,
+            "saturation": args.saturation,
+            "sharpness": args.sharpness,
+            "gain": args.gain,
+            "exposure_auto": args.exposure_auto,
+            "exposure_absolute": args.exposure_absolute,
+        })
 
 
 def find_working_camera():
@@ -240,20 +265,7 @@ def build_video_argparser(description, default_json_results="results.json", mode
     )
 
     parser.add_argument("--device", default="torq")
-    parser.add_argument(
-        "--no-refresh", action="store_true", default=False,
-        help="Skip model freshness check (offline/airgapped runs)",
-    )
-    parser.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    parser.add_argument("--device-io", action="store_true",
-                        help="Preallocate inputs and keep outputs as device arrays")
-    parser.add_argument(
-        "--runtime-flags", nargs=argparse.REMAINDER, default=None, metavar="FLAG",
-        help="[Advanced] Extra flags for the Torq runtime. Must be specified last.",
-    )
+    add_common_inference_args(parser)
     parser.add_argument("--profile", action="store_true", help="Profile resource usage and exit")
     parser.add_argument("--output", default=None, help="Output video file (optional)")
     parser.add_argument("--json-results", default=default_json_results,
@@ -268,8 +280,6 @@ def build_video_argparser(description, default_json_results="results.json", mode
                         help="GStreamer video sink for live display")
     parser.add_argument("--rotate", type=int, choices=[0, 90, 180, 270], default=180,
                         help="Rotate camera feed (degrees clockwise)")
-
-    add_metrics_args(parser)
 
     cam_group = parser.add_argument_group("Camera Config")
     cam_group.add_argument("--camera-control-device",

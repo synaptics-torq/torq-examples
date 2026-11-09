@@ -16,8 +16,7 @@ import numpy.typing as npt
 from torq.runtime import VMFBInferenceRunner
 from iree.runtime import DeviceArray, HalCommandBuffer
 
-from utils.log import add_logging_args
-from utils.metrics import add_metrics_args
+from utils.runtime import Model, RuntimeConfig, add_common_inference_args
 from utils.terminal import InferenceStopInput
 
 StopCheck = Callable[[], bool]
@@ -30,63 +29,6 @@ class InferenceInterrupted(Exception):
 def _raise_if_stopped(should_stop: StopCheck | None) -> None:
     if should_stop is not None and should_stop():
         raise InferenceInterrupted
-
-
-class SimpleVMFBInferenceRunner:
-    """Wrapper for simple VMFB models with optional device I/O."""
-
-    def __init__(
-        self,
-        model_path: str | os.PathLike,
-        *,
-        device_uri: str = "torq",
-        function: str = "main",
-        runtime_flags: list[str] | None = None,
-        device_io: bool = False,
-        device_outputs: bool = False,
-        load_model_to_mem: bool = True,
-    ):
-        runner_kwargs = {
-            "device_uri": device_uri,
-            "function": function,
-            "load_model_to_mem": load_model_to_mem,
-            "device_outputs": device_outputs or device_io,
-        }
-        if runtime_flags:
-            runner_kwargs["runtime_flags"] = runtime_flags
-
-        self.runner = VMFBInferenceRunner(model_path, **runner_kwargs)
-        self.device_io = device_io
-
-    @property
-    def infer_time_ms(self):
-        return self.runner.infer_time_ms
-
-    def prepare_input(self, input_data):
-        if not self.device_io:
-            return input_data
-        return self.runner.allocate_device_array(input_data)
-
-    @staticmethod
-    def prepare_output(output):
-        if hasattr(output, "to_host"):
-            return output.to_host()
-        return output
-
-    def infer(self, input_data):
-        runner_input = self.prepare_input(input_data)
-        outputs = self.runner.infer([runner_input])
-
-        if isinstance(outputs, (list, tuple)):
-            if len(outputs) != 1:
-                raise RuntimeError(
-                    f"Expected a single output tensor from the model, but got {len(outputs)} outputs. "
-                    "This runner currently supports only single-output models. "
-                    "Please update the code to select the desired output tensor."
-                )
-            outputs = outputs[0]
-
-        return self.prepare_output(outputs)
 
 
 class BaseManagedCacheRunner(VMFBInferenceRunner):
@@ -528,34 +470,31 @@ class SplitLMHeadRunner:
     """
     Adapter for split body + lm_head inference.
 
-    *lm_head* may be a path to a ``.vmfb`` or an already-constructed
-    :class:`~torq.runtime.VMFBInferenceRunner` to reuse (e.g. so a batched
-    prefill body and the decode body share one compiled LM head instead of
-    each loading the head module twice).
+    *lm_head* may be a path to a ``.vmfb`` (loaded with the session's
+    *runtime*, a :class:`~utils.runtime.RuntimeConfig`) or an already-loaded
+    head (a ``VMFBInferenceRunner`` or :class:`~utils.runtime.Model`) to
+    reuse (e.g. so a batched prefill body and the decode body share one
+    compiled LM head instead of each loading the head module twice).
     """
 
     def __init__(
         self,
         body: BaseManagedCacheRunner,
-        lm_head: str | os.PathLike | VMFBInferenceRunner,
-        **kwargs,
+        lm_head: str | os.PathLike | VMFBInferenceRunner | Model,
+        runtime: RuntimeConfig | None = None,
     ) -> None:
         self._body = body
         self._infer_time_ms = 0.0
         if isinstance(lm_head, VMFBInferenceRunner):
             self._lm_head = lm_head
+            head_path = lm_head.model_path
+        elif isinstance(lm_head, Model):
+            self._lm_head = lm_head
+            head_path = lm_head.path
         else:
-            lm_head_kwargs = {
-                k: kwargs[k] for k in ("n_threads", "runtime_flags") if k in kwargs
-            }
-            self._lm_head = VMFBInferenceRunner(
-                lm_head,
-                device_outputs=True,
-                **lm_head_kwargs,
-            )
-        self._validate_lm_head_io(
-            lm_head.model_path if isinstance(lm_head, VMFBInferenceRunner) else lm_head
-        )
+            self._lm_head = Model(lm_head, runtime, device_outputs=True)
+            head_path = str(lm_head)
+        self._validate_lm_head_io(head_path)
 
     def _validate_lm_head_io(self, lm_head_path: str | os.PathLike) -> None:
         body_outputs = self._body.outputs_info
@@ -658,69 +597,6 @@ class SplitLMHeadRunner:
 
 
 _LLM_MODEL_HELP: str = "Path to VMFB model (default: the one setup_demo.py downloaded)"
-_NO_REFRESH_HELP: str = (
-    "Skip the Hugging Face check for updated models (offline/airgapped runs)"
-)
-_RUNTIME_FLAGS_HELP: str = (
-    "[Advanced] Extra flags for the Torq runtime. "
-    "Must be specified last; all remaining arguments are forwarded."
-)
-
-
-def add_common_inference_args(
-    parser: argparse.ArgumentParser,
-    *,
-    with_threads: bool = True,
-    with_no_refresh: bool = True,
-    with_allocator: bool = True,
-    tda_default: str = "dmabuf",
-    device_io_default: bool = True,
-    device_io_help: str | None = None,
-) -> None:
-    """Flags shared by the demos' inference scripts.
-
-    Adds ``-j/--threads`` (unless *with_threads*), ``--no-refresh`` (unless
-    *with_no_refresh*), a "runtime" group with ``--tda`` (default
-    *tda_default*), ``--device-io`` (unless *with_allocator*) and
-    ``--runtime-flags``, the logging args, and ``--metrics-out``.
-    """
-    if with_threads:
-        parser.add_argument(
-            "-j", "--threads", type=int,
-            help="Number of cores to use for CPU execution (default: all)",
-        )
-    if with_no_refresh:
-        parser.add_argument(
-            "--no-refresh", action="store_true", default=False,
-            help=_NO_REFRESH_HELP,
-        )
-    runtime_group = parser.add_argument_group("runtime")
-    if with_allocator:
-        runtime_group.add_argument(
-            "--tda",
-            type=str,
-            choices=["cpu", "dmabuf"],
-            default=tda_default,
-            help="Allocator backing Torq device buffers (default: %(default)s)",
-        )
-        runtime_group.add_argument(
-            "--device-io",
-            action=argparse.BooleanOptionalAction,
-            default=device_io_default,
-            help=device_io_help or (
-                "Preallocate inputs and keep cache outputs as device arrays "
-                f"(default: {'enabled' if device_io_default else 'disabled'})"
-            ),
-        )
-    runtime_group.add_argument(
-        "--runtime-flags",
-        nargs=argparse.REMAINDER,
-        default=None,
-        metavar="FLAG",
-        help=_RUNTIME_FLAGS_HELP,
-    )
-    add_logging_args(parser)
-    add_metrics_args(parser)
 
 
 def add_llm_inference_args(

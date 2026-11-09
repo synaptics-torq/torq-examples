@@ -27,11 +27,7 @@ from utils.terminal import InferenceStopInput
 from utils.log import configure_logging
 from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
-from utils.runtime import (
-    build_runtime_flags,
-    cleanup_npu_after_inference,
-    setup_npu_for_inference,
-)
+from utils.runtime import RuntimeConfig, npu_clock
 
 #: Cap on function calls per user turn, against runaway call/response loops.
 _MAX_TOOL_CALLS: Final[int] = 5
@@ -155,22 +151,19 @@ def main(args: argparse.Namespace):
 
     logging.getLogger("FunctionGemma").info("Starting assistant...")
     ensure_functiongemma_models(Path(args.model).parent, refresh=not args.no_refresh)
+    runtime = RuntimeConfig.from_args(args)
 
-    setup_npu_for_inference()
-
-    try:
+    with npu_clock():
         runner = FunctionGemmaStatic(
             args.model,
             args.max_seq_len,
             max_prompt_tokens=args.max_inp_len,
-            n_threads=args.threads,
+            runtime=runtime,
             cache_keep_n=None,
             temperature=args.temperature,
             top_p=args.top_p,
             top_k=args.top_k,
             max_gen_tokens=args.max_gen_tokens,
-            runtime_flags=build_runtime_flags(args.tda, args.runtime_flags),
-            device_io=args.device_io,
             lm_head_path=args.lm_head,
             disable_lm_head=args.no_lm_head,
             prefill_model_path=args.batch_prefill_model,
@@ -178,8 +171,6 @@ def main(args: argparse.Namespace):
         )
         with MetricsRun(args.metrics_out) as m:
             run_function_loop(runner, m)
-    finally:
-        cleanup_npu_after_inference()
 
 
 if __name__ == "__main__":

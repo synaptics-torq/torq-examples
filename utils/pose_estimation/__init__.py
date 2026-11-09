@@ -9,7 +9,6 @@ from utils.pose_estimation.draw import (
 )
 from utils.vision import dequantize_out
 from utils.preprocess import preprocess_frame_cv, preprocess_image
-from utils.runtime import build_runtime_flags
 from utils.video import (
     FrameGrabber,
     RotatingJsonArrayWriter,
@@ -27,7 +26,6 @@ __all__ = [
     "RotatingJsonArrayWriter",
     "SKELETON",
     "annotate_pose_frame",
-    "build_runtime_flags",
     "configure_camera",
     "create_display_pipeline",
     "dequantize_out",

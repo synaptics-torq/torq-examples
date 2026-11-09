@@ -7,6 +7,7 @@ from typing import Final
 from utils.llm import (
     DecoderOnlyLLMRunner,
 )
+from utils.runtime import RuntimeConfig
 
 DEFAULT_SYS_PROMPT: Final[str] = (
     "You are a helpful AI assistant named Gemma. "
@@ -31,16 +32,14 @@ class Gemma3Static(DecoderOnlyLLMRunner):
         model_path: str | os.PathLike,
         max_seq_len: int | None = None,
         max_prompt_tokens: int | None = None,
-        n_threads: int | None = None,
         instruct_model: bool = False,
         *,
+        runtime: RuntimeConfig,
         cache_keep_n: int | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
         max_gen_tokens: int | None = None,
-        runtime_flags: list[str] | None = None,
-        device_io: bool = False,
         sys_prompt: str | None = None,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
@@ -53,14 +52,12 @@ class Gemma3Static(DecoderOnlyLLMRunner):
             model_path,
             max_seq_len=max_seq_len,
             max_prompt_tokens=max_prompt_tokens,
-            n_threads=n_threads,
+            runtime=runtime,
             cache_keep_n=cache_keep_n,
             temperature=temperature,
             top_p=top_p,
             top_k=top_k,
             max_gen_tokens=max_gen_tokens,
-            runtime_flags=runtime_flags,
-            device_io=device_io,
             lm_head_path=lm_head_path,
             disable_lm_head=disable_lm_head,
             prefill_model_path=prefill_model_path,

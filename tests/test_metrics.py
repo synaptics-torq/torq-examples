@@ -10,8 +10,8 @@ from pathlib import Path
 import pytest
 
 from utils import metrics as metrics_module
-from utils.inference import add_common_inference_args
 from utils.metrics import MetricsRun, SystemSampler, add_metrics_args
+from utils.runtime import add_common_inference_args
 
 
 def _write_proc_stat(path: Path, user: int, nice: int, system: int, idle: int, iowait: int) -> None:
