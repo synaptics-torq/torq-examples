@@ -7,7 +7,6 @@ the chat loop, and the ``max_gen_tokens`` generation cap."""
 import argparse
 import builtins
 import json
-import logging
 import signal
 import subprocess
 import sys
@@ -17,6 +16,7 @@ from unittest import mock
 
 import pytest
 
+from llm_fakes import CHAR_BASE, CharTokenizer, make_llm, scripted
 from utils.inference import (
     InferenceInterrupted,
     add_llm_inference_args,
@@ -25,8 +25,6 @@ from utils.inference import (
     run_chat_loop,
 )
 from utils.metrics import MetricsRun
-from utils import llm as llm_module
-from utils.llm import DecoderOnlyLLMRunner
 from utils.runtime import add_common_inference_args
 
 
@@ -310,124 +308,28 @@ def test_print_llm_stats_records_metrics(tmp_path, capsys):
     assert capsys.readouterr().out == "  (123 ms, TTFT: 10 ms, 44.1 tok/s)\n\n"
 
 
-def test_inference_interrupted_shared_across_modules():
-    # utils.llm must re-export the very class the chat loop catches.
-    assert llm_module.InferenceInterrupted is InferenceInterrupted
+# ── max_gen_tokens cap ────────────────────────────────────────────────────────
 
 
-# ── max_gen_tokens cap (T2 plumbing) ─────────────────────────────────────────
+def _gen_llm(tmp_path, monkeypatch, **kwargs):
+    # A base model that answers "abcde" and then its eos token.
+    tok = CharTokenizer({"<eos>": 1})
+    replies = [CHAR_BASE + ord(c) for c in "abcde"]
+    return make_llm(
+        tmp_path, monkeypatch, tokenizer=tok,
+        config={"bos_token_id": 0, "eos_token_id": 1, "vocab_size": 4096},
+        next_fn=scripted(replies, then=1),
+        **kwargs,
+    )
 
 
-class _FakeTokenizer:
-    def decode(self, ids, skip_special_tokens=True):
-        return " ".join(str(i) for i in ids)
+def test_max_gen_tokens_caps_generation(tmp_path, monkeypatch):
+    # The cap counts the prefill's token: max_gen_tokens=3 yields 3 tokens total.
+    llm, _ = _gen_llm(tmp_path, monkeypatch, max_gen_tokens=3)
+    assert "".join(llm.run_stream("hi")) == "abc"
 
 
-class _GenProbe(DecoderOnlyLLMRunner):
-    """Concrete runner with __init__ skipped; generation is faked per step."""
-
-    def __init__(self, max_gen_tokens):
-        self._logger = logging.getLogger("test_max_gen_tokens")
-        self._max_gen_tokens = max_gen_tokens
-        self._n_tokens_gen = 0
-        self._last_infer_ns = 0
-        self._time_to_first_token_ns = 0
-        self._start_time_ns = 0
-        self._warmup_len = 0
-        self._max_seq_len = 1000
-        self._max_prompt_tokens = None
-        self._max_user_tokens = None
-        self._cache_keep_n = None
-        self._turn_pos = 0
-        self._pending_token = None
-        self._reset_cache_state = []
-        self._tokenizer = _FakeTokenizer()
-        self._eos_token_id = 99
-        self._eos_token_ids = [99]
-
-    def tokenize(self, text: str, role: str | None = None) -> list[int]:
-        raise NotImplementedError
-
-    def _reset_cache(self) -> None:
-        pass
-
-    def _build_prompt_tokens(self, user_input: str) -> list[int]:
-        return [1]
-
-    def _prefill(self, tokens, start=0, should_stop=None, *, produce_next_token=True):
-        return 2, start + 1
-
-    def llm_step(self, token, seq_pos, **kwargs):
-        return 3
-
-    def _should_stop(self, token, gen):
-        return len(gen) >= 6  # natural stop, so the uncapped case terminates
-
-
-def test_max_gen_tokens_caps_generation():
-    assert _GenProbe(max_gen_tokens=3).run("hi") == "2 3 3"
-
-
-def test_max_gen_tokens_none_keeps_old_behaviour():
-    # Without a cap, generation runs to the runner's own stop condition (6 here).
-    assert _GenProbe(max_gen_tokens=None).run("hi") == "2 3 3 3 3 3"
-
-
-# ── ManagedSelfAttnCacheRunner: read-only KV cache rows ───────────────────────
-
-
-def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch):
-    import numpy as np
-    from types import SimpleNamespace
-
-    from utils import inference
-
-    class _Array:
-        """Device array stand-in; its own buffer for the copies."""
-
-        def __init__(self, a):
-            self.a = np.ascontiguousarray(a)
-            self.shape, self.dtype = self.a.shape, self.a.dtype
-            self._buffer_view = SimpleNamespace(get_buffer=lambda: self)
-
-    class _CommandBuffer:
-        def __init__(self, device):
-            pass
-
-        def copy(self, src, dst, src_offset, dst_offset, length):
-            dst.a.reshape(-1).view(np.uint8)[dst_offset:dst_offset + length] = (
-                src.a.reshape(-1).view(np.uint8)[src_offset:src_offset + length]
-            )
-
-        def end(self):
-            pass
-
-    info = lambda shape: SimpleNamespace(shape=shape, dtype="float32")  # noqa: E731
-    # Time-major [1, L, 2kv, D] and head-major [1, 2kv, L, D] row caches, and a whole-cache state.
-    caches = [info([1, 4, 2, 3]), info([1, 2, 4, 3]), info([1, 5])]
-    rows = [info([1, 1, 2, 3]), info([1, 2, 1, 3]), info([1, 5])]
-
-    def fake_infer(self, inputs):
-        pos = int(np.asarray(inputs[1]).reshape(-1)[0])
-        return [_Array(np.zeros(1)), *(_Array(np.full(r.shape, pos + 1, np.float32)) for r in rows)]
-
-    monkeypatch.setattr(inference, "HalCommandBuffer", _CommandBuffer)
-    monkeypatch.setattr(inference.VMFBInferenceRunner, "__init__", lambda self, *a, **k: None, raising=False)
-    monkeypatch.setattr(inference.VMFBInferenceRunner, "_infer", fake_infer, raising=False)
-    semaphore = SimpleNamespace(wait=lambda value: None)
-    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "inputs_info", [info([1, 1]), info([1, 1]), *caches], raising=False)
-    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "outputs_info", [info([1]), *rows], raising=False)
-    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "device", SimpleNamespace(
-        create_semaphore=lambda value: semaphore, queue_execute=lambda cb, wait, signal: None,
-    ), raising=False)
-    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "allocate_device_array", lambda self, a: _Array(a), raising=False)
-
-    runner = inference.ManagedSelfAttnCacheRunner("model.vmfb")
-    assert runner.kv_seq_len == 4
-    for pos in range(3):
-        runner._infer([np.zeros((1, 1)), np.array([[pos]])])
-
-    time_major, head_major, state = (c.a for c in runner._kv_cache)
-    np.testing.assert_array_equal(time_major[0, :, 0, 0], [1, 2, 3, 0])
-    np.testing.assert_array_equal(head_major[0, 1, :, 2], [1, 2, 3, 0])
-    np.testing.assert_array_equal(state, np.full((1, 5), 3))
+def test_max_gen_tokens_none_runs_to_natural_stop(tmp_path, monkeypatch):
+    # Without a cap, generation runs to the model's stop condition (eos here).
+    llm, _ = _gen_llm(tmp_path, monkeypatch)
+    assert "".join(llm.run_stream("hi")) == "abcde"

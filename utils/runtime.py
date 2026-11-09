@@ -16,6 +16,7 @@ import contextlib
 import logging
 from dataclasses import dataclass
 
+import ml_dtypes
 import numpy as np
 
 from utils.log import add_logging_args
@@ -70,6 +71,19 @@ class RuntimeConfig:
 def to_host(x):
     """Copy a device-backed value to the host; host values pass through unchanged."""
     return x.to_host() if hasattr(x, "to_host") else x
+
+
+def load_lut(path) -> np.ndarray:
+    """Load a token LUT (embeddings or token-id remap) from a ``.npy`` file,
+    memory-mapped on the host.
+
+    Un-typed bfloat16 exports store raw 2-byte rows (dtype ``V2``); they are
+    viewed as ``ml_dtypes.bfloat16`` so lookups stay zero-copy.
+    """
+    arr = np.load(path, mmap_mode="r")
+    if arr.dtype == np.dtype("V2"):
+        arr = arr.view(ml_dtypes.bfloat16)
+    return arr
 
 
 class Model:

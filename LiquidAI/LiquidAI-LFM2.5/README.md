@@ -110,10 +110,9 @@ followed by the per-layer cache inputs. The shared runner builds all of them
 (shapes, dtypes and the mask value) from the model's reflection metadata, so
 legacy two-input exports keep working unchanged.
 
-The runner (`src/runner.py`) is a thin subclass of the shared
-[`DecoderOnlyLLMRunner`](../../utils/llm.py); it only supplies the LFM2.5 ChatML
-chat format, system-prompt warm-up, and stop conditions. Its
-`ManagedSelfAttnCacheRunner` cache manager is agnostic to what each cached
+The runner (`src/runner.py`) is a thin binding of the shared
+[`LLM`](../../utils/llm.py); it only supplies the LFM2.5 ChatML chat template.
+Its [`KVCache`](../../utils/cache.py) is agnostic to what each cached
 tensor is — it zero-inits every per-layer cache from the model's input-shape
 metadata and shuttles each present output back to its past input — so the
 *mixed* conv/KV caches thread correctly with no special-casing (board-verified
@@ -129,7 +128,7 @@ This example is a redistribution of a model created by **Liquid AI, Inc.**,
 licensed under the **LFM Open License v1.0**.
 
 > [!NOTE]
-> The sliding-window KV shift (`--kv-cache-window` / `shift_kv`) is left off for
-> LFM2.5: it slices a KV sequence axis, which is not safe for the rank-3 conv
-> caches. Generation stops at the 256-token cache limit instead of shifting;
-> normal short chat turns are unaffected.
+> When the 256-token cache fills, the sliding KV window (`--kv-cache-window N`)
+> keeps the system prompt plus the last N tokens and replays them, which
+> rebuilds the conv states too. `--no-kv-cache-window` starts a fresh
+> conversation instead.

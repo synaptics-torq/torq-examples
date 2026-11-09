@@ -3,7 +3,7 @@
 
 """FunctionGemma protocol on the shared Gemma 3 model runtime."""
 
-from typing import Iterator
+from typing import Final, Iterator
 
 from gemma3.src.runner import Gemma3Static
 from functiongemma.src.function_tools import (
@@ -15,15 +15,12 @@ from utils.inference import StopCheck
 
 
 class FunctionGemmaStatic(Gemma3Static):
-    __slots__ = ("_tools", "_function_response_next")
-
     def __init__(self, *args, tools: list[dict] | None = None, **kwargs):
         self._tools = DEFAULT_TOOLS if tools is None else tools
         self._function_response_next = False
         super().__init__(*args, instruct_model=True, **kwargs)
 
-    def _on_model_config_loaded(self, cfg: dict) -> None:
-        super()._on_model_config_loaded(cfg)
+    def _check_export(self) -> None:
         stop = self._tokenizer.token_to_id(START_FUNCTION_RESPONSE)
         markers = (
             "<start_function_call>", "<end_function_call>",
@@ -46,6 +43,9 @@ class FunctionGemmaStatic(Gemma3Static):
         return self._tokenizer.decode(tokens, skip_special_tokens=False)
 
     def _build_warmup_tokens(self) -> list[int]:
+        # The first hook to run once the tokenizer is loaded.
+        self._check_export()
+        self._end_of_turn_id = self._tokenizer.token_to_id("<end_of_turn>")
         tokens = [self._bos_token_id] + self.tokenize(
             format_developer_block(self._tools), "developer"
         )
@@ -97,3 +97,17 @@ class FunctionGemmaStatic(Gemma3Static):
             yield from self.run_stream(response_text, should_stop=should_stop)
         finally:
             self._function_response_next = False
+
+
+def format_answer(
+    answer: str,
+    infer_time: float,
+    ttft: float,
+    stats: list[str] | None = None,
+    agent_name: str = "Agent",
+) -> str:
+    GREEN: Final[str] = "\033[32m"
+    RESET: Final[str] = "\033[0m"
+    metrics = [f"{infer_time:.3f} ms", f"TTFT: {ttft:.3f} ms"]
+    metrics.extend(str(s) for s in (stats or []))
+    return GREEN + f"{agent_name}: {answer}" + RESET + f" ({', '.join(metrics)})"

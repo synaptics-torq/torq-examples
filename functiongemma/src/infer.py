@@ -11,8 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from functiongemma.src import function_tools
 from functiongemma.src.function_tools import FUNCTIONS
-from functiongemma.src.runner import FunctionGemmaStatic
-from gemma3.src.runner import format_answer
+from functiongemma.src.runner import FunctionGemmaStatic, format_answer
 from functiongemma.setup_demo import (
     download_functiongemma,
     ensure_functiongemma_models,

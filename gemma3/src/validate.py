@@ -377,8 +377,7 @@ class TeacherForcedValidator(BaseValidator):
                     sample_correct += 1
                 # Teacher forcing: feed the gold token to get the next prediction.
                 if idx < steps - 1:
-                    next_tok = self.gemma3.llm_step(gold, pos)
-                    pos += 1
+                    next_tok, pos = self.gemma3.prefill_tokens([gold])
 
             total_tokens += steps
             correct_tokens += sample_correct
