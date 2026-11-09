@@ -29,20 +29,15 @@ import numpy as np
 from PIL import Image
 from tokenizers import Tokenizer
 
-from utils.runtime import Model, RuntimeConfig
+from utils.cache import KVCache
+from utils.decoder import Decoder, generate, sample
+from utils.runtime import Model, RuntimeConfig, load_lut
 
 PATCH: Final[int] = 16
-DOWNSAMPLE: Final[int] = 2  # connector spatial downsample (256 patches -> 64 tokens)
 MEAN: Final[float] = 0.5
 STD: Final[float] = 0.5
-IMAGE_TOKEN_ID: Final[int] = 396  # "<image>"
 # decoder layers with attention (KV) caches; the rest keep conv states only
 ATTN_LAYERS: Final[frozenset] = frozenset({2, 5, 8, 10, 12, 14})
-
-
-def _raise_if_stopped(should_stop) -> None:
-    if should_stop is not None and should_stop():
-        raise KeyboardInterrupt
 _PREFIX: Final[str] = "<|startoftext|>\nuser\n<|image_start|>"
 
 
@@ -121,10 +116,7 @@ class LFM2VLEngine:
             self._eos_token_id = int(json.load(f).get("eos_token_id", 7))
         self._tokenizer = Tokenizer.from_file(
             os.path.join(self._model_dir, "tokenizer.json"))
-        self._token_embeddings = np.load(
-            os.path.join(self._model_dir, "token_embeddings.npy"), mmap_mode="r")
-        if self._token_embeddings.dtype == np.dtype("V2"):  # bf16 stored as raw void2
-            self._token_embeddings = self._token_embeddings.view(ml_dtypes.bfloat16)
+        self._embed_lut = load_lut(os.path.join(self._model_dir, "token_embeddings.npy"))
 
         self._runtime = runtime or RuntimeConfig()
         self._max_new = max_new
@@ -154,30 +146,25 @@ class LFM2VLEngine:
             self._lmhead = None
             raise FileNotFoundError(f"lm_head vmfb not found: {self._lmhead_path}")
 
+        # The text decoder runs on the shared core: the body steps against one
+        # device-resident KV cache, the split head runs on-device, and the
+        # embedding LUT feeds the token input.
+        self._cache = KVCache(self._model)
+        self._decoder = Decoder(
+            self._model, self._cache, head=self._lmhead, embed_lut=self._embed_lut)
+
         # KV length straight from the decoder's static cache shapes
-        info = self._model.inputs_info
         msl = max_seq_len
         if msl is None:
-            if len(info) >= 3 and len(info[2].shape) == 2:
-                msl = int(info[2].shape[1])
-            else:
-                for t in info:
-                    if len(t.shape) == 4:
-                        msl = int(t.shape[2])
-                        break
+            msl = self._decoder.seq_len
         if msl is None:
             raise ValueError("cannot determine max_seq_len; pass it explicitly")
         self._max_seq_len = msl
 
-        self._cache_specs = [(tuple(t.shape), np.dtype(t.dtype)) for t in info[2:]]
-        self._emb_dtype = np.dtype(info[0].dtype)
-        self._pos_dtype = np.dtype(info[1].dtype)
-        self._hidden = self._token_embeddings.shape[-1]
+        self._cache_specs = [(tuple(t.shape), np.dtype(t.dtype)) for t in self._model.inputs_info[2:]]
 
-        self._caches: list = []
         self._base_caches: list[np.ndarray] | None = None
         self._base_pos = 0
-        self._img = None  # (feats, n_img) for the current image
 
         # stats (updated by encode_image / infer_stream)
         self._vision_ns = 0
@@ -193,53 +180,10 @@ class LFM2VLEngine:
     def _mk(self, path: str, function: str) -> Model:
         return Model(path, self._runtime, function=function, device_outputs=True)
 
-    def _reset_caches(self) -> None:
-        self._caches = [
-            self._model.allocate_device_array(np.zeros(shape, dtype))
-            for shape, dtype in self._cache_specs
-        ]
-
-    def _step(self, emb_vec: np.ndarray, seq_pos: int, *, sample: bool):
-        # DeviceArray has no item assignment: stage fresh small device arrays per step.
-        emb = self._model.allocate_device_array(
-            np.ascontiguousarray(emb_vec.reshape(1, 1, -1).astype(self._emb_dtype)))
-        pos = self._model.allocate_device_array(
-            np.array([[seq_pos]], dtype=self._pos_dtype))
-        out = self._model.infer([emb, pos, *self._caches])
-        self._caches = list(out[1:])  # present caches -> past, stay on device
-        if not sample:
-            return None
-        if self._lmhead is not None:
-            hidden = _to_host(out[0])
-            logits = _to_host(self._lmhead.infer([_bf16_device(self._lmhead, hidden)])[0])
-        else:
-            logits = _to_host(out[0])
-        return self._sample(logits)
-
-    def _sample(self, logits: np.ndarray) -> int:
-        logits = logits.astype(np.float32, copy=False)
-        if self._temperature <= 0:
-            return int(logits.argmax())
-        k = min(self._top_k, logits.shape[-1])
-        top_k_idx = np.argpartition(logits, -k)[-k:]
-        x = logits[top_k_idx]
-        x /= self._temperature
-        x -= x.max()
-        np.exp(x, out=x)
-        x /= x.sum()
-        order = np.argsort(x)[::-1]
-        cdf = np.cumsum(x[order])
-        cut = int(np.searchsorted(cdf, self._top_p)) + 1
-        keep = order[:cut]
-        p = x[keep]
-        p /= p.sum()
-        return int(np.random.choice(top_k_idx[keep], p=p))
-
     def _warmup(self) -> None:
         """One throwaway step so first-use device staging is off the real timing."""
-        self._reset_caches()
-        self._step(np.zeros(self._hidden, np.float32), 0, sample=True)
-        self._reset_caches()
+        self._decoder.step(0, 0)
+        self._cache.reset()
 
     # ---- image ----
 
@@ -252,7 +196,7 @@ class LFM2VLEngine:
         attn_layers = {i for i, (sh, _) in enumerate(self._cache_specs) if len(sh) == 4}
         assert attn_layers == ATTN_LAYERS, f"decoder KV layout changed: {attn_layers}"
         first_kv = next(sh for sh, _ in self._cache_specs if len(sh) == 4)
-        H, _s, hd = first_kv[1], first_kv[2], first_kv[3]
+        H, _, hd = first_kv[1], first_kv[2], first_kv[3]
         h2 = H // 2
 
         def kv(key: np.ndarray, val: np.ndarray) -> np.ndarray:
@@ -285,14 +229,13 @@ class LFM2VLEngine:
         into the current caches at seq slice [s:s+64], preserving prefix KV."""
         n_img = 64
         merged = []
-        for (shape, _dt), cur, sd in zip(self._cache_specs, self._caches, seed):
+        for (shape, _dt), cur, sd in zip(self._cache_specs, self._cache.snapshot(), seed):
             if len(shape) == 3:  # conv state: replaced wholesale
                 merged.append(np.ascontiguousarray(sd))
             else:                # KV [1, heads, seq, hd]: prefix + image
-                host = _to_host(cur).copy()
-                host[:, :, s:s + n_img, :] = sd[:, :, 0:n_img, :]
-                merged.append(np.ascontiguousarray(host))
-        self._caches = [self._model.allocate_device_array(m) for m in merged]
+                cur[:, :, s:s + n_img, :] = sd[:, :, 0:n_img, :]
+                merged.append(np.ascontiguousarray(cur))
+        self._cache.restore(merged)
 
     def encode_image(self, img_bgr: np.ndarray, should_stop=None) -> np.ndarray:
         """Run one image through vision + image-prefill + text prefix.
@@ -329,16 +272,12 @@ class LFM2VLEngine:
         s = len(prefix_ids)
         if s + 64 + self._max_new + 16 > self._max_seq_len:
             raise ValueError("prefix + image leaves too little KV cache; lower max_new")
-        pre = np.asarray(self._token_embeddings)[np.asarray(prefix_ids)].astype(np.float32)
-        self._reset_caches()
-        for k in range(s):
-            _raise_if_stopped(should_stop)
-            self._step(pre[k], k, sample=False)
+        self._cache.reset()
+        self._decoder.prefill(prefix_ids, 0, want_logits=False, should_stop=should_stop)
         self._merge_image_caches(seed, s)
-        self._base_caches = [np.ascontiguousarray(_to_host(c)) for c in self._caches]
+        self._base_caches = self._cache.snapshot()
         self._base_pos = s + 64
         self._prefix_ns = time.perf_counter_ns() - t0
-        self._img = (feats, 64)
         return feats
 
     # ---- questions ----
@@ -354,38 +293,33 @@ class LFM2VLEngine:
         if self._base_pos + len(tids) + self._max_new >= self._max_seq_len:
             raise ValueError(f"question too long for the KV cache ({self._max_seq_len})")
         self._prefill_tokens = self._base_pos + len(tids)
-        temb = np.asarray(self._token_embeddings)[np.asarray(tids)].astype(np.float32)
-        # restore the base cache as device arrays (per-question working copy)
-        self._caches = [self._model.allocate_device_array(np.ascontiguousarray(c))
-                        for c in self._base_caches]
+        # The per-question working copy is staged before the timing window.
+        self._cache.restore(self._base_caches)
         pos = self._base_pos
         self._n_tokens_gen = 0
         self._first_token_ns = 0
         gen: list[int] = []
         t_start = time.perf_counter_ns()
         yield_ns = 0
+
+        def next_token(logits: np.ndarray) -> int:
+            return self._decoder.token_id(
+                sample(logits, self._temperature, self._top_p, self._top_k))
+
         try:
-            for j in range(len(tids) - 1):
-                _raise_if_stopped(should_stop)
-                self._step(temb[j], pos, sample=False)
-                pos += 1
-            _raise_if_stopped(should_stop)
-            next_tok = self._step(temb[-1], pos, sample=True)
-            pos += 1
+            logits = self._decoder.prefill(tids, pos, should_stop=should_stop)
+            pos += len(tids)
+            first = next_token(logits)
             self._first_token_ns = time.perf_counter_ns() - t_start
-            prev_text = self._tokenizer.decode([next_tok])
-            y0 = time.perf_counter_ns()
-            yield prev_text
-            yield_ns += time.perf_counter_ns() - y0
-            gen = [next_tok]
-            while next_tok != self._eos_token_id and len(gen) < self._max_new:
-                _raise_if_stopped(should_stop)
-                if pos >= self._max_seq_len:
-                    break
-                emb_vec = np.asarray(self._token_embeddings)[next_tok].astype(np.float32)
-                next_tok = self._step(emb_vec, pos, sample=True)
-                pos += 1
-                gen.append(next_tok)
+            prev_text = ""
+            for token in generate(
+                self._decoder, first, pos,
+                next_token=next_token,
+                stop=lambda tok, g: tok == self._eos_token_id,
+                max_new=self._max_new,
+                should_stop=should_stop,
+            ):
+                gen.append(token)
                 full_text = self._tokenizer.decode([t for t in gen if t != self._eos_token_id])
                 y0 = time.perf_counter_ns()
                 yield full_text[len(prev_text):]
@@ -422,7 +356,7 @@ class LFM2VLEngine:
 
     def close(self) -> None:
         import gc
-        for r in (self._vis, *self._parts, self._model, self._lmhead):
+        for r in (self._vis, *self._parts, self._decoder, self._cache, self._model, self._lmhead):
             if r is not None:
                 del r
         gc.collect()

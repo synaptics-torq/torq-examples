@@ -32,6 +32,7 @@ except Exception:
     download_lfm2vl_int8 = None
     local_lfm2vl_model_dir = None  # type: ignore[assignment]
 
+from utils.inference import InferenceInterrupted  # noqa: E402
 from utils.log import configure_logging  # noqa: E402
 from utils.metrics import MetricsRun  # noqa: E402
 from utils.model_setup import resolve_default_model  # noqa: E402
@@ -150,7 +151,7 @@ def main(args: argparse.Namespace) -> None:
                         _ask_once(vl, line, debug, m)
                     except RuntimeError as e:
                         print(f"  {YELLOW}{e}{RESET}")
-                    except KeyboardInterrupt:
+                    except (InferenceInterrupted, KeyboardInterrupt):
                         print(f" {YELLOW}[Interrupt]{RESET} \n")
 
 
