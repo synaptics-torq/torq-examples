@@ -7,6 +7,7 @@ runner and detect hook in place of the download and the model (the shared
 box math and validate flow are tested with ``object_detection``)."""
 
 import sys
+import types
 from unittest import mock
 
 import numpy as np
@@ -37,15 +38,17 @@ def test_aggregate_is_the_hit_fraction():
 VALIDATION = [{"dataset": "bitmind/lfw", "config": "default", "split": "train", "samples": 10}]
 
 
-def _rows(tmp_path, n=1):
-    import cv2
+@pytest.fixture(autouse=True)
+def _fake_cv2(monkeypatch):
+    """The loader reads image sizes with OpenCV (a demo dependency, not a test
+    one): every photo is 250 wide and 200 high."""
+    fake = types.ModuleType("cv2")
+    fake.imread = lambda path: np.zeros((200, 250, 3), dtype=np.uint8)
+    monkeypatch.setitem(sys.modules, "cv2", fake)
 
-    rows = []
-    for i in range(n):
-        path = tmp_path / f"Person_{i}_0001.jpg"
-        cv2.imwrite(str(path), np.zeros((200, 250, 3), dtype=np.uint8))  # 250 wide, 200 high
-        rows.append({"image": str(path), "filename": path.name})
-    return rows
+
+def _rows(tmp_path, n=1):
+    return [{"image": str(tmp_path / f"Person_{i}_0001.jpg"), "filename": f"Person_{i}_0001.jpg"} for i in range(n)]
 
 
 def _add_args(parser):

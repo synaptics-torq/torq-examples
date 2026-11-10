@@ -1,3 +1,6 @@
 pytest>=8.0
 numpy>=1.26
 tokenizers==0.23.1
+requests==2.33.1
+pillow
+ml_dtypes>=0.4.0

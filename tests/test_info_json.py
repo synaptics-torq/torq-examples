@@ -80,15 +80,19 @@ def test_renamed_demo_folders_resolve_with_deprecation_warning(caplog):
 
 
 def test_run_demo_resolves_and_rejects():
+    import os
     import subprocess
     import sys
 
+    # Demos import from the repo root, which setup_demos.py puts on the path
+    # with a .pth file; a fresh checkout (CI) has none, so pass it explicitly.
+    env = dict(os.environ, PYTHONPATH=str(_REPO_ROOT))
     run = [sys.executable, str(_REPO_ROOT / "run_demo.py")]
-    ok = subprocess.run([*run, "object_detection:infer_video", "--help"], capture_output=True, text=True)
-    assert ok.returncode == 0 and "usage: infer_video.py" in ok.stdout
-    bad = subprocess.run([*run, "no_such_demo"], capture_output=True, text=True)
+    ok = subprocess.run([*run, "object_detection:infer_video", "--help"], capture_output=True, text=True, env=env)
+    assert ok.returncode == 0 and "usage: infer_video.py" in ok.stdout, ok.stderr[-500:]
+    bad = subprocess.run([*run, "no_such_demo"], capture_output=True, text=True, env=env)
     assert bad.returncode != 0 and "Unknown demo" in bad.stderr
-    escape = subprocess.run([*run, "object_detection:../../run_demo"], capture_output=True, text=True)
+    escape = subprocess.run([*run, "object_detection:../../run_demo"], capture_output=True, text=True, env=env)
     assert escape.returncode != 0 and "Invalid script name" in escape.stderr
 
 
