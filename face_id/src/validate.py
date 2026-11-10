@@ -29,9 +29,6 @@ from utils.runtime import Model, add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.face_recognition import LOADERS, aggregate, score_item, validate_main
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
-
-
 def add_args(parser) -> None:
     parser.add_argument(
         "--model", default=None,
@@ -83,7 +80,6 @@ if __name__ == "__main__":
         demo="face_id",
         validation=demo_validation(__file__),
         loaders=LOADERS,
-        min_accuracy=MIN_ACCURACY,
         local_model=lambda args: local_face_id_model_path(),
         download=lambda args: download_face_detector(),
         add_args=add_args,

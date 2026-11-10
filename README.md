@@ -139,6 +139,6 @@ Every demo has a `src/validate.py` that scores the model on public Hugging Face 
 python run_demo.py gemma3:validate --instruct-model
 ```
 
-The script prints one line per item, then PASS/FAIL against the demo's threshold, and exits 1 on FAIL. The thresholds are placeholders that always FAIL until measured baselines exist, so every demo currently FAILs by design.
+The script prints one line per item, then the overall score (accuracy, or word error rate for speech), which `--metrics-out` records next to the performance metrics, together with the datasets and sample counts it was measured on. Validation never fails a model: the score is there so you can weigh accuracy against speed, for example when choosing between model variants. It exits non-zero only on errors.
 
 Run the validation script with `-h` to see all available options.

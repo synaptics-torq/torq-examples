@@ -11,12 +11,11 @@ transcription loop, or the demo's own streaming pipeline. ``validate_main``
 is the shared main of the ``src/validate.py`` scripts: the same model setup,
 a Hugging Face dataset of speech with reference transcripts (``LOADERS``),
 and a word error rate score. Both record the CONTRIBUTING.md metrics; validate
-prints PASS/FAIL and exits 1 on FAIL.
+also records the mean word error rate.
 """
 
 import argparse
 import re
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -67,7 +66,6 @@ def validate_main(
     *,
     demo: str,
     validation: list[dict],
-    max_wer: float,
     local_model: Callable[[], Path | None] | None,
     ensure_models: Callable,
     download: Callable | None = None,
@@ -82,7 +80,7 @@ def validate_main(
     ``item["audio"]`` (a local file) and records the demo's metrics; each
     transcript is scored against ``item["reference"]`` with
     :func:`word_error_rate`. Prints one line per item, then
-    ``wer=<mean> max=<max_wer>`` and PASS/FAIL; exits 1 on FAIL.
+    ``wer=<mean>``, recorded as the ``word_error_rate`` metric (percent).
     """
     parser = argparse.ArgumentParser(description=f"Validate the {demo} demo.")
     add_args(parser)
@@ -93,23 +91,20 @@ def validate_main(
         parser, args, demo=demo, local_model=local_model,
         ensure_models=ensure_models, download=download, message=message,
     )
-    items = load_items(args, validation, LOADERS)
+    items, datasets = load_items(args, validation, LOADERS)
     runtime = RuntimeConfig.from_args(args)
     with npu_clock():
         runner = make_runner(args, runtime)
-        with MetricsRun(args.metrics_out) as m:
+        with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
             wers = []
             for item in items:
                 text = transcribe(runner, item, args, m)
                 wer = word_error_rate(text, item["reference"])
                 wers.append(wer)
-                passed = wer <= max_wer
-                print(f"  [{'PASS' if passed else 'FAIL'}] {item['name']} (wer={wer:.4f})")
-                if not passed:
+                print(f"  {item['name']} (wer={wer:.4f})")
+                if wer > 0:
                     print(f"         transcript: {text.strip()[:200]!r}")
                     print(f"         reference:  {item['reference'][:200]!r}")
-    mean_wer = sum(wers) / len(wers)
-    print(f"wer={mean_wer:.4f} max={max_wer}")
-    print("PASS" if mean_wer <= max_wer else "FAIL")
-    if mean_wer > max_wer:
-        sys.exit(1)
+            mean_wer = sum(wers) / len(wers)
+            m.add("word_error_rate", mean_wer * 100)
+    print(f"wer={mean_wer:.4f}")

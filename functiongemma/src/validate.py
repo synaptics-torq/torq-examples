@@ -24,9 +24,6 @@ from utils.datasets import fetch_file
 from utils.tasks import demo_validation
 from utils.tasks.text_generation import llm_kwargs, validate_main
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
-
-
 def make_runner(args, runtime):
     return FunctionGemmaStatic(args.model, runtime=runtime, **llm_kwargs(args))
 
@@ -88,7 +85,6 @@ if __name__ == "__main__":
         make_runner,
         demo="functiongemma",
         validation=demo_validation(__file__),
-        min_accuracy=MIN_ACCURACY,
         local_model=local_functiongemma_model_path,
         ensure_models=ensure_functiongemma_models,
         download=download_functiongemma,

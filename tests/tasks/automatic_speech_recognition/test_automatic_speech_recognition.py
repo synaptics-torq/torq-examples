@@ -57,7 +57,7 @@ def _add_args(parser):
     parser.add_argument("--metrics-out", default=None)
 
 
-def _run_validate_main(tmp_path, references, transcripts, max_wer, argv=()):
+def _run_validate_main(tmp_path, references, transcripts, argv=()):
     metrics_out = tmp_path / "metrics.json"
     answers = list(transcripts)
     made = {}
@@ -85,7 +85,6 @@ def _run_validate_main(tmp_path, references, transcripts, max_wer, argv=()):
                 transcribe,
                 demo="demo",
                 validation=VALIDATION,
-                max_wer=max_wer,
                 local_model=lambda: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -96,50 +95,39 @@ def _run_validate_main(tmp_path, references, transcripts, max_wer, argv=()):
     return code, metrics_out, made, answers
 
 
-def test_validate_wer_fail_exits_1_and_writes_metrics(tmp_path, capsys):
+def test_validate_perfect_transcript_records_zero_wer(tmp_path, capsys):
     ref = "NOR IS MISTER QUILTER'S MANNER LESS INTERESTING THAN HIS MATTER"
-    code, metrics_out, made, _ = _run_validate_main(
-        tmp_path, [ref], [ref.lower()], max_wer=-1.0,  # the DUMMY baseline: always FAILS
-    )
+    code, metrics_out, made, _ = _run_validate_main(tmp_path, [ref], [ref.lower()])
     out = capsys.readouterr().out
-    assert code == 1
+    assert code == 0  # no pass mark: the WER is reported, never a verdict
     assert made["model_dir"] == str(tmp_path / "model")
-    assert "  [FAIL] utt-0 (wer=0.0000)" in out
-    assert f"reference:  {ref!r}" in out
-    assert "wer=0.0000 max=-1.0" in out
-    assert out.rstrip().endswith("FAIL")
+    assert "  utt-0 (wer=0.0000)" in out
+    assert "reference:" not in out  # transcripts only print for items with errors
+    assert out.rstrip().endswith("wer=0.0000")
     doc = json.loads(metrics_out.read_text())
+    assert doc["measurements"]["word_error_rate"] == 0.0
+    # what the score was measured on, for comparing runs
+    assert doc["validation"] == [{"dataset": "openslr/librispeech_asr", "config": "clean", "split": "test", "samples": 10, "items": 1}]
     assert doc["measurements"]["latency"] == 123_000.0
     assert doc["measurements"]["real_time_factor"] == 50.0
     assert "cpu_load" in doc["measurements"]
 
 
-def test_validate_wer_pass_exits_0(tmp_path, capsys):
-    ref = "the cat sat on the mat"
-    code, _, _, _ = _run_validate_main(tmp_path, [ref], [ref], max_wer=0.0)
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "  [PASS] utt-0 (wer=0.0000)" in out
-    assert "wer=0.0000 max=0.0" in out
-    assert out.rstrip().endswith("PASS")
-
-
-def test_validate_wer_scores_the_mean_over_items(tmp_path, capsys):
+def test_validate_wer_is_the_mean_over_items(tmp_path, capsys):
     # One perfect transcript (wer 0) and one with a substitution and an
-    # insertion (wer 1/3): the mean is 1/6, which passes max_wer=0.2
-    # although item 1 fails it.
-    code, _, _, _ = _run_validate_main(
+    # insertion (wer 1/3): the mean is 1/6.
+    code, metrics_out, _, _ = _run_validate_main(
         tmp_path,
         ["the cat sat on the mat", "the cat sat on the mat"],
         ["the cat sat on the mat", "the cat sat on the rug pad"],
-        max_wer=0.2,
     )
     out = capsys.readouterr().out
     assert code == 0
-    assert "  [PASS] utt-0 (wer=0.0000)" in out
-    assert "  [FAIL] utt-1 (wer=0.3333)" in out
-    assert "wer=0.1667 max=0.2" in out
-    assert out.rstrip().endswith("PASS")
+    assert "  utt-0 (wer=0.0000)" in out
+    assert "  utt-1 (wer=0.3333)" in out
+    assert "reference:  'the cat sat on the mat'" in out
+    assert out.rstrip().endswith("wer=0.1667")
+    assert json.loads(metrics_out.read_text())["measurements"]["word_error_rate"] == pytest.approx(100 / 6)
 
 
 def test_validate_unknown_dataset_exits(tmp_path):
@@ -150,7 +138,6 @@ def test_validate_unknown_dataset_exits(tmp_path):
                 lambda runner, item, args, metrics: "",
                 demo="demo",
                 validation=VALIDATION,
-                max_wer=0.0,
                 local_model=lambda: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,

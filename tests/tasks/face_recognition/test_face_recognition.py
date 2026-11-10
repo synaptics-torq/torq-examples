@@ -6,6 +6,7 @@ score and the LFW loader, run through ``validate_main`` with fake dataset rows,
 runner and detect hook in place of the download and the model (the shared
 box math and validate flow are tested with ``object_detection``)."""
 
+import json
 import sys
 import types
 from unittest import mock
@@ -58,7 +59,7 @@ def _add_args(parser):
     parser.add_argument("--metrics-out", default=None)
 
 
-def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
+def _run(module, tmp_path, rows, predictions, argv=()):
     metrics_out = tmp_path / "metrics.json"
     queue = [list(item) for item in predictions]
     seen = []
@@ -89,7 +90,6 @@ def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
                 demo="demo",
                 validation=VALIDATION,
                 loaders=module.LOADERS,
-                min_accuracy=min_accuracy,
                 local_model=lambda args: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -101,9 +101,10 @@ def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
 
 
 def test_loader_centre_from_the_image_size(tmp_path):
-    code, _, seen = _run(face, tmp_path, _rows(tmp_path), 0.0, [[]])
+    code, metrics_out, seen = _run(face, tmp_path, _rows(tmp_path), [[]])
     assert seen[0]["name"] == "Person_0_0001.jpg"
     assert seen[0]["expected"] == {"center": [125.0, 100.0]}
     assert code == 0
+    assert json.loads(metrics_out.read_text())["measurements"]["accuracy"] == 0.0  # nothing detected
 
 

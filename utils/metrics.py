@@ -37,6 +37,10 @@ METRICS: dict[str, tuple[str, str]] = {
     "cpu_load": ("CPU load during demo execution", "percent"),
     "npu_load": ("NPU load during demo execution", "percent"),
     "peak_memory": ("Peak memory usage", "bytes"),
+    "accuracy": ("Validation items scored correct, against the dataset's labels", "percent"),
+    "word_error_rate": ("Mean word error rate against the reference transcripts", "percent"),
+    "bleu": ("Corpus BLEU-4 against the reference translations", "percent"),
+    "token_accuracy": ("Teacher-forced next-token accuracy against the reference translations", "percent"),
 }
 
 
@@ -113,10 +117,13 @@ class MetricsRun:
 
     Args:
         path: Output file (CONTRIBUTING.md format), or None to only collect.
+        info: Extra top-level keys for the file, describing the run (e.g. the
+            ``validation`` datasets a score was measured on).
     """
 
-    def __init__(self, path: str | None = None):
+    def __init__(self, path: str | None = None, info: dict | None = None):
         self._path = path
+        self._info = info or {}
         self._sampler = SystemSampler()
         self._values: dict[str, list[float]] = {}
 
@@ -141,7 +148,7 @@ class MetricsRun:
         for name in measurements:
             description, unit = _metric_info(name)
             entries.append({"name": name, "description": description, "unit": unit})
-        doc = {"metrics": entries, "measurements": measurements}
+        doc = {"metrics": entries, "measurements": measurements, **self._info}
 
         path = os.fspath(self._path)
         fd, tmp = tempfile.mkstemp(prefix=".metrics-", suffix=".tmp", dir=os.path.dirname(path) or ".")

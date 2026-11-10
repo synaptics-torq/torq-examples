@@ -11,11 +11,10 @@ refresh, one NPU-boosted session, and the demo's image + chat loop.
 same model setup with greedy decoding forced, a Hugging Face dataset of
 image + question items (``LOADERS``), and answer scoring (the option letter
 for multiple-choice benchmarks). Both record the CONTRIBUTING.md
-metrics; validate prints PASS/FAIL and exits 1 on FAIL.
+metrics; validate also records its accuracy.
 """
 
 import argparse
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -53,7 +52,6 @@ def validate_main(
     *,
     demo: str,
     validation: list[dict],
-    min_accuracy: float,
     local_model: Callable[[], Path | None] | None,
     ensure_models: Callable,
     download: Callable | None = None,
@@ -67,8 +65,7 @@ def validate_main(
     ``info.json`` list). *ask(runner, item, args, metrics)* encodes
     ``item["image"]`` (a local file) and answers ``item["question"]``; an
     item passes when ``item["check"](answer)`` holds. Prints one line per
-    item, then ``accuracy=<x> min=<min_accuracy>`` and PASS/FAIL; exits 1 on
-    FAIL.
+    item, then ``accuracy=<x>``, recorded as the ``accuracy`` metric (percent).
     """
     parser = argparse.ArgumentParser(description=f"Validate the {demo} demo.")
     add_args(parser)
@@ -81,11 +78,11 @@ def validate_main(
         parser, args, demo=demo, local_model=local_model,
         ensure_models=ensure_models, download=download, message=message,
     )
-    items = load_items(args, validation, LOADERS)
+    items, datasets = load_items(args, validation, LOADERS)
     runtime = RuntimeConfig.from_args(args)
     with npu_clock():
         runner = make_runner(args, runtime)
-        with MetricsRun(args.metrics_out) as m:
+        with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
             passed = 0
             for item in items:
                 answer = ask(runner, item, args, m)
@@ -94,8 +91,6 @@ def validate_main(
                 print(f"  [{'PASS' if ok else 'FAIL'}] {item['name']}")
                 if not ok:
                     print(f"         answer: {answer.strip()[:200]!r} (expected {item['expected']!r})")
-    accuracy = passed / len(items)
-    print(f"accuracy={accuracy:.4f} min={min_accuracy}")
-    print("PASS" if accuracy >= min_accuracy else "FAIL")
-    if accuracy < min_accuracy:
-        sys.exit(1)
+            accuracy = passed / len(items)
+            m.add("accuracy", accuracy * 100)
+    print(f"accuracy={accuracy:.4f} ({passed}/{len(items)} items)")

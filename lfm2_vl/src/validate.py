@@ -17,9 +17,6 @@ from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.image_text_to_text import validate_main
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
-
-
 def add_args(parser) -> None:
     model_args(parser)
     add_common_inference_args(parser)
@@ -41,7 +38,6 @@ if __name__ == "__main__":
         ask,
         demo="LiquidAI-LFM2-VL-450M",
         validation=demo_validation(__file__),
-        min_accuracy=MIN_ACCURACY,
         local_model=local_lfm2vl_model_dir,
         ensure_models=ensure_lfm2vl_int8_models,
         download=download_lfm2vl_int8,

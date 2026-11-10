@@ -21,9 +21,6 @@ from utils.tasks import demo_validation
 from utils.tasks.keypoint_detection import LOADERS, aggregate, score_item, validate_main
 from utils.pose_estimation import dequantize_out, postprocess_pose
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
-
-
 def add_args(parser) -> None:
     parser.add_argument(
         "--model", default=None,
@@ -57,7 +54,6 @@ if __name__ == "__main__":
         demo="pose_estimation",
         validation=demo_validation(__file__),
         loaders=LOADERS,
-        min_accuracy=MIN_ACCURACY,
         local_model=lambda args: local_pose_model_path(),
         ensure_models=ensure_pose_estimation_models,
         download=lambda args: download_pose_estimation(),

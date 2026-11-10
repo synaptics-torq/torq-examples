@@ -11,7 +11,7 @@ file), one NPU-boosted session, and the demo's per-image loop.
 ``validate_main`` scores a Hugging Face dataset of face-centred photos
 (``LOADERS``): an image passes when a detected face box contains the image
 centre, and accuracy is the fraction of passing images. Both record the
-CONTRIBUTING.md metrics; validate prints PASS/FAIL and exits 1 on FAIL.
+CONTRIBUTING.md metrics; validate also records its accuracy.
 """
 
 from pathlib import Path

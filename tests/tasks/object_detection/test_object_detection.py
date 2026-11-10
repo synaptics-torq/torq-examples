@@ -131,7 +131,7 @@ def _add_args(parser):
     parser.add_argument("--metrics-out", default=None)
 
 
-def _run_validate_main(tmp_path, expected, min_accuracy, predictions, argv=()):
+def _run_validate_main(tmp_path, expected, predictions, argv=()):
     metrics_out = tmp_path / "metrics.json"
     queue = [list(item) for item in predictions]
     seen = []
@@ -158,7 +158,6 @@ def _run_validate_main(tmp_path, expected, min_accuracy, predictions, argv=()):
                 demo="demo",
                 validation=VALIDATION,
                 loaders=od.LOADERS,
-                min_accuracy=min_accuracy,
                 local_model=lambda args: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -169,42 +168,30 @@ def _run_validate_main(tmp_path, expected, min_accuracy, predictions, argv=()):
     return code, metrics_out, seen
 
 
-def test_validate_fail_exits_1_and_writes_metrics(tmp_path, capsys):
+def test_validate_wrong_label_scores_zero_and_writes_metrics(tmp_path, capsys):
     code, metrics_out, seen = _run_validate_main(
-        tmp_path, [[{"label": "dog", "box": [0, 0, 10, 10]}]], 1.0, [[("cat", 0.9, [0, 0, 10, 10])]],
+        tmp_path, [[{"label": "dog", "box": [0, 0, 10, 10]}]], [[("cat", 0.9, [0, 0, 10, 10])]],
     )
     out = capsys.readouterr().out
-    assert code == 1
+    assert code == 0  # no pass mark: the accuracy is reported, never a verdict
     assert seen == [tmp_path / "img0.jpg"]
     assert "  [FAIL] img0.jpg" in out
     assert "expected:  [{'label': 'dog', 'box': [0, 0, 10, 10]}]" in out  # the crowd region is skipped
     assert "predicted: [{'label': 'cat', 'box': [0, 0, 10, 10]}]" in out
-    assert "accuracy=0.0000 min=1.0" in out
-    assert out.rstrip().endswith("FAIL")
+    assert out.rstrip().endswith("accuracy=0.0000")
     doc = json.loads(metrics_out.read_text())
+    assert doc["measurements"]["accuracy"] == 0.0
     assert doc["measurements"]["latency"] == 123_000.0
     assert doc["measurements"]["frames_per_second"] == 8000.0
     assert "cpu_load" in doc["measurements"]
 
 
-def test_validate_pass_exits_0(tmp_path, capsys):
-    code, _, _ = _run_validate_main(
-        tmp_path, [[{"label": "dog", "box": [0.4, 0.2, 9.6, 9.9]}]], 1.0, [[("dog", 0.9, [0.4, 0.2, 9.6, 9.9])]],
-    )
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "  [PASS] img0.jpg" in out
-    assert "accuracy=1.0000 min=1.0" in out
-    assert out.rstrip().endswith("PASS")
-
-
 def test_validate_scores_the_f1_of_the_totals(tmp_path, capsys):
     # Item 0: one match plus one extra detection (per-item F1 2/3);
     # item 1: one match (per-item F1 1.0). Totals: F1 of tp=2, n=3, e=2.
-    code, _, _ = _run_validate_main(
+    code, metrics_out, _ = _run_validate_main(
         tmp_path,
-        [[{"label": "dog", "box": [0, 0, 10, 10]}], [{"label": "cat", "box": [50, 50, 10, 10]}]],
-        0.8,
+        [[{"label": "dog", "box": [0, 0, 10, 10]}], [{"label": "cat", "box": [50.4, 50, 10, 10]}]],
         [
             [("dog", 0.9, [0, 0, 10, 10]), ("bird", 0.8, [90, 90, 5, 5])],
             [("cat", 0.9, [50, 50, 10, 10])],
@@ -214,14 +201,14 @@ def test_validate_scores_the_f1_of_the_totals(tmp_path, capsys):
     assert code == 0
     assert "  [FAIL] img0.jpg" in out
     assert "  [PASS] img1.jpg" in out
-    assert "accuracy=0.8000 min=0.8" in out
+    assert out.rstrip().endswith("accuracy=0.8000")
+    assert json.loads(metrics_out.read_text())["measurements"]["accuracy"] == pytest.approx(80.0)
 
 
 def test_validate_samples_takes_the_lowest_image_ids(tmp_path):
-    code, _, seen = _run_validate_main(
-        tmp_path, [[], []], 1.0,
+    _, _, seen = _run_validate_main(
+        tmp_path, [[], []],
         [[("dog", 0.9, [0, 0, 10, 10])], [("unused", 0.9, [0, 0, 10, 10])]],
         argv=["--samples", "1"],
     )
     assert seen == [tmp_path / "img0.jpg"]
-    assert code == 1  # item 0 has no expected objects, so nothing matches

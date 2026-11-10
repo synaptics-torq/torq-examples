@@ -7,6 +7,7 @@ matching and keypoint accuracy, and the COCO keypoints loader run through
 the download and the model (the shared box math and validate flow are tested
 with ``object_detection``)."""
 
+import json
 import sys
 from unittest import mock
 
@@ -98,7 +99,7 @@ def _add_args(parser):
     parser.add_argument("--metrics-out", default=None)
 
 
-def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
+def _run(module, tmp_path, rows, predictions, argv=()):
     metrics_out = tmp_path / "metrics.json"
     queue = [list(item) for item in predictions]
     seen = []
@@ -129,7 +130,6 @@ def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
                 demo="demo",
                 validation=VALIDATION,
                 loaders=module.LOADERS,
-                min_accuracy=min_accuracy,
                 local_model=lambda args: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -142,10 +142,11 @@ def _run(module, tmp_path, rows, min_accuracy, predictions, argv=()):
 
 def test_loader_keeps_only_labelled_keypoints(tmp_path):
     rows = [_row(str(tmp_path / "a.jpg"), [([0.4, 0.0, 99.6, 200.0], {0: (50.2, 100.0), 5: (10.0, 20.0)})])]
-    code, _, seen = _run(pose, tmp_path, rows, 0.0, [[]])
+    code, metrics_out, seen = _run(pose, tmp_path, rows, [[]])
     assert seen[0]["image"] == tmp_path / "a.jpg"
     assert seen[0]["name"] == "pictograph/coco-2017-pose #0"
     assert seen[0]["expected"] == [{"box": [0, 0, 100, 200], "keypoints": [[0, 50, 100], [5, 10, 20]]}]
     assert code == 0
+    assert json.loads(metrics_out.read_text())["measurements"]["accuracy"] == 0.0  # nothing detected
 
 

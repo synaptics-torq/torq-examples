@@ -12,13 +12,12 @@ forced, a Hugging Face dataset (``LOADERS``) and one of three modes —
 ``prompts`` (each prompt's answer is checked against the dataset's label: an
 option letter or a final number), ``bleu`` (corpus BLEU-4 over a translation
 dataset) and ``teacher-forced`` (next-token accuracy over the same dataset). Both record the
-CONTRIBUTING.md metrics; validate prints PASS/FAIL and exits 1 on FAIL.
+CONTRIBUTING.md metrics; validate also records its score.
 """
 
 import argparse
 import math
 import re
-import sys
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
@@ -448,6 +447,8 @@ _MODES: dict[str, Callable] = {
     "bleu": run_bleu,
     "teacher-forced": run_teacher_forced,
 }
+#: The metric each mode's score is recorded as (CONTRIBUTING.md metrics JSON, percent).
+_SCORES = {"prompts": "accuracy", "bleu": "bleu", "teacher-forced": "token_accuracy"}
 
 
 def validate_main(
@@ -455,7 +456,6 @@ def validate_main(
     *,
     demo: str,
     validation: list[dict],
-    min_accuracy: float,
     local_model: Callable[[], Path | None],
     ensure_models: Callable,
     download: Callable | None = None,
@@ -470,8 +470,8 @@ def validate_main(
     ``info.json`` list; :data:`TRANSLATION_DATASET` for the translation
     modes) and ``--mode {prompts,bleu,teacher-forced}`` (default
     ``prompts``). *loaders* adds demo-specific datasets to :data:`LOADERS`.
-    Prints one line per item, then ``accuracy=<x> min=<min_accuracy>`` and
-    PASS/FAIL; exits 1 on FAIL.
+    Prints one line per item, then the score, recorded as the ``accuracy``,
+    ``bleu`` or ``token_accuracy`` metric (percent) by mode.
     """
     parser = argparse.ArgumentParser(description=f"Validate the {demo} demo.")
     add_llm_inference_args(parser, **(llm_args or {}))
@@ -493,15 +493,13 @@ def validate_main(
         ensure_models=ensure_models, download=download,
     )
     translation = args.mode != "prompts"
-    items = load_items(args, TRANSLATION_DATASET if translation else validation, {**LOADERS, **(loaders or {})})
+    items, datasets = load_items(args, TRANSLATION_DATASET if translation else validation, {**LOADERS, **(loaders or {})})
     if translation != ("src" in items[0]):
         parser.error(f"--mode {args.mode} needs a {'translation' if translation else 'prompts'} dataset")
     runtime = RuntimeConfig.from_args(args)
     with npu_clock():
         runner = make_runner(args, runtime)
-        with MetricsRun(args.metrics_out) as m:
-            accuracy = _MODES[args.mode](runner, items, metrics=m)
-    print(f"accuracy={accuracy:.4f} min={min_accuracy}")
-    print("PASS" if accuracy >= min_accuracy else "FAIL")
-    if accuracy < min_accuracy:
-        sys.exit(1)
+        with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
+            score = _MODES[args.mode](runner, items, metrics=m)
+            m.add(_SCORES[args.mode], score * 100)
+    print(f"{_SCORES[args.mode]}={score:.4f}")

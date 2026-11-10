@@ -93,14 +93,19 @@ def add_dataset_args(parser: argparse.ArgumentParser, validation: list[dict]) ->
     group.add_argument("--samples", type=int, default=None, help="Rows to score per dataset (default: info.json)")
 
 
-def load_items(args: argparse.Namespace, validation: list[dict], loaders: dict[str, Callable]) -> list[dict]:
-    """The scoring items of the selected datasets.
+def load_items(
+    args: argparse.Namespace, validation: list[dict], loaders: dict[str, Callable]
+) -> tuple[list[dict], list[dict]]:
+    """The scoring items of the selected datasets, and the datasets as run.
 
     ``--dataset`` replaces the defaults with one dataset (its missing
     ``--config`` / ``--split`` / ``--samples`` come from the matching default,
     if any); ``--samples`` applies to every dataset. *loaders* maps each
     supported dataset to ``loader(spec) -> list[dict]``, where *spec* is the
-    resolved ``{"dataset", "config", "split", "samples"}``.
+    resolved ``{"dataset", "config", "split", "samples"}``. The datasets as
+    run are those specs plus ``items``, the rows each one gave (fewer than
+    ``samples`` at the end of a split); validate records them in the metrics
+    JSON, so a score says what it was measured on.
     """
     if args.dataset:
         base = next((dict(v) for v in validation if v["dataset"] == args.dataset), {"dataset": args.dataset})
@@ -120,10 +125,12 @@ def load_items(args: argparse.Namespace, validation: list[dict], loaders: dict[s
             raise SystemExit(
                 f"No loader for dataset {spec['dataset']!r}; supported: {', '.join(sorted(loaders))}"
             )
-        items += loader(spec)
+        loaded = loader(spec)
+        spec["items"] = len(loaded)
+        items += loaded
     if not items:
         raise SystemExit("No validation items")
-    return items
+    return items, specs
 
 
 def infer_main(

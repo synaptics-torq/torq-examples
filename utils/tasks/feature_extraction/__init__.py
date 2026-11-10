@@ -13,11 +13,10 @@ caption it should match, and a retrieval check per item — its own caption
 ranks first among the run's captions by cosine similarity. ``--modalities``
 restricts which encoders the session loads and which items are validated (a
 board with little RAM runs the modalities in separate sessions). Both record
-the CONTRIBUTING.md metrics; validate prints PASS/FAIL and exits 1 on FAIL.
+the CONTRIBUTING.md metrics; validate also records its accuracy.
 """
 
 import argparse
-import sys
 from collections.abc import Callable
 from pathlib import Path
 
@@ -74,7 +73,6 @@ def validate_main(
     *,
     demo: str,
     validation: list[dict],
-    min_accuracy: float,
     local_model: Callable[[], Path | None] | None,
     ensure_models: Callable | None = None,
     download: Callable | None = None,
@@ -93,8 +91,8 @@ def validate_main(
     pseudo-item ``{"kind": "query", "query": ...}`` — and records the demo's
     ``latency_<modality>`` metric. An item passes when its own caption ranks
     first among the run's captions (by :func:`cosine`); the accuracy is the
-    fraction of passing items, printed as ``accuracy=<x> min=<min_accuracy>``
-    and PASS/FAIL; exits 1 on FAIL.
+    fraction of passing items, printed as ``accuracy=<x>`` and recorded as
+    the ``accuracy`` metric (percent).
     """
     parser = argparse.ArgumentParser(description=f"Validate the {demo} demo.")
     add_args(parser)
@@ -116,14 +114,15 @@ def validate_main(
         parser, args, demo=demo, local_model=local_model,
         ensure_models=ensure_models, download=download, message=message,
     )
-    items = [it for it in load_items(args, validation, {**LOADERS, **(loaders or {})}) if it["kind"] in mods]
+    items, datasets = load_items(args, validation, {**LOADERS, **(loaders or {})})
+    items = [it for it in items if it["kind"] in mods]
     if not items:
         parser.error(f"no {demo} validation items for --modalities {args.modalities}")
     queries = list(dict.fromkeys(it["query"] for it in items))
     runtime = RuntimeConfig.from_args(args)
     with npu_clock():
         runner = make_runner(args, runtime, items)
-        with MetricsRun(args.metrics_out) as m:
+        with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
             query_emb = {q: encode(runner, {"kind": "query", "query": q}, args, m) for q in queries}
             passed = 0
             for it in items:
@@ -135,8 +134,6 @@ def validate_main(
                 print(f"  [{'PASS' if ok else 'FAIL'}] {it['kind']} {it['name']}")
                 if not ok:
                     print(f"         top-1 {top!r} (expected {it['query']!r})")
-    accuracy = passed / len(items)
-    print(f"accuracy={accuracy:.4f} min={min_accuracy}")
-    print("PASS" if accuracy >= min_accuracy else "FAIL")
-    if accuracy < min_accuracy:
-        sys.exit(1)
+            accuracy = passed / len(items)
+            m.add("accuracy", accuracy * 100)
+    print(f"accuracy={accuracy:.4f} ({passed}/{len(items)} items)")

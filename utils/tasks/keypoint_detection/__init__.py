@@ -12,8 +12,7 @@ file), one NPU-boosted session, and the demo's per-image loop.
 persons (``LOADERS``): a person matches by box IoU at or above 0.5, and accuracy is the
 fraction of expected keypoints within 5% of the box size of the predicted
 keypoint at the same index (only the dataset's labelled keypoints count).
-Both record the CONTRIBUTING.md metrics; validate prints PASS/FAIL and exits
-1 on FAIL.
+Both record the CONTRIBUTING.md metrics; validate also records its accuracy.
 """
 
 from pathlib import Path

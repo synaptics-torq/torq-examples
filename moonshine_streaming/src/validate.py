@@ -19,9 +19,6 @@ from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.automatic_speech_recognition import validate_main
 
-MAX_WER = -1.0  # DUMMY until a measured baseline exists: below 0, so the WER check always FAILS.
-
-
 def add_args(parser) -> None:
     parser.add_argument(
         "-m", "--model-dir", type=str, default=None, metavar="DIR",
@@ -42,7 +39,6 @@ if __name__ == "__main__":
         transcribe,
         demo="moonshine_streaming",
         validation=demo_validation(__file__),
-        max_wer=MAX_WER,
         local_model=local_moonshine_streaming_model_dir,
         ensure_models=ensure_moonshine_streaming_models,
         download=download_moonshine_streaming,

@@ -104,12 +104,11 @@ Tests have two phases:
 
 1. Setup phase: upload example to the target board and run any necessary setup commands, then 
    download all assets required for the test ( input data, expected results).
-2. Execution phase: run the inference for the test on the target board and compare the output against the expected results.
+2. Execution phase: run the inference for the test on the target board and score the output against the expected results.
 
 Tests rely on the command line interface provided by the example scripts to execute the setup and validation phases.
 
-The execution phase outputs a PASS/FAIL result based on some criteria (e.g. comparison with expected results) and
-performance metrics in the following format:
+The execution phase reports the model's score on the validation data (no pass mark: the score lets users weigh accuracy against performance) together with the performance metrics, in the following format:
 
 ```json
 {
@@ -117,10 +116,11 @@ performance metrics in the following format:
      {"name": "time_to_first_token", "description": "Time taken to generate the first token", "unit": "ns"},
      {"name": "tokens_per_second", "description": "Generated answer tokens divided by the time taken to generate them", "unit": "hz"},
      {"name": "cpu_load", "description": "CPU load during demo execution", "unit": "percent"},
-     {"name": "npu_load", "description": "NPU load during demo execution", "unit": "percent"}
+     {"name": "npu_load", "description": "NPU load during demo execution", "unit": "percent"},
+     {"name": "accuracy", "description": "Validation items scored correct, against the dataset's labels", "unit": "percent"}
    ],
    "measurements" : {
-     "time_to_first_token": 100, "tokens_per_second": 10, "cpu_load": 10, "npu_load": 90
+     "time_to_first_token": 100, "tokens_per_second": 10, "cpu_load": 10, "npu_load": 90, "accuracy": 64
     }
 }
 ```
@@ -131,3 +131,5 @@ where unit is one of:
 - `hz` (rates)
 - `percent` (percentage; values are 0-100, so 90 means 90%)
 - `bytes` (memory usage)
+
+A validation run also writes a top-level `validation` list: the datasets the score was measured on, each `{"dataset", "config", "split", "samples", "items"}` (`items` is the number of rows scored, fewer than `samples` at the end of a split). Scores are only comparable between runs with the same list.

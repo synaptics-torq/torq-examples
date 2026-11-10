@@ -38,7 +38,7 @@ def _add_args(parser):
     parser.add_argument("--temperature", type=float, default=0.7)
 
 
-def _run_validate_main(tmp_path, expected, answers, min_accuracy, argv=()):
+def _run_validate_main(tmp_path, expected, answers, argv=()):
     metrics_out = tmp_path / "metrics.json"
     queue = list(answers)
     made = {}
@@ -67,7 +67,6 @@ def _run_validate_main(tmp_path, expected, answers, min_accuracy, argv=()):
                 ask,
                 demo="demo",
                 validation=VALIDATION,
-                min_accuracy=min_accuracy,
                 local_model=lambda: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -78,27 +77,26 @@ def _run_validate_main(tmp_path, expected, answers, min_accuracy, argv=()):
     return code, metrics_out, made, asked
 
 
-def test_validate_fail_exits_1_and_writes_metrics(tmp_path, capsys):
-    code, metrics_out, made, asked = _run_validate_main(tmp_path, ["A"], ["B"], 1.0)
+def test_validate_wrong_answer_scores_zero_and_writes_metrics(tmp_path, capsys):
+    code, metrics_out, made, asked = _run_validate_main(tmp_path, ["A"], ["B"])
     out = capsys.readouterr().out
-    assert code == 1
+    assert code == 0  # no pass mark: the accuracy is reported, never a verdict
     assert made == {"model_dir": str(tmp_path / "model"), "temperature": 0.0}  # greedy forced
     assert asked[0][0] == tmp_path / "0.jpg"
     assert asked[0][1].endswith("Answer with the option's letter from the given choices directly.")
     assert "  [FAIL] Lin-Chen/MMStar #0" in out
     assert "answer: 'B' (expected 'A')" in out
-    assert "accuracy=0.0000 min=1.0" in out
-    assert out.rstrip().endswith("FAIL")
+    assert out.rstrip().endswith("accuracy=0.0000 (0/1 items)")
     doc = json.loads(metrics_out.read_text())
+    assert doc["measurements"]["accuracy"] == 0.0
     assert doc["measurements"]["time_to_first_token"] == 456_000_000.0
     assert doc["measurements"]["tokens_per_second"] == 7.5
 
 
-def test_validate_pass_exits_0(tmp_path, capsys):
-    code, _, _, _ = _run_validate_main(tmp_path, ["C"], ["C: car"], 1.0)
+def test_validate_right_answer_counts(tmp_path, capsys):
+    code, metrics_out, _, _ = _run_validate_main(tmp_path, ["C", "A"], ["C: car", "B"])
     out = capsys.readouterr().out
     assert code == 0
     assert "  [PASS] Lin-Chen/MMStar #0" in out
-    assert out.rstrip().endswith("PASS")
-
-
+    assert out.rstrip().endswith("accuracy=0.5000 (1/2 items)")
+    assert json.loads(metrics_out.read_text())["measurements"]["accuracy"] == 50.0

@@ -12,7 +12,7 @@ file), one NPU-boosted session, and the demo's per-image loop.
 objects (``LOADERS``): greedy one-to-one matching of detections to expected objects
 with the same label and IoU at or above 0.5, precision and recall over all
 items, and accuracy as their F1. Both record the CONTRIBUTING.md metrics;
-validate prints PASS/FAIL and exits 1 on FAIL.
+validate also records its accuracy.
 """
 
 import json

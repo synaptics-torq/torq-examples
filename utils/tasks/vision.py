@@ -10,13 +10,12 @@ model VMFB file, unlike the model-dir categories' ``-m/--model-dir``), one
 NPU-boosted session, and the demo's per-image loop. ``validate_main`` is the
 shared main of their ``src/validate.py`` scripts: the same model setup, a
 Hugging Face dataset of images with their labels (the category's loaders),
-and per-item scoring (PASS/FAIL, exit 1 on FAIL).
+and per-item scoring; the accuracy is printed and recorded in the metrics JSON.
 ``iou``, ``match_boxes`` and ``f1_score`` are the box-matching helpers the
 categories' scoring is built from.
 """
 
 import argparse
-import sys
 from collections.abc import Callable, Sequence
 from functools import partial
 from pathlib import Path
@@ -174,7 +173,6 @@ def validate_main(
     demo: str,
     validation: list[dict],
     loaders: dict[str, Callable[[dict], list[dict]]],
-    min_accuracy: float,
     local_model: Callable[[argparse.Namespace], Path | None],
     ensure_models: Callable | None = None,
     download: Callable[[argparse.Namespace], object] | None = None,
@@ -191,7 +189,7 @@ def validate_main(
     metrics. *score_item(item, predictions)* returns ``(item_score, counts,
     lines)`` — the item passes at ``item_score == 1.0``, and *lines* print on
     FAIL — then *aggregate(counts over all items)* is the accuracy, printed
-    as ``accuracy=<x> min=<min_accuracy>`` and PASS/FAIL; exits 1 on FAIL.
+    as ``accuracy=<x>`` and recorded as the ``accuracy`` metric (percent).
     """
     parser = argparse.ArgumentParser(description=f"Validate the {demo} demo.")
     add_args(parser)
@@ -203,11 +201,11 @@ def validate_main(
         download=download, message=message,
     )
     _ensure_model_dir(args, ensure_models)
-    items = load_items(args, validation, loaders)
+    items, datasets = load_items(args, validation, loaders)
     runtime = RuntimeConfig.from_args(args)
     with npu_clock():
         runner = make_runner(args, runtime)
-        with MetricsRun(args.metrics_out) as m:
+        with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
             counts = []
             for item in items:
                 predictions = detect(runner, item, args, m)
@@ -217,8 +215,6 @@ def validate_main(
                 if item_score != 1.0:
                     for line in lines:
                         print(f"         {line}")
-    accuracy = aggregate(counts)
-    print(f"accuracy={accuracy:.4f} min={min_accuracy}")
-    print("PASS" if accuracy >= min_accuracy else "FAIL")
-    if accuracy < min_accuracy:
-        sys.exit(1)
+            accuracy = aggregate(counts)
+            m.add("accuracy", accuracy * 100)
+    print(f"accuracy={accuracy:.4f}")

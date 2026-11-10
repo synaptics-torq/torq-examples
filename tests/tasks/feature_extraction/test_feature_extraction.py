@@ -60,7 +60,7 @@ def _add_args(parser):
     parser.add_argument("--metrics-out", default=None)
 
 
-def _run_validate_main(tmp_path, media, *, min_accuracy=2.0, argv=()):
+def _run_validate_main(tmp_path, media, *, argv=()):
     metrics_out = tmp_path / "metrics.json"
     made = {}
 
@@ -84,7 +84,6 @@ def _run_validate_main(tmp_path, media, *, min_accuracy=2.0, argv=()):
                 encode,
                 demo="demo",
                 validation=VALIDATION,
-                min_accuracy=min_accuracy,
                 local_model=lambda: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 add_args=_add_args,
@@ -96,32 +95,34 @@ def _run_validate_main(tmp_path, media, *, min_accuracy=2.0, argv=()):
 
 
 def test_loaders_take_the_first_caption(tmp_path):
-    _, _, made = _run_validate_main(tmp_path, dict(MEDIA), min_accuracy=0.0)
+    _, _, made = _run_validate_main(tmp_path, dict(MEDIA))
     assert made["items"] == [("image", "dog.jpg", "a dog"), ("image", "cat.jpg", "a cat"), ("audio", "bark", "a bark")]
 
 
-def test_validate_all_pass_exits_0(tmp_path, capsys):
-    code, metrics_out, made = _run_validate_main(tmp_path, dict(MEDIA), min_accuracy=1.0)
+def test_validate_all_retrieved_scores_one(tmp_path, capsys):
+    code, metrics_out, made = _run_validate_main(tmp_path, dict(MEDIA))
     out = capsys.readouterr().out
     assert code == 0
     assert "  [PASS] image dog.jpg" in out and "  [PASS] audio bark" in out
-    assert "accuracy=1.0000 min=1.0" in out
+    assert out.rstrip().endswith("accuracy=1.0000 (3/3 items)")
     doc = json.loads(metrics_out.read_text())
     assert doc["measurements"]["latency_image"] == 123_000.0
+    assert doc["measurements"]["accuracy"] == 100.0
     assert doc["measurements"]["latency_text"] == 123_000.0
 
 
 def test_validate_retrieval_fail(tmp_path, capsys):
     media = dict(MEDIA, **{"/data/cat.jpg": [0.99, 0.01, 0.01]})  # the cat looks like the dog
-    code, _, _ = _run_validate_main(tmp_path, media, min_accuracy=1.0)
+    code, metrics_out, _ = _run_validate_main(tmp_path, media)
     out = capsys.readouterr().out
-    assert code == 1
+    assert code == 0  # no pass mark: the accuracy is reported, never a verdict
+    assert json.loads(metrics_out.read_text())["measurements"]["accuracy"] == pytest.approx(200 / 3)
     assert "  [FAIL] image cat.jpg" in out
     assert "top-1 'a dog' (expected 'a cat')" in out
 
 
 def test_modalities_filter(tmp_path, capsys):
-    code, _, made = _run_validate_main(tmp_path, dict(MEDIA), min_accuracy=1.0, argv=["--modalities", "text,audio"])
+    code, _, made = _run_validate_main(tmp_path, dict(MEDIA), argv=["--modalities", "text,audio"])
     out = capsys.readouterr().out
     assert code == 0
     assert made["items"] == [("audio", "bark", "a bark")]
@@ -141,5 +142,8 @@ def test_modalities_all_filtered_errors(tmp_path, capsys):
 
 
 def test_samples(tmp_path):
-    _, _, made = _run_validate_main(tmp_path, dict(MEDIA), min_accuracy=0.0, argv=["--samples", "1"])
+    _, metrics_out, made = _run_validate_main(tmp_path, dict(MEDIA), argv=["--samples", "1"])
     assert [name for _, name, _ in made["items"]] == ["dog.jpg", "bark"]
+    assert [(d["dataset"], d["samples"], d["items"]) for d in json.loads(metrics_out.read_text())["validation"]] == [
+        ("nlphuji/flickr30k", 1, 1), ("CLAPv2/Clotho", 1, 1),
+    ]

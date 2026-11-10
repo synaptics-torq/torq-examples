@@ -27,9 +27,6 @@ from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.feature_extraction import validate_main
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1, so the check always FAILS.
-
-
 def add_args(parser) -> None:
     parser.add_argument(
         "-m",
@@ -84,7 +81,6 @@ if __name__ == "__main__":
         encode,
         demo="EmbeddingGemma-2",
         validation=demo_validation(__file__),
-        min_accuracy=MIN_ACCURACY,
         local_model=local_embeddinggemma2_model_dir,
         add_args=add_args,
         loaders={"Xenova/transformers.js-docs": _eval_set_videos},

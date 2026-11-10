@@ -210,7 +210,7 @@ include them); media files are downloaded from `Xenova/transformers.js-docs` on 
 
 ## Validation
 
-`src/validate.py` embeds 20 images of Flickr30k ([nlphuji/flickr30k](https://huggingface.co/datasets/nlphuji/flickr30k)), 20 sound clips of Clotho ([CLAPv2/Clotho](https://huggingface.co/datasets/CLAPv2/Clotho)) and the 5 video clips of the eval set above (hosted in [Xenova/transformers.js-docs](https://huggingface.co/datasets/Xenova/transformers.js-docs)), and checks that each item's own caption ranks first among all the run's captions (retrieval). It prints PASS/FAIL (the accuracy threshold is a dummy until a baseline exists, so it FAILs by design) and writes the metrics JSON with `--metrics-out`.
+`src/validate.py` embeds 20 images of Flickr30k ([nlphuji/flickr30k](https://huggingface.co/datasets/nlphuji/flickr30k)), 20 sound clips of Clotho ([CLAPv2/Clotho](https://huggingface.co/datasets/CLAPv2/Clotho)) and the 5 video clips of the eval set above (hosted in [Xenova/transformers.js-docs](https://huggingface.co/datasets/Xenova/transformers.js-docs)), and checks that each item's own caption ranks first among all the run's captions (retrieval). It prints each item's result and the overall accuracy, which `--metrics-out` records as the `accuracy` metric; there is no pass mark.
 
 The board loads at most two modalities at once (2 GB RAM), so run them in separate sessions:
 

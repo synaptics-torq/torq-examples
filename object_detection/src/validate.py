@@ -24,9 +24,6 @@ from utils.vision import dequantize_out
 from utils.object_detection import VARIANTS, postprocess
 from utils.preprocess import preprocess_image
 
-MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
-
-
 def add_args(parser) -> None:
     parser.add_argument(
         "--model", default=None,
@@ -72,7 +69,6 @@ if __name__ == "__main__":
         demo="object_detection",
         validation=demo_validation(__file__),
         loaders=LOADERS,
-        min_accuracy=MIN_ACCURACY,
         local_model=local_model,
         ensure_models=ensure_object_detection_models,
         download=lambda args: download_object_detection([VARIANT_MODEL_FILES[args.variant][0]]),

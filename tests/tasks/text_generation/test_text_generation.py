@@ -192,7 +192,7 @@ GSM8K = [
 ]
 
 
-def _run_validate_main(tmp_path, answers, min_accuracy, argv=(), rows=None, loaders=None):
+def _run_validate_main(tmp_path, answers, argv=(), rows=None, loaders=None):
     metrics_out = tmp_path / "metrics.json"
     runner = _FakeRunner(answers)
     made = {}
@@ -215,7 +215,6 @@ def _run_validate_main(tmp_path, answers, min_accuracy, argv=(), rows=None, load
                 make_runner,
                 demo="test",
                 validation=VALIDATION,
-                min_accuracy=min_accuracy,
                 local_model=lambda: None,
                 ensure_models=lambda model_dir, **kwargs: None,
                 loaders=loaders,
@@ -226,57 +225,55 @@ def _run_validate_main(tmp_path, answers, min_accuracy, argv=(), rows=None, load
     return code, metrics_out, made, runner
 
 
-def test_validate_prompts_fail_exits_1_and_writes_metrics(tmp_path, capsys):
+def test_validate_prompts_scores_against_the_labels_and_writes_metrics(tmp_path, capsys):
     code, metrics_out, made, runner = _run_validate_main(
-        tmp_path, ["2 + 3 = 5\nThe answer is 5.", "It costs a lot."], min_accuracy=2.0,
+        tmp_path, ["2 + 3 = 5\nThe answer is 5.", "It costs a lot."],
     )
     out = capsys.readouterr().out
-    assert code == 1
+    assert code == 0  # no pass mark: the accuracy is reported, never a verdict
     assert made["temperature"] == 0.0  # greedy decoding forced
     assert made["mode"] == "prompts"
     assert runner.prompts[0].startswith("Tom has 2 apples")
     assert "  [PASS] openai/gsm8k #0" in out
     assert "  [FAIL] openai/gsm8k #1" in out
     assert "(expected '2000')" in out
-    assert "accuracy=0.5000 min=2.0" in out
-    assert out.rstrip().endswith("FAIL")
+    assert out.rstrip().endswith("accuracy=0.5000")
     doc = json.loads(metrics_out.read_text())
+    assert doc["measurements"]["accuracy"] == 50.0
     assert doc["measurements"]["time_to_first_token"] == 10_000_000.0  # 10 ms in ns
     assert doc["measurements"]["tokens_per_second"] == pytest.approx(5 / (123.4 - 10.0) * 1000)
     assert "cpu_load" in doc["measurements"]
 
 
-def test_validate_prompts_pass_exits_0(tmp_path, capsys):
-    code, _, _, _ = _run_validate_main(tmp_path, ["5", "So the total is 2,000"], min_accuracy=0.5)
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "accuracy=1.0000 min=0.5" in out
-    assert out.rstrip().endswith("PASS")
+def test_validate_prompts_last_number_ignores_thousands_separators(tmp_path, capsys):
+    _run_validate_main(tmp_path, ["5", "So the total is 2,000"])
+    assert capsys.readouterr().out.rstrip().endswith("accuracy=1.0000")
 
 
 def test_validate_prompts_degenerate_answer_counts_as_fail(tmp_path, capsys):
-    code, _, _, _ = _run_validate_main(tmp_path, ["5 " * 12, "2000"], min_accuracy=1.0)
+    _run_validate_main(tmp_path, ["5 " * 12, "2000"])
     out = capsys.readouterr().out
-    assert code == 1
     assert out.count("[FAIL]") == 1  # only the repeated-word answer
-    assert "accuracy=0.5000 min=1.0" in out
+    assert out.rstrip().endswith("accuracy=0.5000")
 
 
 def test_validate_bleu_defaults_to_opus100(tmp_path, capsys):
     rows = {"Helsinki-NLP/opus-100": [{"translation": {"en": "Good morning", "es": "Buenos días amigo mío"}}]}
-    code, _, made, runner = _run_validate_main(
-        tmp_path, ["Buenos días amigo mío"], min_accuracy=0.5, argv=["--mode", "bleu"], rows=rows,
+    code, metrics_out, made, runner = _run_validate_main(
+        tmp_path, ["Buenos días amigo mío"], argv=["--mode", "bleu"], rows=rows,
     )
     out = capsys.readouterr().out
     assert made["mode"] == "bleu"
     assert runner.prompts == ['Translate to Spanish: "Good morning"']
     assert "Corpus BLEU-4: 100.00" in out
+    assert out.rstrip().endswith("bleu=1.0000")
+    assert json.loads(metrics_out.read_text())["measurements"]["bleu"] == 100.0
     assert code == 0
 
 
 def test_validate_mode_needs_a_matching_dataset(tmp_path, capsys):
     code, _, _, _ = _run_validate_main(
-        tmp_path, [], min_accuracy=1.0, argv=["--mode", "bleu", "--dataset", "openai/gsm8k", "--config", "main", "--split", "test"],
+        tmp_path, [], argv=["--mode", "bleu", "--dataset", "openai/gsm8k", "--config", "main", "--split", "test"],
     )
     assert code == 2
     assert "--mode bleu needs a translation dataset" in capsys.readouterr().err
@@ -291,7 +288,7 @@ def test_validate_prepare_value_error_fails_the_item(tmp_path, capsys):
         {"name": "ok", "prompt": "p", "expected": "-", "check": lambda a: True},
     ]}
     code, _, _, runner = _run_validate_main(
-        tmp_path, ["fine"], min_accuracy=0.5, argv=["--dataset", "x/tools"], loaders=loaders,
+        tmp_path, ["fine"], argv=["--dataset", "x/tools"], loaders=loaders,
     )
     out = capsys.readouterr().out
     assert "  [FAIL] big (not run: Developer tool block exceeds --max-inp-len)" in out
