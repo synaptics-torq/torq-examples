@@ -9,7 +9,7 @@ See repo [README.md](../README.md) for installing the virtual environment and ba
 Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2.5
+cd lfm2_5
 pip install -r requirements.txt
 cd ..
 ```
@@ -23,7 +23,7 @@ python setup_demos.py LiquidAI-LFM2.5
 ```
 
 The model version defaults to the one matching this repo's `VERSION` file (see the
-[repo README](../../README.md) for the versioning scheme); `setup_demos.py` and the demo's
+[repo README](../README.md) for the versioning scheme); `setup_demos.py` and the demo's
 `setup_demo.py` both support `--model-version` to pin a specific release tag and `--no-update`
 to skip model tracking entirely. By default setup does **not** download the optional
 batched prefill model; pass `--with-batch-prefill` to also fetch and track
@@ -65,9 +65,9 @@ only produces logits, so it runs only when a token is sampled (the
 last prefill token + each decode step) and is **skipped during prefill**:
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2.5
+cd lfm2_5
 python src/infer.py \
-  -m ../../models/Synaptics/LiquidAI-LFM2.5-230M/transformer.vmfb \
+  -m ../models/Synaptics/LiquidAI-LFM2.5-230M/transformer.vmfb \
   --instruct-model
 ```
 
@@ -100,7 +100,7 @@ format + system-prompt warm-up (drop it for a base/completion model). Run
 `src/validate.py` runs the model with greedy decoding on 50 MMLU-Pro questions ([TIGER-Lab/MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro); LFM2.5 reports MMLU-Pro on its model card), multiple choice with up to ten options; an answer passes when it picks the labelled option letter:
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2.5
+cd lfm2_5
 python src/validate.py --instruct-model
 ```
 
@@ -124,8 +124,8 @@ followed by the per-layer cache inputs. The shared runner builds all of them
 legacy two-input exports keep working unchanged.
 
 The runner (`src/runner.py`) is a thin binding of the shared
-[`LLM`](../../utils/llm.py); it only supplies the LFM2.5 ChatML chat template.
-Its [`KVCache`](../../utils/cache.py) is agnostic to what each cached
+[`LLM`](../utils/llm.py); it only supplies the LFM2.5 ChatML chat template.
+Its [`KVCache`](../utils/cache.py) is agnostic to what each cached
 tensor is — it zero-inits every per-layer cache from the model's input-shape
 metadata and shuttles each present output back to its past input — so the
 *mixed* conv/KV caches thread correctly with no special-casing (board-verified

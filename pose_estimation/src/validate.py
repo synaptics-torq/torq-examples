@@ -9,22 +9,17 @@ person matches by box IoU at or above 0.5, and the accuracy is the fraction
 of labelled keypoints within 5% of the box size of the predicted keypoint.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from pose_estimation.setup_demo import (
     download_pose_estimation,
     ensure_pose_estimation_models,
     local_pose_model_path,
 )
+from pose_estimation.src.infer import OUT_SCALE, OUT_ZP
 from utils.preprocess import preprocess_image
 from utils.runtime import Model, add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.keypoint_detection import LOADERS, aggregate, score_item, validate_main
 from utils.pose_estimation import dequantize_out, postprocess_pose
-from infer import OUT_SCALE, OUT_ZP
 
 MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
 

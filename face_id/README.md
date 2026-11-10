@@ -11,7 +11,7 @@ base dependencies.
 Enter the demo directory. Install its dependencies. Jump back to the repo root.
 
 ```sh
-cd Face_ID
+cd face_id
 pip install -r requirements.txt
 cd ..
 ```
@@ -39,10 +39,10 @@ The Torq example downloads only:
 
 ## Running
 
-Run the demo from the `Face_ID` directory.
+Run the demo from the `face_id` directory.
 
 ```sh
-cd Face_ID
+cd face_id
 ```
 
 ### Image inference
@@ -68,13 +68,14 @@ where `x` and `y` are the top-left corner of the face.
 
 ### Options
 
-- `--model`: path to `face_detection.vmfb` (required)
+- `--model`: path to `face_detection.vmfb` (default: the one setup_demo.py downloaded)
 - `--image`: input image path (required)
 - `--output`: annotated output image, default `face_detection.jpg`
 - `--json-results`: detection JSON output, default `face_detection_results.json`
 - `--device`: Torq device URI, default `torq`
 - `--tda {cpu,dmabuf}`: allocator backing Torq buffers, default `dmabuf`
-- `--device-io`: allocate inputs and keep outputs device-backed; enabled automatically with `--tda dmabuf`
+- `--device-io` / `--no-device-io`: allocate inputs and keep outputs device-backed (default: enabled; forced with `--tda dmabuf`)
+- `--runtime-flags ...`: extra Torq runtime flags, must be specified last
 - `--confidence-threshold`: minimum detection confidence, default `0.6`
 
 Use `python src/infer.py -h` to see all options.
@@ -84,7 +85,7 @@ Use `python src/infer.py -h` to see all options.
 `src/validate.py` runs the face detector on 50 photos of Labeled Faces in the Wild ([bitmind/lfw](https://huggingface.co/datasets/bitmind/lfw)), crops centred on one person's face; a photo passes when a detected face box contains its centre:
 
 ```sh
-cd Face_ID
+cd face_id
 python src/validate.py
 ```
 

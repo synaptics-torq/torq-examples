@@ -1,13 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from runner import QwenStatic
 from qwen2_5.setup_demo import ensure_qwen25_models, local_qwen25_model_path
+from qwen2_5.src.runner import QwenStatic
 from utils.tasks import demo_validation
 from utils.tasks.text_generation import llm_kwargs, validate_main
 

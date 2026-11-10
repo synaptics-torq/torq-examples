@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import importlib.util
+import importlib
 import inspect
 import json
 import logging
@@ -12,6 +12,7 @@ from unittest import mock
 import pytest
 
 from gemma3 import setup_demo as gemma_setup
+from lfm2_5 import setup_demo as liquid_setup
 from moonshine import setup_demo as moonshine_setup
 from object_detection import setup_demo as object_detection_setup
 from pose_estimation import setup_demo as pose_setup
@@ -22,19 +23,6 @@ from utils.version import examples_version
 _REVISION = "abc123"
 _PINS = "v2.0.0"
 _EXAMPLES_VERSION = examples_version()
-
-
-def _load_liquid_setup():
-    # The Liquid demo dir name has a dot + hyphen, so it is not importable as
-    # a package; load setup_demo.py by file path (as setup_demos.py does).
-    path = Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5" / "setup_demo.py"
-    spec = importlib.util.spec_from_file_location("liquid_setup_demo", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-liquid_setup = _load_liquid_setup()
 
 
 def _fake_download(default_base_dir: Path):
@@ -1488,16 +1476,6 @@ def test_liquid_prefill_added_to_complete_copy_with_flag(tmp_path):
 # ── uniform setup entry point ────────────────────────────────────────────────
 
 
-def _load_setup_module(*path_parts):
-    """Load a demo's setup_demo.py by path (for non-importable demo dirs)."""
-    path = Path(__file__).resolve().parents[1] / Path(*path_parts) / "setup_demo.py"
-    modname = "_test_" + "_".join(path_parts).replace(".", "_").replace("-", "_")
-    spec = importlib.util.spec_from_file_location(modname, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def _setup_params(fn) -> dict:
     """(kind, default) per parameter name; Signature objects do not compare
     functions' parameters by value, so compare the parameters themselves."""
@@ -1518,7 +1496,7 @@ def test_setup_entry_point_signature_is_uniform():
         lambda models=None, *, model_version=None, no_update=False, enable_prefill=False: None
     )
     for folder in sorted(setup_demos._DEMO_FOLDERS):
-        module = _load_setup_module(*folder.split("/"))
+        module = importlib.import_module(f"{folder}.setup_demo")
         assert _setup_params(module.setup) == expected, folder
 
 

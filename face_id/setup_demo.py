@@ -3,11 +3,8 @@
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Final
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.deps import check_requirements
 from utils.download import (
@@ -20,7 +17,7 @@ from utils.download import (
     verify_manifest,
 )
 
-logger = logging.getLogger("Face_ID.setup")
+logger = logging.getLogger("face_id.setup")
 
 FACE_ID_HF_REPO: Final[str] = "Synaptics/face-id-torq"
 FULL_FACE_ID_MODEL_FILES: Final[tuple[str, ...]] = (

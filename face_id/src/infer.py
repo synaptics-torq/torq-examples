@@ -3,16 +3,13 @@
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from Face_ID.src.postprocess import decode_face_outputs
-from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
+from face_id.setup_demo import download_face_detector, local_face_id_model_path
+from face_id.src.postprocess import decode_face_outputs
 from utils.runtime import Model, add_common_inference_args
 from utils.tasks.face_recognition import infer_main
 

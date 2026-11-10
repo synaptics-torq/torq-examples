@@ -2,11 +2,8 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import logging
-import sys
 from pathlib import Path
 from typing import Final
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.download import (
     default_models_dir,

@@ -3,22 +3,18 @@
 
 import logging
 import os
-import sys
-from pathlib import Path
 from typing import NamedTuple
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import soundfile as sf
 from tokenizers import Tokenizer
 
-from runner import MoonshineRunner
 from moonshine.setup_demo import (
     download_moonshine,
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
+from moonshine.src.runner import MoonshineRunner
 from utils.runtime import add_common_inference_args
 from utils.tasks.automatic_speech_recognition import infer_main
 

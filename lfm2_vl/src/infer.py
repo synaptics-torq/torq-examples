@@ -12,29 +12,15 @@ import logging
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
-
 from PIL import Image
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-from lfm2vl import LFM2VL  # noqa: E402
-
-# The default-model-dir helper lives one level up (the demo dir's
-# setup_demo.py). The demo dir name has a hyphen, so it is not importable as
-# a package; add it to the path and import the module directly. Guarded so a
-# missing setup_demo never breaks inference.
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-try:
-    from setup_demo import download_lfm2vl_int8, local_lfm2vl_model_dir
-except Exception:
-    download_lfm2vl_int8 = None
-    local_lfm2vl_model_dir = None  # type: ignore[assignment]
-
-from utils.inference import InferenceInterrupted  # noqa: E402
-from utils.runtime import add_common_inference_args  # noqa: E402
-from utils.tasks.image_text_to_text import infer_main  # noqa: E402
-from utils.terminal import InferenceStopInput  # noqa: E402
+from lfm2_vl.setup_demo import download_lfm2vl_int8, local_lfm2vl_model_dir
+from lfm2_vl.src.lfm2vl import LFM2VL
+from utils.inference import InferenceInterrupted
+from utils.runtime import add_common_inference_args
+from utils.tasks.image_text_to_text import infer_main
+from utils.terminal import InferenceStopInput
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"

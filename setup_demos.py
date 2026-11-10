@@ -31,11 +31,7 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 def _demo_folders() -> dict[str, dict]:
     """Map demo folder (relative to the repo root) to its ``info.json``."""
     folders: dict[str, dict] = {}
-    for info_path in sorted(
-        path
-        for pattern in ("*/info.json", "*/*/info.json")
-        for path in glob.glob(pattern, root_dir=REPO_ROOT)
-    ):
+    for info_path in sorted(glob.glob("*/info.json", root_dir=REPO_ROOT)):
         with open(os.path.join(REPO_ROOT, info_path), encoding="utf-8") as f:
             folders[os.path.dirname(info_path)] = json.load(f)
     return folders
@@ -74,31 +70,32 @@ def install():
     logger.info("Added '%s' to Python's import path. To undo, delete '%s'", repo_root, pth_file)
 
 
-def _load_demo_module(*path_parts):
-    """Load a demo's setup_demo.py by file path.
-
-    The Liquid demos live under LiquidAI/ in directories whose names contain
-    dots and hyphens, so they are not importable as packages; load them by file
-    path instead.
-    """
-    import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), *path_parts)
-    modname = "_demo_" + "_".join(path_parts).replace(".", "_").replace("-", "_")
-    spec = importlib.util.spec_from_file_location(modname, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+#: Demo folder paths that were renamed, mapped to their new folder. Old paths
+#: keep working for one release; they resolve to the new folder with a
+#: deprecation warning.
+DEPRECATED_DEMOS: Final[dict[str, str]] = {
+    "LiquidAI/LiquidAI-LFM2.5": "lfm2_5",
+    "LiquidAI/LiquidAI-LFM2-VL-450M": "lfm2_vl",
+    "Face_ID": "face_id",
+    # "EmbeddingGemma-2" (the old folder) is still the demo's info.json name.
+}
 
 
 def _load_demo_setup(folder: str):
     """Load the setup_demo module of a demo folder (relative to the repo root)."""
-    if "/" not in folder and folder.isidentifier():
-        return import_module(f"{folder}.setup_demo")
-    return _load_demo_module(*folder.split("/"), "setup_demo.py")
+    return import_module(f"{folder}.setup_demo")
 
 
 def resolve_demo(name: str) -> tuple[str, dict] | None:
-    """Resolve a demo by info name or folder path; return ``(folder, info)``."""
+    """Resolve a demo by info name or folder path; return ``(folder, info)``.
+
+    Renamed demo folders (``DEPRECATED_DEMOS``) still resolve, with a
+    deprecation warning naming the new folder.
+    """
+    if name in DEPRECATED_DEMOS:
+        new = DEPRECATED_DEMOS[name]
+        logger.warning("Demo folder '%s' has been renamed to '%s'.", name, new)
+        name = new
     for folder, info in _DEMO_FOLDERS.items():
         if name in (folder, info["name"]):
             return folder, info
@@ -143,7 +140,7 @@ if __name__ == "__main__":
         "demos", nargs="*", default=[], metavar="DEMO",
         help=(
             f"Demo(s) to set up. Valid names: {', '.join(DEMOS)}, or a demo folder "
-            "path relative to the repo root (e.g. LiquidAI/LiquidAI-LFM2.5)"
+            "path relative to the repo root (e.g. lfm2_5)"
         ),
     )
     group.add_argument(

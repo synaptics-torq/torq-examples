@@ -5,14 +5,14 @@
 real ``KVCache``/``Decoder`` with fake models (the engine's constructor,
 warm-up and cache wiring are exercised for real)."""
 
-import importlib.util
 import json
 import os
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
+
+from lfm2_vl.src import engine
 
 HIDDEN = 4
 VOCAB = 8
@@ -21,13 +21,6 @@ N_HEADS = 2
 HD = 2
 N_CACHES = 15  # the W8 decoder's 15 cache inputs (conv states + 6 KV stacks)
 
-_ENGINE = (
-    Path(__file__).resolve().parents[1]
-    / "LiquidAI" / "LiquidAI-LFM2-VL-450M" / "src" / "engine.py"
-)
-_spec = importlib.util.spec_from_file_location("lfm2vl_engine", _ENGINE)
-engine = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(engine)
 ATTN = engine.ATTN_LAYERS
 
 

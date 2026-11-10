@@ -3,10 +3,7 @@
 
 """Set up FunctionGemma using the shared Gemma export file layout."""
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gemma3.setup_demo import (
     _download_gemma3,

@@ -15,9 +15,6 @@ import sys
 import threading
 import time
 from collections import deque
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 
@@ -28,12 +25,12 @@ except ImportError:
     print("  pip install tokenizers", file=sys.stderr)
     sys.exit(1)
 
-from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
 from moonshine_streaming.setup_demo import (
     download_moonshine_streaming,
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
+from moonshine_streaming.src.runner import MoonshineStaticStreamingModel, find_asset
 from utils.runtime import add_common_inference_args
 from utils.tasks.automatic_speech_recognition import infer_main
 

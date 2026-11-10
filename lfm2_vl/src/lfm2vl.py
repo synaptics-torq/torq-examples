@@ -5,9 +5,7 @@
 
 Import it, load the models once, then encode images and ask questions:
 
-    import sys
-    sys.path.insert(0, "<repo>/LiquidAI/LiquidAI-LFM2-VL-450M/src")
-    from lfm2vl import load_models
+    from lfm2_vl.src.lfm2vl import load_models
 
     vl = load_models("/path/to/models")        # dmabuf, all models co-resident
     vl.encode_image(img_bgr)                    # any HxWx3 BGR np.ndarray
@@ -28,10 +26,7 @@ from typing import Iterator
 
 import numpy as np
 
-try:
-    from .engine import LFM2VLEngine  # package-style import (if on sys.path as a package)
-except ImportError:
-    from engine import LFM2VLEngine  # script import: python src/infer.py
+from .engine import LFM2VLEngine
 
 __all__ = ["LFM2VL", "load_models"]
 

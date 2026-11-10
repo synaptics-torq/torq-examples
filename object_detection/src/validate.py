@@ -9,23 +9,20 @@ the labelled objects: greedy one-to-one matching with
 the same label and IoU at or above 0.5.
 """
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from object_detection.setup_demo import (
     VARIANT_MODEL_FILES,
     download_object_detection,
     ensure_object_detection_models,
 )
+from object_detection.src.infer import load_labels, local_model, make_runner as _make_runner, message
 from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.object_detection import LOADERS, aggregate, score_item, validate_main
 from utils.vision import dequantize_out
 from utils.object_detection import VARIANTS, postprocess
 from utils.preprocess import preprocess_image
-from infer import load_labels, local_model, make_runner as _make_runner, message
 
 MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
 

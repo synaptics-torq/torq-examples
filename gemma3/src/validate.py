@@ -9,17 +9,12 @@ OPUS-100 English to Spanish translation (``--config es-en`` for the other
 direction).
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from runner import Gemma3Static
 from gemma3.setup_demo import (
     download_gemma3,
     ensure_gemma3_models,
     local_gemma3_model_path,
 )
+from gemma3.src.runner import Gemma3Static
 from utils.tasks import demo_validation
 from utils.tasks.text_generation import llm_kwargs, validate_main
 

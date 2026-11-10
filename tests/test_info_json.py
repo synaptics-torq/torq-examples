@@ -6,6 +6,7 @@ and ``setup_demos.DEMOS`` must resolve each demo to a module with a callable
 uniform ``setup`` entry point."""
 
 import json
+import logging
 from pathlib import Path
 
 import setup_demos
@@ -15,11 +16,10 @@ _REQUIRED_FIELDS = ("name", "description", "task_category")
 
 
 def _setup_demo_folders() -> list[str]:
-    """Folders (relative to the repo root) that contain a setup_demo.py."""
+    """Top-level folders (relative to the repo root) that contain a setup_demo.py."""
     return sorted(
         path.parent.relative_to(_REPO_ROOT).as_posix()
-        for pattern in ("*/setup_demo.py", "*/*/setup_demo.py")
-        for path in _REPO_ROOT.glob(pattern)
+        for path in _REPO_ROOT.glob("*/setup_demo.py")
     )
 
 
@@ -70,6 +70,15 @@ def test_demos_resolve_to_callable_setup():
         assert callable(module.setup), f"{folder}/setup_demo.py has no callable 'setup'"
 
 
+def test_renamed_demo_folders_resolve_with_deprecation_warning(caplog):
+    for old_folder, new_folder in setup_demos.DEPRECATED_DEMOS.items():
+        with caplog.at_level(logging.WARNING):
+            resolved = setup_demos.resolve_demo(old_folder)
+        assert resolved is not None, f"renamed demo '{old_folder}' does not resolve"
+        assert resolved[0] == new_folder
+        assert old_folder in caplog.text and new_folder in caplog.text
+
+
 def test_run_demo_resolves_and_rejects():
     import subprocess
     import sys
@@ -81,3 +90,10 @@ def test_run_demo_resolves_and_rejects():
     assert bad.returncode != 0 and "Unknown demo" in bad.stderr
     escape = subprocess.run([*run, "object_detection:../../run_demo"], capture_output=True, text=True)
     assert escape.returncode != 0 and "Invalid script name" in escape.stderr
+
+
+def test_old_embeddinggemma_folder_name_is_the_info_name(caplog):
+    # The old folder name is also the demo's name: it resolves without a warning.
+    with caplog.at_level(logging.WARNING):
+        assert setup_demos.resolve_demo("EmbeddingGemma-2")[0] == "embeddinggemma2"
+    assert not caplog.text

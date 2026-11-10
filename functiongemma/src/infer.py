@@ -11,10 +11,7 @@ runtime, metrics) is the shared text_generation infer main.
 
 import logging
 import sys
-from pathlib import Path
 from typing import Final
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from functiongemma.src import function_tools
 from functiongemma.src.function_tools import FUNCTIONS

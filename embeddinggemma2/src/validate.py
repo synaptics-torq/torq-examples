@@ -17,19 +17,15 @@ separate sessions:
 
 import json
 import logging
-import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from runner import EmbeddingGemma2  # noqa: E402
-from setup_demo import local_embeddinggemma2_model_dir  # noqa: E402
-from utils.runtime import add_common_inference_args  # noqa: E402
-from utils.datasets import fetch_file  # noqa: E402
-from utils.tasks import demo_validation  # noqa: E402
-from utils.tasks.feature_extraction import validate_main  # noqa: E402
-from infer import _audio_window, _total_ms  # noqa: E402
+from embeddinggemma2.setup_demo import local_embeddinggemma2_model_dir
+from embeddinggemma2.src.infer import _audio_window, _total_ms
+from embeddinggemma2.src.runner import EmbeddingGemma2
+from utils.datasets import fetch_file
+from utils.runtime import add_common_inference_args
+from utils.tasks import demo_validation
+from utils.tasks.feature_extraction import validate_main
 
 MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1, so the check always FAILS.
 

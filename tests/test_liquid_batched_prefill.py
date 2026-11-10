@@ -9,20 +9,10 @@ chunk orchestration the old tests pinned now live in tests/test_decoder.py
 (``test_step_*``, ``test_prefill_input_mismatches_rejected``,
 ``test_prefill_*``)."""
 
-import importlib.util
-from pathlib import Path
-
 import pytest
 
+from lfm2_5.src.runner import LiquidStatic
 from llm_fakes import CharTokenizer, make_llm, scripted
-
-# The LFM2.5 folder name is not importable as a package; load by path.
-_spec = importlib.util.spec_from_file_location(
-    "_lfm2_5_liquid", Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5" / "src" / "runner.py"
-)
-_lfm2_5 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_lfm2_5)
-LiquidStatic = _lfm2_5.LiquidStatic
 
 
 def _liquid(tmp_path, monkeypatch, **kwargs):

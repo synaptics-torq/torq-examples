@@ -7,19 +7,10 @@ when a detected face box contains its centre.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import cv2
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from Face_ID.src.postprocess import decode_face_outputs
-from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
-from utils.runtime import Model, add_common_inference_args
-from utils.tasks import demo_validation
-from utils.tasks.face_recognition import LOADERS, aggregate, score_item, validate_main
-from infer import (
+from face_id.setup_demo import download_face_detector, local_face_id_model_path
+from face_id.src.infer import (
     BOX1_SCALE,
     BOX1_ZERO_POINT,
     BOX2_SCALE,
@@ -33,6 +24,10 @@ from infer import (
     preprocess_image,
     resolve_input_path,
 )
+from face_id.src.postprocess import decode_face_outputs
+from utils.runtime import Model, add_common_inference_args
+from utils.tasks import demo_validation
+from utils.tasks.face_recognition import LOADERS, aggregate, score_item, validate_main
 
 MIN_ACCURACY = 2.0  # DUMMY until a measured baseline exists: above 1.0, so the accuracy check always FAILS.
 

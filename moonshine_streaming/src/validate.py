@@ -9,20 +9,15 @@ does with ``--wav``, and scores the final transcript against its reference
 with the word error rate.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from moonshine_streaming.setup_demo import (
     download_moonshine_streaming,
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
+from moonshine_streaming.src.infer import make_runner, pipeline_args, transcribe_streaming
 from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.automatic_speech_recognition import validate_main
-from infer import make_runner, pipeline_args, transcribe_streaming
 
 MAX_WER = -1.0  # DUMMY until a measured baseline exists: below 0, so the WER check always FAILS.
 

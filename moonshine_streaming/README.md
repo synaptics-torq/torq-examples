@@ -36,7 +36,7 @@ synthesized ahead of the file so the VAD has something to calibrate against,
 since a recording often starts talking immediately.
 
 > [!NOTE]
-> The demo defaults to the DMA/dmabuf allocator and automatically uses device-backed I/O. Use `--tda cpu` to run with host NumPy inputs, or `--device-io` to explicitly enable device-backed I/O with another allocator.
+> The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
 
 ## Validation
 

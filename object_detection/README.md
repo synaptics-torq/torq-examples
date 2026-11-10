@@ -75,8 +75,7 @@ export DISPLAY_WIDTH=480
 python src/infer.py \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
-  --device torq \
-  --device-io
+  --device torq
 ```
 
 To save or display the annotated image:
@@ -86,7 +85,6 @@ python src/infer.py \
   --image ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/dog_bike_car.jpg \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --device-io \
   --save-image \
   --display
 ```
@@ -99,8 +97,7 @@ python src/infer.py \
   --image ../models/Synaptics/yolov26n_od/samples/soccer.jpg \
   --labels ../models/Synaptics/yolov26n_od/labels.json \
   --variant yolo26n \
-  --device torq \
-  --device-io
+  --device torq
 ```
 
 On `samples/soccer.jpg` both sizes detect all five players (YOLO26s additionally
@@ -117,7 +114,7 @@ Image inference options:
 - `--labels`: label JSON file to map class IDs to names
 - `--device`: Torq device URI, defaults to `torq`
 - `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
-- `--device-io`: preallocate input buffers and keep outputs as device arrays
+- `--device-io` / `--no-device-io`: preallocate input buffers and keep outputs as device arrays (default: enabled)
 - `--save-image`: save the annotated output image as `output_yolo.jpg`
 - `--display`: show the annotated image with GStreamer/Wayland
 
@@ -128,7 +125,6 @@ python src/infer_video.py \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --device-io \
   --rotate 0
 ```
 
@@ -139,7 +135,6 @@ python src/infer_video.py \
   --camera-device auto \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --device-io \
   --display \
   --rotate 0
 ```
@@ -152,7 +147,6 @@ python src/infer_video.py \
   --camera-control-device /dev/v4l-subdev2 \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --device-io \
   --display \
   --exposure-auto 0
 ```
@@ -164,7 +158,6 @@ python src/infer_video.py \
   --rtsp-url rtsp://user:pass@host:port/stream \
   --labels ../models/Synaptics/yolov8-od-nano-320-int8-torq/labels.json \
   --device torq \
-  --device-io \
   --rotate 0 \
   --display
 ```
@@ -175,7 +168,6 @@ python src/infer_video.py \
 python src/infer_video.py \
   --video ../models/Synaptics/yolov8-od-nano-320-int8-torq/samples/object_detection.mp4 \
   --device torq \
-  --device-io \
   --profile
 ```
 

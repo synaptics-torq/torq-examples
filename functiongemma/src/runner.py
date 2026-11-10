@@ -1,24 +1,29 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""FunctionGemma protocol on the shared Gemma 3 model runtime."""
+"""FunctionGemma: the function-calling protocol as hooks on the shared LLM."""
 
 from typing import Final, Iterator
 
-from gemma3.src.runner import Gemma3Static
 from functiongemma.src.function_tools import (
     DEFAULT_TOOLS,
     START_FUNCTION_RESPONSE,
     format_developer_block,
 )
 from utils.inference import StopCheck
+from utils.llm import GEMMA, LLM
+from utils.runtime import RuntimeConfig
 
 
-class FunctionGemmaStatic(Gemma3Static):
-    def __init__(self, *args, tools: list[dict] | None = None, **kwargs):
+class FunctionGemmaStatic(LLM):
+    """FunctionGemma (Gemma 3 chat format) with its tool-calling protocol:
+    a developer tool block as the warm-up prefix, generation that stops at
+    a function call, and the function response fed back into the same turn."""
+
+    def __init__(self, model_path, *, runtime: RuntimeConfig, tools: list[dict] | None = None, **kwargs):
         self._tools = DEFAULT_TOOLS if tools is None else tools
         self._function_response_next = False
-        super().__init__(*args, instruct_model=True, **kwargs)
+        super().__init__(model_path, runtime, template=GEMMA, **kwargs)
 
     def _check_export(self) -> None:
         stop = self._tokenizer.token_to_id(START_FUNCTION_RESPONSE)

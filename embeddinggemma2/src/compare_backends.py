@@ -20,16 +20,14 @@ import argparse
 import json
 import os
 import resource
-import sys
 import time
 from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import preprocess as pp  # noqa: E402
-from model_dir import resolve_model_dir  # noqa: E402
-from runner import EmbeddingGemma2  # noqa: E402
+from embeddinggemma2.src import preprocess as pp
+from embeddinggemma2.src.model_dir import resolve_model_dir
+from embeddinggemma2.src.runner import EmbeddingGemma2
 
 EVAL = Path(__file__).with_name("media_search_eval.json")
 

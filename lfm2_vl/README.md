@@ -51,9 +51,9 @@ See the repo [README.md](../README.md) for installing the virtual environment an
 base dependencies. Then, from the repo root:
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2-VL-450M
+cd lfm2_vl
 pip install -r requirements.txt
-cd ../..
+cd ..
 python setup_demos.py LiquidAI-LFM2-VL-450M
 ```
 
@@ -64,10 +64,10 @@ into `models/Synaptics/LiquidAI-LFM2-VL-450M/`.
 
 ## Running
 
-From the `LiquidAI/LiquidAI-LFM2-VL-450M` directory:
+From the `lfm2_vl` directory:
 
 ```sh
-MODELS=../../models/Synaptics/LiquidAI-LFM2-VL-450M
+MODELS=../models/Synaptics/LiquidAI-LFM2-VL-450M
 python src/infer.py \
   --model-dir $MODELS \
   --image $MODELS/cats-and-dogs-256.jpg
@@ -95,7 +95,7 @@ lists all options (`--max-new`, `--temperature`, `--top-p`, `--top-k`, ...).
 `src/validate.py` answers 30 MMStar image questions ([Lin-Chen/MMStar](https://huggingface.co/datasets/Lin-Chen/MMStar); LFM2-VL reports MMStar on its model card) with greedy decoding; an answer passes when it picks the labelled option letter:
 
 ```sh
-cd LiquidAI/LiquidAI-LFM2-VL-450M
+cd lfm2_vl
 python src/validate.py
 ```
 
@@ -106,9 +106,7 @@ The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on F
 ## Python API
 
 ```python
-import sys
-sys.path.insert(0, "<repo>/LiquidAI/LiquidAI-LFM2-VL-450M/src")
-from lfm2vl import load_models
+from lfm2_vl.src.lfm2vl import load_models
 
 vl = load_models("<model dir>")
 vl.encode_image(img_bgr)            # any HxWx3 BGR numpy array

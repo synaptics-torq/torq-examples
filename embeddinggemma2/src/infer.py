@@ -19,13 +19,10 @@ from pathlib import Path
 
 import numpy as np
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from runner import EmbeddingGemma2  # noqa: E402
-from setup_demo import local_embeddinggemma2_model_dir  # noqa: E402
-from utils.runtime import add_common_inference_args  # noqa: E402
-from utils.tasks.feature_extraction import infer_main  # noqa: E402
+from embeddinggemma2.setup_demo import local_embeddinggemma2_model_dir
+from embeddinggemma2.src.runner import EmbeddingGemma2
+from utils.runtime import add_common_inference_args
+from utils.tasks.feature_extraction import infer_main
 
 
 def _fmt_timings(t: dict) -> str:

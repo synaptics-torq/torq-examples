@@ -30,7 +30,7 @@ An example folder must contain:
 2. A `requirements.txt` file that lists the dependencies for the example. The dependencies must be pinned to specific versions.
 3. A script `setup_demo.py` that downloads all the model files required for the example.
 4. A script `src/infer.py` that allows to execute the example
-5. A script `src/validate.py` that allows to validate the example output agains known correct results.
+5. A script `src/validate.py` that allows to validate the example output against known correct results.
 6. An `info.json` file that describes the example, including metadata such as the example name, description, and task category.
 
 The setup demo_script entry point must use the `utils.model_setup.demo_main` function.
@@ -52,14 +52,48 @@ Demos with a batched prefill model set `"batch_prefill": true`; `setup_demos.py 
 
 The info file is used by the test framework to run appropriate tests for the example.
 
+## Inference core
+
+The demos are thin scripts over a shared inference core in `utils/`; a demo's `src/runner.py` (or equivalent) composes the layers below, and its `src/infer.py`/`src/validate.py` call the task category's `infer_main`/`validate_main`.
+
+**Runtime session (`utils/runtime.py`).** `RuntimeConfig` is the frozen runtime options of one session, built once from the CLI args (`add_common_inference_args` adds the shared runtime group: `--tda` allocator, `--device-io`, `--runtime-flags`, `-j` threads, plus the logging and `--metrics-out` args). `Model` is the only place a `torq.runtime.VMFBInferenceRunner` is constructed; with device I/O on, `infer` stages the host inputs on the device and returns the raw outputs, and `run` copies them home. `npu_clock()` holds the NPU at its max userspace frequency for the inference block and restores the minimum on exit. The dmabuf allocator is incompatible with host NumPy I/O (a known runtime bug), so `RuntimeConfig` forces device I/O on for `--tda dmabuf`; do not remove that forcing.
+
+**KV cache (`utils/cache.py`).** `KVCache` owns the trailing cache inputs of one or more models that share a layout (a decode body plus its batched prefill body). It zero-initialises every slot on the device from the model's input metadata and exposes them as a mutable `inputs` list the decoder appends after the model's own inputs; `update` folds a model call's outputs back in place, so every attached model sees the very same on-device buffers. For read-only KV cache models the outputs hold only the step's new rows, written at the step position in one command-buffer submission. `fixed` slots hold external state such as encoder-decoder cross-attention KV, and `snapshot`/`restore`/`reset` support the LLM's rolling window.
+
+**Decoding (`utils/decoder.py`).** `Decoder` composes a single-token decode `Model`, its `KVCache`, an optional split LM head and an optional fixed-size batched prefill model, and preallocates every per-step input buffer from the model's input metadata. `step` runs one decode token and returns the host logits (or None, skipping the LM head); `prefill` feeds a prompt through the prefill chunks or single steps; `sample` maps host logits to a token (greedy at temperature 0, top-k then top-p otherwise); `generate` is the one autoregressive loop, with stop, max-tokens and capacity hooks, that the LLM, VLM and STT demos run.
+
+**Chat (`utils/llm.py`).** `LLM` is a `Decoder` plus the conversation state. It loads the model directory (the body VMFB, an optional sibling `lm_head.vmfb` and `transformer_prefill.vmfb`, the embedding and vocab LUTs, `config.json` and `tokenizer.json`), prefills the system prompt once as a warm-up prefix that every conversation reuses, keeps the KV cache shared across turns, and rolls it when the conversation no longer fits (the warm-up plus `cache_keep_n` recent tokens, replayed at their new positions). `ChatTemplate` is plain data — the strings that format one chat turn and open the model's answer, plus the stop tokens — that tells chat formats apart; a model family that differs only in data gets a new template, not a new class. `run`/`run_stream` generate one answer (streamed as decoded text chunks).
+
+**Metrics (`utils/metrics.py`).** `MetricsRun` is a context manager around a demo's inference block: `add(name, value)` records the named measurements (repeated names are averaged) while a sampler collects the CPU load, NPU load and peak memory. At exit it writes the `{"metrics": [...], "measurements": {...}}` JSON shown below to the `--metrics-out` file, even when the block is interrupted.
+
+**Task categories (`utils/tasks/`).** One package per task category (`utils/tasks/<category>/__init__.py`) with the shared `infer_main`/`validate_main` the demo's scripts call: the demo's own flags, default-model resolution and refresh, one NPU-boosted session, the demo's per-input loop, and the category's validation scoring. The image categories share their validation and box-matching plumbing in `utils/tasks/vision.py`.
+
+## Composition rules
+
+- No mixins. Optional behaviour is a constructor argument (`LLM(chat=, template=, cache_keep_n=, ...)`), and stateless logic is a function (`sample`, `generate`, the qwen3 `hide_thinking`), not a class.
+- At most one subclass level below a core class, only for model-specific hooks: each demo's runner subclasses its core once (`Gemma3Static(LLM)` only binds a template; `FunctionGemmaStatic(LLM)` adds the function-calling hooks).
+- Model families that differ in data get a `ChatTemplate` (the templates in `utils/llm.py`, adjusted with `dataclasses.replace`), not a new class.
+- No class inherits from `torq.runtime.VMFBInferenceRunner`; `utils.runtime.Model` wraps it in composition.
+- The hot path is flat: the per-step buffers are preallocated from the model's input metadata, and the step loop does no per-step allocation or `isinstance` dispatch.
+
+## Validation data
+
+The repository ships no validation data. `src/validate.py` downloads the rows it scores from public Hugging Face datasets (`utils/datasets.py`), so every dataset stays under its own license and terms, stated on its dataset card:
+
+- A demo's default datasets and sample counts are the `validation` list in its `info.json`; `--dataset`, `--config`, `--split` and `--samples` select others.
+- Rows come from the Hugging Face dataset viewer API (`fetch_rows`: exactly the requested rows, media saved as files by data type). Datasets the viewer does not serve are read as raw repo files (`fetch_file`). Both cache under `$MODELS/datasets/`, so repeat runs are offline and the folder can be copied to a board without network access.
+- Each task category maps the datasets it supports to loaders (`LOADERS` in `utils/tasks/<category>/`) that turn rows into scoring items; a demo-specific dataset (for example one tied to the demo's output format) is a loader passed by the demo's `validate.py`.
+- Prefer the dataset the model card reports. Before adding one, check the existing loaders and the other demos' `info.json`: a dataset your demo needs may already be supported, so reusing it is one `info.json` entry.
+- Scoring is against the dataset's own labels; nothing model-generated (goldens) is stored in the repository.
+
 ## Adding a new task category
 
 To add a new task category:
 
-1. Create a new folder for the task category under `utils/tasks/`.
-2. Inside the new folder, create an `__init__.py` file to make it a Python package.
-3. Implement the `infer_main` and `validate_main` functions.
-4. Add at least one test in the `tests/tasks/[task_category]/` folder for the new task category.
+1. Create the category module `utils/tasks/<category>/__init__.py` (a new package under `utils/tasks/`).
+2. Implement the `infer_main` and `validate_main` functions in it (the shared category plumbing lives in `utils/tasks/__init__.py` and `utils/tasks/vision.py`).
+3. Add a `LOADERS` dict mapping the Hugging Face datasets the category supports to loaders that turn their rows into scoring items (see "Validation data").
+4. Add at least one test in the `tests/tasks/<category>/` folder.
 
 The tests are run on the host, in an environment where a torq-compiler wheel is installed. They
 run compilation of models in an appropriate environment for each example 
@@ -95,5 +129,5 @@ where unit is one of:
 
 - `ns` (nanoseconds)
 - `hz` (rates)
-- `percent` (percentage)
+- `percent` (percentage; values are 0-100, so 90 means 90%)
 - `bytes` (memory usage)

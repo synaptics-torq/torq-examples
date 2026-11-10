@@ -108,7 +108,7 @@ They have 8-bit weights (int8 in blocks of 32) and take about 2.3 GB.
 
 ```sh
 python setup_demos.py EmbeddingGemma-2      # download the model files and the example media
-cd EmbeddingGemma-2
+cd embeddinggemma2
 python src/media_search.py index            # index the example media on the NPU (~2 min)
 python src/media_search.py search startup   # load the model once (~10 s), then type queries
 ```

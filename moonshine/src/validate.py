@@ -8,20 +8,15 @@ test-clean by default) and scores each transcript against its reference with
 the word error rate.
 """
 
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
 from moonshine.setup_demo import (
     download_moonshine,
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
+from moonshine.src.infer import make_runner, transcribe_wav
 from utils.runtime import add_common_inference_args
 from utils.tasks import demo_validation
 from utils.tasks.automatic_speech_recognition import validate_main
-from infer import make_runner, transcribe_wav
 
 MAX_WER = -1.0  # DUMMY until a measured baseline exists: below 0, so the WER check always FAILS.
 

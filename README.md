@@ -4,20 +4,23 @@ Simple examples demonstrating inference and profiling with [Torq](https://synapt
 
 ## Available Demos
 
-| Demo | Description |
-|------|-------------|
-| [gemma3](gemma3/) | Interactive chat with Gemma 3 270M |
-| [functiongemma](functiongemma/) | Offline function calling with FunctionGemma 270M (BF16 recommended; precision comparison included) |
-| [qwen2.5](qwen2_5/) | Interactive chat with Qwen2.5 0.5B Instruct |
-| [qwen3](qwen3/) | Interactive chat with Qwen3 0.6B (non-thinking mode) |
-| [moonshine](moonshine/) | WAV file transcription with Moonshine-tiny (EN) |
-| [moonshine_streaming](moonshine_streaming/) | Real-time microphone streaming transcription with Moonshine-tiny (EN) |
-| [object_detection](object_detection/) | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
-| [LiquidAI-LFM2.5](LiquidAI/LiquidAI-LFM2.5/) | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
-| [LiquidAI-LFM2-VL-450M](LiquidAI/LiquidAI-LFM2-VL-450M/) | Image captioning / VLM with LiquidAI LFM2-VL-450M (INT8) |
-| [pose_estimation](pose_estimation/) | YOLOv8n pose estimation |
-| [Face_ID](Face_ID/) | Face detection on an image file |
-| [EmbeddingGemma-2](EmbeddingGemma-2/) | Multimodal embeddings (text, image, video, audio) with Google EmbeddingGemma-2, and search over a media folder |
+| Demo | Task category | Description |
+|------|---------------|-------------|
+| [gemma3](gemma3/) | text_generation | Interactive chat with Gemma 3 270M |
+| [functiongemma](functiongemma/) | text_generation | Offline function calling with FunctionGemma 270M (BF16 recommended; precision comparison included) |
+| [qwen2_5](qwen2_5/) | text_generation | Interactive chat with Qwen2.5 0.5B Instruct |
+| [qwen3](qwen3/) | text_generation | Interactive chat with Qwen3 0.6B (thinking mode) |
+| [LiquidAI-LFM2.5](lfm2_5/) | text_generation | Interactive text chat with LiquidAI LFM2.5 (230M / 350M) |
+| [moonshine](moonshine/) | automatic_speech_recognition | WAV file transcription with Moonshine-tiny (EN) |
+| [moonshine_streaming](moonshine_streaming/) | automatic_speech_recognition | Streaming WAV transcription with Moonshine-tiny (EN) |
+| [object_detection](object_detection/) | object_detection | YOLOv8n, YOLOv26n and YOLOv26s image and video object detection |
+| [pose_estimation](pose_estimation/) | keypoint_detection | YOLOv8n pose estimation |
+| [face_id](face_id/) | face_recognition | Face detection on an image file |
+| [LiquidAI-LFM2-VL-450M](lfm2_vl/) | image_text_to_text | Image Q&A / VLM with LiquidAI LFM2-VL-450M (INT8) |
+| [EmbeddingGemma-2](embeddinggemma2/) | feature_extraction | Multimodal embeddings (text, image, video, audio) with Google EmbeddingGemma-2, and search over a media folder |
+
+> [!NOTE]
+> Renamed demo folders: `LiquidAI/LiquidAI-LFM2.5` is now `lfm2_5`, `LiquidAI/LiquidAI-LFM2-VL-450M` is now `lfm2_vl`, `Face_ID` is now `face_id`, and `EmbeddingGemma-2` is now `embeddinggemma2`. `setup_demos.py` and `run_demo.py` still accept the old names for one release, with a deprecation warning (the `EmbeddingGemma-2` demo name itself is unchanged; only its folder moved).
 
 
 ## Setup
@@ -101,15 +104,24 @@ Version checks use a short timeout (default 5s; override with `TORQ_HF_CHECK_TIM
 
 ## Running a Demo
 
-Each demo lives in its own directory. To run a demo, `cd` into its directory and run the demo scripts from inside the demo directory. For example, Gemma 3 interactive chat:
+Each demo lives in its own folder. From the repo root, `run_demo.py` runs a demo by its `info.json` name (or its folder) and passes the remaining arguments through unchanged:
 
 ```sh
-python src/infer.py -m ../models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb --instruct-model
+python run_demo.py gemma3 --instruct-model
+python run_demo.py object_detection:infer_video --video /path/to/video.mp4   # another script of the demo
+```
+
+The part after the `:` names the script to run (default `infer`). You can also run the demo's script directly — the setup step above puts the repo root on the Python path, so this works from the repo root or from inside the demo folder:
+
+```sh
+python gemma3/src/infer.py --instruct-model
 ```
 
 The `-m`/`--model` (or `--model-dir`) flag is optional in every demo: it defaults to the model the demo's setup downloaded, and fails with a pointer to `setup_demos.py` when no local model is present.
 
-Run `python src/infer.py -h` to see all available inference options.
+Every inference script accepts `--metrics-out FILE` to write the run's performance metrics as JSON to FILE at exit (the format is documented in [CONTRIBUTING.md](CONTRIBUTING.md)).
+
+Run `python run_demo.py <demo> -h` to see all available inference options.
 
 ## Profiling
 
@@ -121,11 +133,12 @@ python profile.py models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmf
 
 ## Validation
 
-Some demos include built-in validation scripts. For example, Gemma 3 can be validated on a text translation dataset:
+Every demo has a `src/validate.py` that scores the model on public Hugging Face datasets (the `validation` list in the demo's `info.json`), downloaded on the first run and cached under `$MODELS/datasets/`; the repository ships no validation data:
 
 ```sh
-cd gemma3
-python src/validate.py -m ../models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb --instruct-model --max-samples 10
+python run_demo.py gemma3:validate --instruct-model
 ```
+
+The script prints one line per item, then PASS/FAIL against the demo's threshold, and exits 1 on FAIL. The thresholds are placeholders that always FAIL until measured baselines exist, so every demo currently FAILs by design.
 
 Run the validation script with `-h` to see all available options.

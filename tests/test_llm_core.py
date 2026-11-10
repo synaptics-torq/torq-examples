@@ -4,21 +4,11 @@
 """The shared LLM end to end over fake models: chat templates, warm-up
 prefix, multi-turn KV cache reuse with the pending token, and reset."""
 
-import importlib.util
-from pathlib import Path
-
 from gemma3.src.runner import Gemma3Static
+from lfm2_5.src.runner import LFM2_CHATML
 from llm_fakes import CHAR_BASE, CharTokenizer, cached_tokens, make_llm, scripted
 from qwen3.src.runner import CHATML_NO_THINKING
 from utils.llm import CHATML, GEMMA
-
-# The LFM2.5 folder name is not importable as a package; load by path.
-_spec = importlib.util.spec_from_file_location(
-    "_lfm2_5_runner", Path(__file__).resolve().parents[1] / "LiquidAI" / "LiquidAI-LFM2.5" / "src" / "runner.py"
-)
-_lfm2_5 = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(_lfm2_5)
-LFM2_CHATML = _lfm2_5.LFM2_CHATML
 
 def test_gemma_chat_turns_share_the_cache(tmp_path, monkeypatch):
     tok = CharTokenizer({"<bos>": 2, "<eos>": 1, "<start_of_turn>": 105, "<end_of_turn>": 106}, bos_id=2)
