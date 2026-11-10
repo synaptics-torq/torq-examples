@@ -1,5 +1,8 @@
 {
   "name": "face_id",
   "description": "Face detection on an image file using a Torq VMFB model.",
-  "task_category": "face_recognition"
+  "task_category": "face_recognition",
+  "validation": [
+    {"dataset": "bitmind/lfw", "config": "default", "split": "train", "samples": 50}
+  ]
 }

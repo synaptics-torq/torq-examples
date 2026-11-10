@@ -28,14 +28,13 @@ import time
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import preprocess as pp  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
 
-EVAL = Path(__file__).resolve().parents[2] / "data" / "eval" / "eval_set.json"
+EVAL = Path(__file__).with_name("media_search_eval.json")
 IMAGE_EXT = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 VIDEO_EXT = {".mp4", ".mov", ".avi", ".mkv", ".webm", ".ogv"}
 AUDIO_EXT = {".wav"}

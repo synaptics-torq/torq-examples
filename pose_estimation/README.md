@@ -169,3 +169,16 @@ Video inference options:
 - `--profile`: print Torq resource profiling info and exit
 
 Use `python src/infer.py -h` and `python src/infer_video.py -h` to see all options.
+
+## Validation
+
+`src/validate.py` detects persons in 50 images of COCO val2017 keypoints ([pictograph/coco-2017-pose](https://huggingface.co/datasets/pictograph/coco-2017-pose)) and scores them against the labelled persons: a person matches by box IoU at or above 0.5, and the accuracy is the fraction of labelled keypoints within 5% of the box size of the predicted keypoint:
+
+```sh
+cd pose_estimation
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.

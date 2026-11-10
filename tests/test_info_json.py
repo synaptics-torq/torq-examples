@@ -34,6 +34,24 @@ def test_every_setup_demo_folder_has_valid_info_json():
             assert field in info, f"{folder}/info.json is missing '{field}'"
         assert info["name"], f"{folder}/info.json has an empty 'name'"
         assert info["description"], f"{folder}/info.json has an empty 'description'"
+        assert info["validation"], f"{folder}/info.json has no 'validation' datasets"
+        for entry in info["validation"]:
+            assert {"dataset", "samples"} <= set(entry), f"{folder}/info.json: {entry}"
+
+
+def test_every_default_dataset_has_a_loader():
+    """Each info.json dataset is supported by its category's LOADERS or by the
+    demo's own ``src/validate.py`` (which passes demo-specific ``loaders=``)."""
+    import importlib
+
+    for folder in _setup_demo_folders():
+        info = json.loads((_REPO_ROOT / folder / "info.json").read_text())
+        loaders = importlib.import_module(f"utils.tasks.{info['task_category']}").LOADERS
+        validate_src = (_REPO_ROOT / folder / "src" / "validate.py").read_text()
+        for entry in info["validation"]:
+            assert entry["dataset"] in loaders or f'"{entry["dataset"]}"' in validate_src, (
+                f"{folder}: no loader for {entry['dataset']}"
+            )
 
 
 def test_discovery_finds_exactly_the_demo_folders():

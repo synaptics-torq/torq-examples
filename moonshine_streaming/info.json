@@ -1,5 +1,8 @@
 {
   "name": "moonshine_streaming",
   "description": "WAV file transcription with Moonshine-tiny English using a 2-split Torq VMFB model (fused encoder + KV decoder).",
-  "task_category": "automatic_speech_recognition"
+  "task_category": "automatic_speech_recognition",
+  "validation": [
+    {"dataset": "openslr/librispeech_asr", "config": "clean", "split": "test", "samples": 20}
+  ]
 }

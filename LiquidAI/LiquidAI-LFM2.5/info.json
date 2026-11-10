@@ -2,5 +2,8 @@
   "name": "LiquidAI-LFM2.5",
   "description": "Interactive text chat with LiquidAI LFM2.5 using a Torq VMFB.",
   "task_category": "text_generation",
-  "batch_prefill": true
+  "batch_prefill": true,
+  "validation": [
+    {"dataset": "TIGER-Lab/MMLU-Pro", "config": "default", "split": "test", "samples": 50}
+  ]
 }

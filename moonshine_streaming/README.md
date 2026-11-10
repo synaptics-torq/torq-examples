@@ -38,6 +38,19 @@ since a recording often starts talking immediately.
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator and automatically uses device-backed I/O. Use `--tda cpu` to run with host NumPy inputs, or `--device-io` to explicitly enable device-backed I/O with another allocator.
 
+## Validation
+
+`src/validate.py` runs the VAD/streaming pipeline over 20 utterances of LibriSpeech test-clean ([openslr/librispeech_asr](https://huggingface.co/datasets/openslr/librispeech_asr)), as `src/infer.py --wav` does, and scores the final transcript against its reference with the word error rate:
+
+```sh
+cd moonshine_streaming
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's maximum WER and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
+
 ## Options
 - `--wav <file>` (required) wave file to transcribe
 - `--realtime` paces the feed to match playback speed.

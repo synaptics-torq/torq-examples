@@ -90,6 +90,19 @@ Use `--prompt "..."` to answer a single question and exit instead of looping.
 <kbd>Ctrl</kbd>+<kbd>C</kbd> interrupts a generation. `python src/infer.py -h`
 lists all options (`--max-new`, `--temperature`, `--top-p`, `--top-k`, ...).
 
+## Validation
+
+`src/validate.py` answers 30 MMStar image questions ([Lin-Chen/MMStar](https://huggingface.co/datasets/Lin-Chen/MMStar); LFM2-VL reports MMStar on its model card) with greedy decoding; an answer passes when it picks the labelled option letter:
+
+```sh
+cd LiquidAI/LiquidAI-LFM2-VL-450M
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
+
 ## Python API
 
 ```python

@@ -82,14 +82,22 @@ Run `python src/infer.py -h` to see all available inference options.
 
 ## Validation
 
-Gemma 3 includes a validation script for text translation datasets. For example:
+`src/validate.py` runs the model with greedy decoding on 50 PIQA questions ([baber/piqa](https://huggingface.co/datasets/baber/piqa); Gemma 3 270M reports PIQA on its model card): each asks which of two solutions achieves a goal, and the answer passes when it picks the labelled one:
 
 ```sh
 cd gemma3
-python src/validate.py --instruct-model --max-samples 10
+python src/validate.py --instruct-model
 ```
 
-Run `python src/validate.py -h` to see all available validation options.
+The translation modes score OPUS-100 English to Spanish ([Helsinki-NLP/opus-100](https://huggingface.co/datasets/Helsinki-NLP/opus-100)) instead: `--mode bleu` (corpus BLEU-4) or `--mode teacher-forced` (next-token accuracy); `--config es-en` translates the other way:
+
+```sh
+python src/validate.py --instruct-model --mode bleu --samples 10
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
 
 ## Build the model
 

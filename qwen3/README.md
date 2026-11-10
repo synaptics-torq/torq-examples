@@ -72,6 +72,19 @@ larger context.
 Type `exit` or `quit` to stop the chat session. Run `python src/infer.py -h` to see all
 available inference options.
 
+## Validation
+
+`src/validate.py` runs the model with greedy decoding on 20 GSM8K grade-school math problems ([openai/gsm8k](https://huggingface.co/datasets/openai/gsm8k)); an answer passes when its last number is the labelled result:
+
+```sh
+cd qwen3
+python src/validate.py --instruct-model
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
+
 ## Build the model
 
 The model files on Hugging Face come from one

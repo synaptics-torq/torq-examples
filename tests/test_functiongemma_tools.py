@@ -478,3 +478,63 @@ def test_call_without_response_stop_is_not_executed_and_discards_history(tmp_pat
     assert llm._pending_token is None
     assert llm._turn_pos == llm._warmup_len
     assert "Function call did not stop on <start_function_response>" in caplog.text
+
+
+# ── Validation: per-question tools and BFCL call matching ────────────────────
+
+OTHER_TOOLS = [{"function": {"name": "math_factorial", "description": "Factorial.",
+                             "parameters": {"type": "dict", "properties": {"number": {"type": "integer", "description": "n"}},
+                                            "required": ["number"]}}}]
+OTHER_DEV_BLOCK = f"<start_of_turn>developer\n{format_developer_block(OTHER_TOOLS)}<end_of_turn>\n"
+
+
+def test_set_tools_rewarms_with_the_new_developer_block(tmp_path, monkeypatch):
+    llm, _ = _build(tmp_path, monkeypatch, {OTHER_DEV_BLOCK: 11}, {})
+    fill(llm, [2, 10, 30, 31, 32])
+    llm.set_tools(OTHER_TOOLS)
+    assert cached_tokens(llm) == [2, 11]
+    assert llm._warmup_len == 2 and llm._turn_pos == 2
+    llm.reset()  # a fresh conversation keeps the new tools
+    assert cached_tokens(llm) == [2, 11]
+
+
+def test_bfcl_call_matching():
+    from functiongemma.src.validate import call_matches
+
+    expected = {"math_factorial": {"number": [5]}}
+    call = "<start_function_call>call:math_factorial{number:5}<end_function_call>"
+    assert call_matches(call, expected)
+    assert call_matches(call.replace("5}", "5.0}"), expected)  # numbers compare by value
+    assert not call_matches(call.replace("5}", "6}"), expected)
+    assert not call_matches(call.replace("math_factorial", "math_power"), expected)
+    assert not call_matches("The answer is 120.", expected)
+
+    optional = {"area": {"base": [10], "unit": ["units", ""]}}
+    assert call_matches("<start_function_call>call:area{base:10}<end_function_call>", optional)
+    assert call_matches("<start_function_call>call:area{base:10,unit:<escape>Units<escape>}<end_function_call>", optional)
+    assert not call_matches("<start_function_call>call:area{unit:<escape>units<escape>}<end_function_call>", optional)
+    assert not call_matches("<start_function_call>call:area{base:10,extra:1}<end_function_call>", optional)
+
+
+def test_bfcl_loader_declares_dotted_names_with_underscores(tmp_path, monkeypatch):
+    import json
+
+    from functiongemma.src import validate
+
+    question = {"id": "simple_1", "question": [[{"role": "user", "content": "Factorial of 5?"}]],
+                "function": [{"name": "math.factorial", "description": "Factorial.", "parameters": {}}]}
+    answer = {"id": "simple_1", "ground_truth": [{"math.factorial": {"number": [5]}}]}
+    files = {"BFCL_v3_simple.json": question, "possible_answer/BFCL_v3_simple.json": answer}
+
+    def fetch_file(dataset, filename, *, revision=None):
+        path = tmp_path / filename.replace("/", "_")
+        path.write_text(json.dumps(files[filename]) + "\n", encoding="utf-8")
+        return path
+
+    monkeypatch.setattr(validate, "fetch_file", fetch_file)
+    (item,) = validate._bfcl({"dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard", "config": "simple", "samples": 5})
+    assert item["prompt"] == "Factorial of 5?"
+    assert item["check"]("<start_function_call>call:math_factorial{number:5}<end_function_call>")
+    runner = mock.Mock()
+    item["prepare"](runner)
+    runner.set_tools.assert_called_once_with([{"function": {"name": "math_factorial", "description": "Factorial.", "parameters": {}}}])

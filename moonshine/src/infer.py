@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
 import logging
 import os
 import sys
@@ -20,10 +19,8 @@ from moonshine.setup_demo import (
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
-from utils.log import configure_logging
-from utils.metrics import MetricsRun
-from utils.model_setup import resolve_default_model
-from utils.runtime import RuntimeConfig, add_common_inference_args, npu_clock
+from utils.runtime import add_common_inference_args
+from utils.tasks.automatic_speech_recognition import infer_main
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -34,7 +31,7 @@ class TranscriptionResult(NamedTuple):
     audio_duration_ms: float
 
 
-def _transcribe(
+def transcribe_wav(
     wav: str | os.PathLike,
     runner: MoonshineRunner,
     tokenizer: Tokenizer,
@@ -65,33 +62,7 @@ def _print_result(result: TranscriptionResult, runner: MoonshineRunner, metrics=
     )
 
 
-def main(args: argparse.Namespace):
-    logger = logging.getLogger("Moonshine")
-    logger.info("Starting demo...")
-
-    ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
-
-    runtime = RuntimeConfig.from_args(args)
-
-    tokenizer_path = args.tokenizer
-    if tokenizer_path is None:
-        candidate = os.path.join(args.model_dir, "tokenizer.json")
-        tokenizer_path = candidate if os.path.isfile(candidate) else "tokenizer.json"
-    tokenizer = Tokenizer.from_file(tokenizer_path)
-
-    with npu_clock():
-        runner = MoonshineRunner(args.model_dir, runtime=runtime)
-        try:
-            with MetricsRun(args.metrics_out) as m:
-                for wav in args.inputs:
-                    result = _transcribe(wav, runner, tokenizer)
-                    _print_result(result, runner, m)
-        except KeyboardInterrupt:
-            logger.info("Stopped by user.")
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Moonshine speech-to-text inference.")
+def add_args(parser) -> None:
     parser.add_argument(
         "inputs",
         type=str,
@@ -115,19 +86,40 @@ if __name__ == "__main__":
         help="Path to tokenizer.json (default: auto-detect in model dir)",
     )
     add_common_inference_args(parser)
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model_dir is None:
-        args.model_dir = str(
-            resolve_default_model(
-                parser,
-                local_moonshine_model_dir,
-                download=download_moonshine,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local Moonshine model found; pass -m/--model-dir or run "
-                    "`python setup_demos.py moonshine` from torq-examples root"
-                ),
-            )
-        )
-    main(args)
+
+
+def make_runner(args, runtime):
+    model = MoonshineRunner(args.model_dir, runtime=runtime)
+    tokenizer_path = args.tokenizer
+    if tokenizer_path is None:
+        candidate = os.path.join(args.model_dir, "tokenizer.json")
+        tokenizer_path = candidate if os.path.isfile(candidate) else "tokenizer.json"
+    return model, Tokenizer.from_file(tokenizer_path)
+
+
+def loop(runner, args, metrics) -> None:
+    logging.getLogger("Moonshine").info("Starting demo...")
+    model, tokenizer = runner
+    try:
+        for wav in args.inputs:
+            result = transcribe_wav(wav, model, tokenizer)
+            _print_result(result, model, metrics)
+    except KeyboardInterrupt:
+        logging.getLogger("Moonshine").info("Stopped by user.")
+
+
+if __name__ == "__main__":
+    infer_main(
+        make_runner,
+        loop,
+        description="Run Moonshine speech-to-text inference.",
+        demo="moonshine",
+        local_model=local_moonshine_model_dir,
+        ensure_models=ensure_moonshine_models,
+        download=download_moonshine,
+        add_args=add_args,
+        message=(
+            "no local Moonshine model found; pass -m/--model-dir or run "
+            "`python setup_demos.py moonshine` from torq-examples root"
+        ),
+    )

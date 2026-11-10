@@ -1,7 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
 import os
 import sys
 from pathlib import Path
@@ -14,17 +13,19 @@ from pose_estimation.setup_demo import (
     local_pose_model_path,
 )
 from utils.preprocess import preprocess_image
-from utils.runtime import Model, RuntimeConfig, add_common_inference_args, npu_clock
+from utils.runtime import Model, add_common_inference_args
+from utils.tasks.keypoint_detection import infer_main
 from utils.pose_estimation import (
     dequantize_out,
     postprocess_pose,
     render_annotated_pose_image,
 )
 from utils.draw import display_image_gst
-from utils.log import configure_logging
-from utils.metrics import MetricsRun
-from utils.model_setup import resolve_default_model
 from utils.video import setup_display_and_camera
+
+# Dequantization of the fused 1x56x2100 int8 head.
+OUT_SCALE = 0.0056150914169847965
+OUT_ZP = -117
 
 
 def maybe_save_and_display(args, results):
@@ -50,8 +51,7 @@ def maybe_save_and_display(args, results):
         print(f"Failed to save result image: {exc}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run YOLOv8 Pose estimation on an image.")
+def add_args(parser) -> None:
     parser.add_argument(
         "--model", default=None,
         help="Path to the model VMFB (default: the one setup_demo.py downloaded)",
@@ -61,67 +61,62 @@ def main():
     add_common_inference_args(parser)
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
-    args = parser.parse_args()
-    configure_logging(args.logging)
 
-    if args.model is None:
-        args.model = str(
-            resolve_default_model(
-                parser,
-                local_pose_model_path,
-                download=download_pose_estimation,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local pose model found; pass --model or run "
-                    "`python setup_demos.py pose_estimation` from torq-examples root"
-                ),
-            )
-        )
 
-    ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
+def make_runner(args, runtime):
+    setup_display_and_camera(args)
+    return Model(args.model, runtime)
 
-    runtime = RuntimeConfig.from_args(args)
-    with npu_clock():
-        setup_display_and_camera(args)
-        model = Model(args.model, runtime)
 
-        print("\n[1/4] Preprocessing...")
-        try:
-            input_data, pad_info, orig_shape = preprocess_image(args.image)
-        except Exception as exc:
-            print(exc)
-            sys.exit(1)
-        print("\n[2/4] Inference...")
-        try:
-            with MetricsRun(args.metrics_out) as m:
-                raw_out = model.run(input_data)[0]
-                print(f"Time: {model.infer_time_ms:.3f}ms")
-                latency_ns = int(model.infer_time_ms * 1e6)
-                m.add("latency", latency_ns)
-                m.add("frames_per_second", 1e9 / latency_ns)
-        except Exception as exc:
-            print(f"Inference failed: {exc}")
-            sys.exit(1)
+def loop(runner, args, metrics) -> None:
+    model = runner
 
-        print("\n[3/4] Processing...")
-        if raw_out.shape != (1, 56, 2100):
-            print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 56, 2100).")
+    print("\n[1/4] Preprocessing...")
+    try:
+        input_data, pad_info, orig_shape = preprocess_image(args.image)
+    except Exception as exc:
+        print(exc)
+        sys.exit(1)
+    print("\n[2/4] Inference...")
+    try:
+        raw_out = model.run(input_data)[0]
+        print(f"Time: {model.infer_time_ms:.3f}ms")
+        latency_ns = int(model.infer_time_ms * 1e6)
+        metrics.add("latency", latency_ns)
+        metrics.add("frames_per_second", 1e9 / latency_ns)
+    except Exception as exc:
+        print(f"Inference failed: {exc}")
+        sys.exit(1)
 
-        out_scale = 0.0056150914169847965
-        out_zp = -117
-        outputs = dequantize_out(raw_out, out_scale, out_zp, int8=True)
+    print("\n[3/4] Processing...")
+    if raw_out.shape != (1, 56, 2100):
+        print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 56, 2100).")
 
-        results = postprocess_pose(outputs, orig_shape, pad_info)
+    outputs = dequantize_out(raw_out, OUT_SCALE, OUT_ZP, int8=True)
+    results = postprocess_pose(outputs, orig_shape, pad_info)
 
-        print("\n[4/4] Detections:")
-        if not results:
-            print("No poses detected.")
+    print("\n[4/4] Detections:")
+    if not results:
+        print("No poses detected.")
 
-        for i, (bbox, conf, keypoints) in enumerate(results):
-            print(f"  Person {i + 1:<3} Conf: {conf:.4f}  Box: {bbox.astype(int)}")
+    for i, (bbox, conf, keypoints) in enumerate(results):
+        print(f"  Person {i + 1:<3} Conf: {conf:.4f}  Box: {bbox.astype(int)}")
 
-        maybe_save_and_display(args, results)
+    maybe_save_and_display(args, results)
 
 
 if __name__ == "__main__":
-    main()
+    infer_main(
+        make_runner,
+        loop,
+        description="Run YOLOv8 Pose estimation on an image.",
+        demo="pose_estimation",
+        local_model=lambda args: local_pose_model_path(),
+        ensure_models=ensure_pose_estimation_models,
+        download=lambda args: download_pose_estimation(),
+        add_args=add_args,
+        message=(
+            "no local pose model found; pass --model or run "
+            "`python setup_demos.py pose_estimation` from torq-examples root"
+        ),
+    )

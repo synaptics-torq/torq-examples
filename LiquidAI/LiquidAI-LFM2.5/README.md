@@ -95,6 +95,19 @@ format + system-prompt warm-up (drop it for a base/completion model). Run
 > at a specific prefill model, or `--no-batch-prefill-model` to force single-token
 > prompt prefill.
 
+## Validation
+
+`src/validate.py` runs the model with greedy decoding on 50 MMLU-Pro questions ([TIGER-Lab/MMLU-Pro](https://huggingface.co/datasets/TIGER-Lab/MMLU-Pro); LFM2.5 reports MMLU-Pro on its model card), multiple choice with up to ten options; an answer passes when it picks the labelled option letter:
+
+```sh
+cd LiquidAI/LiquidAI-LFM2.5
+python src/validate.py --instruct-model
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
+
 ## Model notes
 
 LFM2.5 is a hybrid conv + attention model: each layer is either a depthwise 1D

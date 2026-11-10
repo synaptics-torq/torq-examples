@@ -34,6 +34,18 @@ class FunctionGemmaStatic(Gemma3Static):
                 f"{START_FUNCTION_RESPONSE} must be a configured stop token"
             )
 
+    def set_tools(self, tools: list[dict]) -> None:
+        """Declare *tools* instead: re-run the warm-up with their developer block."""
+        self._tools = tools
+        self._cache.reset()
+        self._cache_tokens.clear()
+        self._turn_pos = 0
+        self._warmup_len = self._warmup()
+        self._warmup_state = self._cache.snapshot() if self._warmup_len else None
+        self._turn_pos = self._warmup_len
+        self._pending_token = None
+        self._function_response_next = False
+
     @property
     def awaiting_function_response(self) -> bool:
         return self._pending_token is not None and self._pending_token == self._tokenizer.token_to_id(START_FUNCTION_RESPONSE)

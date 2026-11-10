@@ -8,11 +8,7 @@ replayed at their new positions), the no-window restart, prompt
 truncation, and batched-prefill parity.
 """
 
-import importlib.util
-import json
 import logging
-import sys
-from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
@@ -21,6 +17,7 @@ from gemma3.src.runner import Gemma3Static
 from llm_fakes import CHAR_BASE, CharTokenizer, cached_tokens, make_llm, scripted
 from qwen2_5.src.runner import QwenStatic
 from qwen3.src.runner import Qwen3Static
+from utils.tasks.text_generation import run_prompts, run_teacher_forced
 
 # Built from pieces, not literals, so the strings match the templates'.
 IM_START, IM_END = "<|" + "im_start|>", "<|" + "im_end|>"
@@ -75,13 +72,6 @@ def fill(llm, tokens) -> None:
     llm._cache.inputs[0].to_host()[0, 0, : len(tokens), 0] = tokens
     llm._cache_tokens = list(tokens)
     llm._turn_pos = len(tokens)
-
-
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 @pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
@@ -291,31 +281,20 @@ def test_failed_prefill_does_not_advance_position(tmp_path, monkeypatch):
     assert llm._pending_token is None
 
 
-def test_generation_validation_resets_between_samples(monkeypatch):
-    monkeypatch.setitem(sys.modules, "runner", sys.modules[Gemma3Static.__module__])
-    validate = _load("gemma_multi_turn_validate", "gemma3/src/validate.py")
-    validator = validate.TextGenerationValidator.__new__(validate.TextGenerationValidator)
-    validator.dataset = [{"src": "a", "tgt": "b"}, {"src": "c", "tgt": "d"}]
-    validator.n = 2
-    validator.few_shot_prompt = None
-    validator.tgt_lang = "Spanish"
-    validator.verbose = False
-    validator.output_csv = None
-    validator.gemma3 = Mock(last_infer_time=1, time_to_first_token=1, generated_tokens=1)
-    validator.gemma3.run.return_value = "b"
-    validator.run()
-    assert [call[0] for call in validator.gemma3.method_calls] == ["reset", "run", "reset", "run"]
+def test_generation_validation_resets_between_samples(tmp_path, capsys):
+    runner = Mock(last_infer_time=1, time_to_first_token=1, generated_tokens=1)
+    runner.run.return_value = "b"
+    items = [
+        {"name": "a", "prompt": "a", "expected": "b", "check": lambda answer: answer == "b"},
+        {"name": "c", "prompt": "c", "expected": "b", "check": lambda answer: answer == "b"},
+    ]
+    assert run_prompts(runner, items) == 1.0
+    assert [call[0] for call in runner.method_calls] == ["reset", "run", "reset", "run"]
 
 
-def test_teacher_forced_validation_steps(tmp_path, monkeypatch):
-    monkeypatch.setitem(sys.modules, "runner", sys.modules[Gemma3Static.__module__])
-    validate = _load("gemma_multi_turn_validate", "gemma3/src/validate.py")
-    (tmp_path / "dataset.json").write_text(json.dumps(
-        {"src_lang": "English", "tgt_lang": "Spanish",
-         "samples": [{"src": "hello", "tgt": "hola mundo"}]}
-    ))
+def test_teacher_forced_validation_steps(tmp_path, monkeypatch, capsys):
     specials, bos_id, config, _ = SPECS[Gemma3Static]
     llm, _ = make_llm(tmp_path, monkeypatch, Gemma3Static,
                       tokenizer=CharTokenizer(specials, bos_id=bos_id), config=config,
                       next_fn=scripted([], then=1), instruct_model=True, sys_prompt="S")
-    validate.TeacherForcedValidator(tmp_path / "dataset.json", llm, max_samples=1).run()
+    run_teacher_forced(llm, [{"src": "hello", "tgt": "hola mundo", "tgt_lang": "Spanish"}])

@@ -8,7 +8,6 @@ split it into utterances, with committed-prefix incremental decode for a
 real-time live preview. See ``runner.py`` for the inference engine.
 """
 
-import argparse
 import logging
 import os
 import queue
@@ -35,10 +34,8 @@ from moonshine_streaming.setup_demo import (
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
-from utils.log import configure_logging
-from utils.metrics import MetricsRun
-from utils.model_setup import resolve_default_model
-from utils.runtime import RuntimeConfig, add_common_inference_args, npu_clock
+from utils.runtime import add_common_inference_args
+from utils.tasks.automatic_speech_recognition import infer_main
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -51,7 +48,7 @@ class _HangoverVAD:
     """
     Shared speech/silence endpointing: given a per-chunk score from a
     subclass, tracks speech_start/speech_end transitions with a fixed
-    silence-duration hangover before ending an utterance. 
+    silence-duration hangover before ending an utterance.
     """
     def __init__(self, threshold, silence_duration, sample_rate):
         self.threshold                = threshold
@@ -190,13 +187,8 @@ class _Stats:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main(args: argparse.Namespace):
-
+def make_runner(args, runtime):
     model_dir = args.model_dir
-
-    # Refresh the local copy when the upstream HF revision has moved on, so a
-    # stale model dir is repaired before the existence check below.
-    ensure_moonshine_streaming_models(model_dir, refresh=not args.no_refresh)
 
     if not os.path.isdir(model_dir):
         logger.error("Model directory %s not found.", model_dir)
@@ -211,229 +203,227 @@ def main(args: argparse.Namespace):
             args.commit_agreement, args.commit_delay,
         )
 
-    runtime = RuntimeConfig.from_args(args)
+    try:
+        model     = MoonshineStaticStreamingModel(model_dir, runtime=runtime)
+        tokenizer = Tokenizer.from_file(find_asset(model.model_dir, "tokenizer.json"))
+    except Exception as e:
+        logger.error("Error initializing models: %s", e)
+        sys.exit(1)
+    return model, tokenizer
 
-    with npu_clock():
-        try:
-            model     = MoonshineStaticStreamingModel(model_dir, runtime=runtime)
-            tokenizer = Tokenizer.from_file(find_asset(model.model_dir, "tokenizer.json"))
-        except Exception as e:
-            logger.error("Error initializing models: %s", e)
-            sys.exit(1)
 
-        try:
-            import soundfile as sf
-        except ImportError:
-            logger.error("soundfile is required. Install it with: pip install soundfile")
-            sys.exit(1)
-        if not os.path.isfile(args.wav):
-            logger.error("WAV file %s not found.", args.wav)
-            sys.exit(1)
-        data, input_sample_rate = sf.read(args.wav, dtype="float32")
-        if data.ndim > 1:
-            data = data.mean(axis=1)
-        wav_audio = data.astype(np.float32)
-        logger.info(
-            "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
-            args.wav, len(wav_audio) / input_sample_rate, input_sample_rate,
-        )
+def transcribe_streaming(model, tokenizer, args, wav, metrics) -> str:
+    """Run the VAD/streaming pipeline over one WAV file and return its final
+    transcript: the finalized utterances, in order, space-joined."""
+    try:
+        import soundfile as sf
+    except ImportError:
+        logger.error("soundfile is required. Install it with: pip install soundfile")
+        sys.exit(1)
+    if not os.path.isfile(wav):
+        logger.error("WAV file %s not found.", wav)
+        sys.exit(1)
+    data, input_sample_rate = sf.read(wav, dtype="float32")
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    wav_audio = data.astype(np.float32)
+    logger.info(
+        "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
+        wav, len(wav_audio) / input_sample_rate, input_sample_rate,
+    )
 
-        audio_queue = queue.Queue()
-        running     = True
+    audio_queue = queue.Queue()
+    running     = True
+    transcript  = []
 
-        logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", args.vad_threshold)
-        vad = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
+    logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", args.vad_threshold)
+    vad = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
                             report_calibration=args.verbose)
-        terminal = TerminalListener()
-        state    = model.create_state()
+    terminal = TerminalListener()
+    state    = model.create_state()
 
-        stats = _Stats()
-        metrics = MetricsRun(args.metrics_out)
+    stats = _Stats()
 
-        def worker():
-            tokens              = []
-            utterance_count     = 0
-            resampled_buffer    = np.array([], dtype=np.float32)
-            chunks_since_decode = 0
+    def worker():
+        tokens              = []
+        utterance_count     = 0
+        resampled_buffer    = np.array([], dtype=np.float32)
+        chunks_since_decode = 0
 
-            # Pre-speech look-behind buffer: rolls over every "silence" chunk so that
-            # when speech_start fires, we have a few chunks of real audio (ambient
-            # noise + whatever soft onset the VAD hadn't crossed threshold on yet)
-            # to replay instead of losing that window to the encoder's warmup
-            # discard (see the replay below). Defaults to warmup_chunks so the
-            # replay exactly covers the window that would otherwise be thrown away.
-            lookback_chunks = args.vad_lookback if args.vad_lookback is not None else model.warmup_chunks
-            lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
+        # Pre-speech look-behind buffer: rolls over every "silence" chunk so that
+        # when speech_start fires, we have a few chunks of real audio (ambient
+        # noise + whatever soft onset the VAD hadn't crossed threshold on yet)
+        # to replay instead of losing that window to the encoder's warmup
+        # discard (see the replay below). Defaults to warmup_chunks so the
+        # replay exactly covers the window that would otherwise be thrown away.
+        lookback_chunks = args.vad_lookback if args.vad_lookback is not None else model.warmup_chunks
+        lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
 
-            def _encode(chunk):
-                t0 = time.perf_counter()
-                model.process_audio_chunk(state, chunk)
-                model.encode(state, is_final=False)
-                stats.encode_ms += (time.perf_counter() - t0) * 1000
+        def _encode(chunk):
+            t0 = time.perf_counter()
+            model.process_audio_chunk(state, chunk)
+            model.encode(state, is_final=False)
+            stats.encode_ms += (time.perf_counter() - t0) * 1000
 
-            def _decode():
-                t0 = time.perf_counter()
-                if args.full_decode:
-                    tokens = model.decode(state)
-                else:
-                    tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
-                elapsed_ms = (time.perf_counter() - t0) * 1000
-                stats.decode_ms += elapsed_ms
-                metrics.add("latency", int(elapsed_ms * 1e6))
-                return tokens
+        def _decode():
+            t0 = time.perf_counter()
+            if args.full_decode:
+                tokens = model.decode(state)
+            else:
+                tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            stats.decode_ms += elapsed_ms
+            metrics.add("latency", int(elapsed_ms * 1e6))
+            return tokens
 
-            def _finalize(count):
-                """Flush the encoder's remaining lookahead, decode the utterance in
-                full, and lock the finalized line in place."""
-                model.encode(state, is_final=True)
-                text = tokenizer.decode(_decode(), skip_special_tokens=True)
-                terminal.draw(f"\033[32m✓\033[0m Utterance #{count}: {text if text else '(empty)'}")
-                terminal.complete_line()
+        def _finalize(count):
+            """Flush the encoder's remaining lookahead, decode the utterance in
+            full, and lock the finalized line in place."""
+            model.encode(state, is_final=True)
+            text = tokenizer.decode(_decode(), skip_special_tokens=True)
+            transcript.append(text)
+            terminal.draw(f"\033[32m✓\033[0m Utterance #{count}: {text if text else '(empty)'}")
+            terminal.complete_line()
 
-            while running:
-                try:
-                    chunk = audio_queue.get(timeout=0.1)
-                except queue.Empty:
-                    continue
+        while running:
+            try:
+                chunk = audio_queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
 
-                if chunk is _END_OF_STREAM:
-                    # Input exhausted. Finalize whatever utterance is still in flight.
-                    if state.cross_kv_fill > 0:
-                        terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
+            if chunk is _END_OF_STREAM:
+                # Input exhausted. Finalize whatever utterance is still in flight.
+                if state.cross_kv_fill > 0:
+                    terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
+                    _finalize(utterance_count)
+                audio_queue.task_done()
+                break
+
+            chunk_16k        = resample(chunk, input_sample_rate, 16000)
+            resampled_buffer = np.concatenate([resampled_buffer, chunk_16k])
+
+            chunk_size = model.chunk_len
+            while len(resampled_buffer) >= chunk_size:
+                audio_chunk_1280 = resampled_buffer[:chunk_size]
+                resampled_buffer = resampled_buffer[chunk_size:]
+
+                vad_status = vad.process_chunk(audio_chunk_1280)
+
+                if vad_status == "speech_start":
+                    state.reset()
+                    tokens = []
+                    chunks_since_decode = 0
+                    utterance_count += 1
+                    terminal.draw(f"\033[32m●\033[0m Utterance #{utterance_count}: [Listening...]")
+
+                    # Replay the buffered pre-speech chunks through the fresh state
+                    # before the triggering chunk below. chunk_idx is 0 right after
+                    # reset(), so these calls land in the encoder's warmup window
+                    # (their cross-KV output is discarded either way, see
+                    # process_audio_chunk) — we're just choosing to spend that
+                    # discarded window on real pre-onset audio instead of on the
+                    # first spoken syllables.
+                    for lb_chunk in lookback_buffer:
+                        _encode(lb_chunk)
+                    lookback_buffer.clear()
+
+                if vad_status in ("speech", "speech_start"):
+                    _encode(audio_chunk_1280)
+                    chunks_since_decode += 1
+
+                    # Auto-finalize when cross-KV buffer is full
+                    if state.cross_kv_fill >= model.max_memory_len:
+                        buf_secs = int(model.max_memory_len * 0.020)
+                        terminal.draw(
+                            f"\033[31m⚠\033[0m Utterance #{utterance_count}:"
+                            f" buffer full ({buf_secs}s limit) — finalizing..."
+                        )
                         _finalize(utterance_count)
-                    audio_queue.task_done()
-                    break
-
-                chunk_16k        = resample(chunk, input_sample_rate, 16000)
-                resampled_buffer = np.concatenate([resampled_buffer, chunk_16k])
-
-                chunk_size = model.chunk_len
-                while len(resampled_buffer) >= chunk_size:
-                    audio_chunk_1280 = resampled_buffer[:chunk_size]
-                    resampled_buffer = resampled_buffer[chunk_size:]
-
-                    vad_status = vad.process_chunk(audio_chunk_1280)
-
-                    if vad_status == "speech_start":
                         state.reset()
                         tokens = []
                         chunks_since_decode = 0
                         utterance_count += 1
                         terminal.draw(f"\033[32m●\033[0m Utterance #{utterance_count}: [Listening...]")
+                        continue
 
-                        # Replay the buffered pre-speech chunks through the fresh state
-                        # before the triggering chunk below. chunk_idx is 0 right after
-                        # reset(), so these calls land in the encoder's warmup window
-                        # (their cross-KV output is discarded either way, see
-                        # process_audio_chunk) — we're just choosing to spend that
-                        # discarded window on real pre-onset audio instead of on the
-                        # first spoken syllables.
-                        for lb_chunk in lookback_buffer:
-                            _encode(lb_chunk)
-                        lookback_buffer.clear()
-
-                    if vad_status in ("speech", "speech_start"):
-                        _encode(audio_chunk_1280)
-                        chunks_since_decode += 1
-
-                        # Auto-finalize when cross-KV buffer is full
-                        if state.cross_kv_fill >= model.max_memory_len:
-                            buf_secs = int(model.max_memory_len * 0.020)
-                            terminal.draw(
-                                f"\033[31m⚠\033[0m Utterance #{utterance_count}:"
-                                f" buffer full ({buf_secs}s limit) — finalizing..."
-                            )
-                            _finalize(utterance_count)
-                            state.reset()
-                            tokens = []
-                            chunks_since_decode = 0
-                            utterance_count += 1
-                            terminal.draw(f"\033[32m●\033[0m Utterance #{utterance_count}: [Listening...]")
-                            continue
-
-                        # Periodic live preview decode
-                        if chunks_since_decode >= args.preview_every and state.cross_kv_fill > 0:
-                            tokens = _decode()
-                            chunks_since_decode = 0
-
-                        text = tokenizer.decode(tokens, skip_special_tokens=True) if tokens else ""
-                        dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
-                        indicator = f"{dot} Utterance #{utterance_count}"
-                        terminal.draw_live(f"{indicator}\n{text if text else '...'}")
-
-                    elif vad_status == "speech_end":
-                        terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
-                        model.process_audio_chunk(state, audio_chunk_1280)
-                        _finalize(utterance_count)
+                    # Periodic live preview decode
+                    if chunks_since_decode >= args.preview_every and state.cross_kv_fill > 0:
+                        tokens = _decode()
                         chunks_since_decode = 0
 
-                    elif vad_status == "silence":
-                        lookback_buffer.append(audio_chunk_1280.copy())
+                    text = tokenizer.decode(tokens, skip_special_tokens=True) if tokens else ""
+                    dot = "\033[33m●\033[0m" if vad.silence_remaining_sec > 0 else "\033[32m●\033[0m"
+                    indicator = f"{dot} Utterance #{utterance_count}"
+                    terminal.draw_live(f"{indicator}\n{text if text else '...'}")
 
-                audio_queue.task_done()
+                elif vad_status == "speech_end":
+                    terminal.draw(f"\033[34m◉\033[0m Utterance #{utterance_count}: processing...")
+                    model.process_audio_chunk(state, audio_chunk_1280)
+                    _finalize(utterance_count)
+                    chunks_since_decode = 0
 
-        def print_verbose_summary():
-            audio_s = len(wav_audio) / input_sample_rate
-            work_s  = (stats.encode_ms + stats.decode_ms) / 1000
-            rtf     = work_s / audio_s if audio_s else 0.0
-            metrics.add("real_time_factor", rtf * 100)
-            if args.verbose:
-                print(
-                    f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
-                    file=sys.stderr,
-                )
+                elif vad_status == "silence":
+                    lookback_buffer.append(audio_chunk_1280.copy())
 
-        def feed_wav_to_queue():
-            """Push the WAV file onto audio_queue in fixed-size blocks, then signal
-            end-of-stream. A synthetic silence lead-in is prepended so the VAD's
-            self-calibration (~1s of ambient noise) has something to sample even
-            when the file starts talking immediately."""
-            lead_in = np.zeros(int(1.0 * input_sample_rate), dtype=np.float32)
-            full    = np.concatenate([lead_in, wav_audio])
-            block   = 4096
-            pos     = 0
-            while pos < len(full) and running:
-                end = min(pos + block, len(full))
-                audio_queue.put(full[pos:end])
-                if args.realtime:
-                    time.sleep((end - pos) / input_sample_rate)
-                pos = end
-            audio_queue.put(_END_OF_STREAM)
+            audio_queue.task_done()
 
-        worker_thread = threading.Thread(target=worker, daemon=True)
-        worker_thread.start()
+    def print_verbose_summary():
+        audio_s = len(wav_audio) / input_sample_rate
+        work_s  = (stats.encode_ms + stats.decode_ms) / 1000
+        rtf     = work_s / audio_s if audio_s else 0.0
+        metrics.add("real_time_factor", rtf * 100)
+        if args.verbose:
+            print(
+                f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
+                file=sys.stderr,
+            )
 
-        # Hide the terminal cursor while the live transcript is being redrawn in
-        # place — draw() writes "\r" (parking the cursor at column 0, right on
-        # the leading "●") before overwriting it with new text, so at the redraw
-        # rate used here the terminal's own blinking block cursor visibly flashes
-        # over that character. Always restored in the finally below.
-        sys.stdout.write("\033[?25l")
-        sys.stdout.flush()
+    def feed_wav_to_queue():
+        """Push the WAV file onto audio_queue in fixed-size blocks, then signal
+        end-of-stream. A synthetic silence lead-in is prepended so the VAD's
+        self-calibration (~1s of ambient noise) has something to sample even
+        when the file starts talking immediately."""
+        lead_in = np.zeros(int(1.0 * input_sample_rate), dtype=np.float32)
+        full    = np.concatenate([lead_in, wav_audio])
+        block   = 4096
+        pos     = 0
+        while pos < len(full) and running:
+            end = min(pos + block, len(full))
+            audio_queue.put(full[pos:end])
+            if getattr(args, "realtime", False):
+                time.sleep((end - pos) / input_sample_rate)
+            pos = end
+        audio_queue.put(_END_OF_STREAM)
+
+    worker_thread = threading.Thread(target=worker, daemon=True)
+    worker_thread.start()
+
+    # Hide the terminal cursor while the live transcript is being redrawn in
+    # place — draw() writes "\r" (parking the cursor at column 0, right on
+    # the leading "●") before overwriting it with new text, so at the redraw
+    # rate used here the terminal's own blinking block cursor visibly flashes
+    # over that character. Always restored in the finally below.
+    sys.stdout.write("\033[?25l")
+    sys.stdout.flush()
+    try:
+        print(f">>> Transcribing {wav} ... <<<\n", file=sys.stderr)
         try:
-            print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
-            with metrics:
-                try:
-                    feed_wav_to_queue()
-                    worker_thread.join()
-                except KeyboardInterrupt:
-                    print("\n\nInterrupted...", file=sys.stderr)
-                    running = False
-                    worker_thread.join(timeout=1.0)
-                finally:
-                    print_verbose_summary()
+            feed_wav_to_queue()
+            worker_thread.join()
+        except KeyboardInterrupt:
+            print("\n\nInterrupted...", file=sys.stderr)
+            running = False
+            worker_thread.join(timeout=1.0)
         finally:
-            sys.stdout.write("\033[?25h")
-            sys.stdout.flush()
+            print_verbose_summary()
+    finally:
+        sys.stdout.write("\033[?25h")
+        sys.stdout.flush()
+    return " ".join(text for text in transcript if text)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Moonshine Static Streaming WAV File Transcription Demo (2-Split VMFB)"
-    )
-    parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
-    parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
-    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (default: the one setup_demo.py downloaded)")
+def pipeline_args(parser) -> None:
+    """The VAD/decode pipeline flags, shared with ``validate.py``."""
     parser.add_argument("--vad-threshold", type=float, default=0.01,           help="VAD trigger threshold: RMS floor for the energy VAD (default: 0.010)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
@@ -442,20 +432,33 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
+
+
+def add_args(parser) -> None:
+    parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
+    parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
+    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (default: the one setup_demo.py downloaded)")
+    pipeline_args(parser)
     add_common_inference_args(parser, with_threads=False)
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model_dir is None:
-        args.model_dir = str(
-            resolve_default_model(
-                parser,
-                local_moonshine_streaming_model_dir,
-                download=download_moonshine_streaming,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local Moonshine streaming model found; pass -m/--model-dir or run "
-                    "`python setup_demos.py moonshine_streaming` from torq-examples root"
-                ),
-            )
-        )
-    main(args)
+
+
+def loop(runner, args, metrics) -> None:
+    model, tokenizer = runner
+    transcribe_streaming(model, tokenizer, args, args.wav, metrics)
+
+
+if __name__ == "__main__":
+    infer_main(
+        make_runner,
+        loop,
+        description="Moonshine Static Streaming WAV File Transcription Demo (2-Split VMFB)",
+        demo="moonshine_streaming",
+        local_model=local_moonshine_streaming_model_dir,
+        ensure_models=ensure_moonshine_streaming_models,
+        download=download_moonshine_streaming,
+        add_args=add_args,
+        message=(
+            "no local Moonshine streaming model found; pass -m/--model-dir or run "
+            "`python setup_demos.py moonshine_streaming` from torq-examples root"
+        ),
+    )

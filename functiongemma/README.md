@@ -27,6 +27,19 @@ When the KV cache fills, the sliding window keeps the system prompt and re-prefi
 
 Run `python src/infer.py -h` to see all available inference options.
 
+## Validation
+
+`src/validate.py` runs the model with greedy decoding on 50 questions of the Berkeley Function Calling Leaderboard's simple category ([gorilla-llm/Berkeley-Function-Calling-Leaderboard](https://huggingface.co/datasets/gorilla-llm/Berkeley-Function-Calling-Leaderboard); FunctionGemma reports BFCL on its model card). Each question declares its own functions (dotted names such as `math.factorial` are declared as `math_factorial`), and the answer passes when its call names the expected function with argument values among the leaderboard's possible answers:
+
+```sh
+cd functiongemma
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
+
 ## Behavior
 
 To add tools or use a fine-tuned checkpoint, see [Adding FunctionGemma tools](ADDING_TOOLS.md).

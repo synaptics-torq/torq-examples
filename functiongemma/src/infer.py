@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
+"""Function-calling chat loop for the FunctionGemma demo.
+
+The interactive loop is demo-specific: each user turn generates until the
+model emits a function call or a final answer, executes the call, and feeds
+the result back. Everything else (flags, model resolution and refresh,
+runtime, metrics) is the shared text_generation infer main.
+"""
+
 import logging
 import sys
 from pathlib import Path
@@ -17,16 +24,9 @@ from functiongemma.setup_demo import (
     ensure_functiongemma_models,
     local_functiongemma_model_path,
 )
-from utils.inference import (
-    InferenceInterrupted,
-    add_llm_inference_args,
-    finish_interrupted_output,
-)
+from utils.inference import InferenceInterrupted, finish_interrupted_output
 from utils.terminal import InferenceStopInput
-from utils.log import configure_logging
-from utils.metrics import MetricsRun
-from utils.model_setup import resolve_default_model
-from utils.runtime import RuntimeConfig, npu_clock
+from utils.tasks.text_generation import infer_main, llm_kwargs
 
 #: Cap on function calls per user turn, against runaway call/response loops.
 _MAX_TOOL_CALLS: Final[int] = 5
@@ -146,46 +146,27 @@ def run_function_loop(runner: FunctionGemmaStatic, metrics=None) -> None:
             logger.warning("Turn discarded: %s", exc)
 
 
-def main(args: argparse.Namespace):
 
-    logging.getLogger("FunctionGemma").info("Starting assistant...")
-    ensure_functiongemma_models(Path(args.model).parent, refresh=not args.no_refresh)
-    runtime = RuntimeConfig.from_args(args)
+def add_max_inp_len_args(parser):
+    parser.add_argument(
+        "--max-inp-len", type=int,
+        help="Maximum prompt tokens including the developer block; oversized prompts are rejected",
+    )
 
-    with npu_clock():
-        runner = FunctionGemmaStatic(
-            args.model,
-            args.max_seq_len,
-            max_prompt_tokens=args.max_inp_len,
-            runtime=runtime,
-            cache_keep_n=None,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            max_gen_tokens=args.max_gen_tokens,
-            lm_head_path=args.lm_head,
-            disable_lm_head=args.no_lm_head,
-            prefill_model_path=args.batch_prefill_model,
-            disable_prefill=args.no_batch_prefill_model,
-        )
-        with MetricsRun(args.metrics_out) as m:
-            run_function_loop(runner, m)
+
+def make_runner(args, runtime):
+    return FunctionGemmaStatic(args.model, runtime=runtime, **llm_kwargs(args))
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run FunctionGemma function-calling inference.")
-    add_llm_inference_args(parser, with_instruct=False, with_kv_window=False, with_max_inp_len=False)
-    parser.add_argument("--max-inp-len", type=int, help="Maximum prompt tokens including the developer block; oversized prompts are rejected")
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model is None:
-        args.model = str(
-            resolve_default_model(
-                parser,
-                local_functiongemma_model_path,
-                download=download_functiongemma,
-                no_refresh=args.no_refresh,
-                message="no local FunctionGemma model found; pass -m/--model or run `python setup_demos.py functiongemma`",
-            )
-        )
-    main(args)
+    infer_main(
+        make_runner,
+        description="Run FunctionGemma function-calling inference.",
+        demo="functiongemma",
+        local_model=local_functiongemma_model_path,
+        ensure_models=ensure_functiongemma_models,
+        download=download_functiongemma,
+        llm_args=dict(with_instruct=False, with_kv_window=False, with_max_inp_len=False),
+        add_args=add_max_inp_len_args,
+        chat=lambda runner, args, m: run_function_loop(runner, m),
+    )

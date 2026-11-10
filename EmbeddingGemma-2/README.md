@@ -205,6 +205,19 @@ python src/compare_backends.py report torq.npz ort.npz -o report.md
 python src/compare_backends.py run -m <vmfb_dir> --backend torq --modalities audio -o torq_audio.npz
 ```
 
-The eval set (`data/eval/eval_set.json` in the repository root) has 53 texts, 20 images,
-5 videos and 10 audio clips (pass `--audio` to `run` to include them); media files are
-downloaded from `Xenova/transformers.js-docs` on first use.
+The eval set (`src/media_search_eval.json`) has 53 texts, 20 images, 5 videos and 10 audio clips (pass `--audio` to `run` to
+include them); media files are downloaded from `Xenova/transformers.js-docs` on first use.
+
+## Validation
+
+`src/validate.py` embeds 20 images of Flickr30k ([nlphuji/flickr30k](https://huggingface.co/datasets/nlphuji/flickr30k)), 20 sound clips of Clotho ([CLAPv2/Clotho](https://huggingface.co/datasets/CLAPv2/Clotho)) and the 5 video clips of the eval set above (hosted in [Xenova/transformers.js-docs](https://huggingface.co/datasets/Xenova/transformers.js-docs)), and checks that each item's own caption ranks first among all the run's captions (retrieval). It prints PASS/FAIL (the accuracy threshold is a dummy until a baseline exists, so it FAILs by design) and writes the metrics JSON with `--metrics-out`.
+
+The board loads at most two modalities at once (2 GB RAM), so run them in separate sessions:
+
+```sh
+python src/validate.py --modalities text,image
+python src/validate.py --modalities text,audio
+python src/validate.py --modalities text,video
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check each dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).

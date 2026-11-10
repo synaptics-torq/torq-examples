@@ -6,9 +6,11 @@ Each example belongs to one of the following task categories based on inputs and
 
 - object_detection: extract bounding boxes of objects from an image
 - keypoint_detection: extract keypoints of poses from an image
+- face_recognition: extract bounding boxes of faces from an image
 - text_generation: generate text based on a given text prompt
 - image_text_to_text: generate text answers about a given image
 - automatic_speech_recognition: transcribe audio to text
+- feature_extraction: embed text, images, video and audio into vectors that can be compared and ranked
 
 It is possible to add new task categories as needed. Category names are [Hugging Face task](https://huggingface.co/tasks) ids written with underscores (`text-generation` -> `text_generation`); `face_recognition` has no Hugging Face equivalent.
 
@@ -44,6 +46,7 @@ The info file must be a valid JSON file and should include at least the followin
 - `name`: the name of the example
 - `description`: a one-sentence description of the example
 - `task_category`: the task category the example belongs to
+- `validation`: the Hugging Face datasets `src/validate.py` scores by default, each `{"dataset", "config", "split", "samples"}` (`config` and `split` for datasets read through the dataset viewer); the task category, or the demo's `validate.py`, must have a loader for each
 
 Demos with a batched prefill model set `"batch_prefill": true`; `setup_demos.py --with-batch-prefill` tracks the extra model for those demos and warns for the rest.
 

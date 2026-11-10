@@ -2,5 +2,8 @@
   "name": "gemma3",
   "description": "Interactive chat with Gemma 3 270M using Torq VMFB models.",
   "task_category": "text_generation",
-  "batch_prefill": true
+  "batch_prefill": true,
+  "validation": [
+    {"dataset": "baber/piqa", "config": "default", "split": "validation", "samples": 50}
+  ]
 }

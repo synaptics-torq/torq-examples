@@ -79,4 +79,15 @@ where `x` and `y` are the top-left corner of the face.
 
 Use `python src/infer.py -h` to see all options.
 
+## Validation
 
+`src/validate.py` runs the face detector on 50 photos of Labeled Faces in the Wild ([bitmind/lfw](https://huggingface.co/datasets/bitmind/lfw)), crops centred on one person's face; a photo passes when a detected face box contains its centre:
+
+```sh
+cd Face_ID
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.

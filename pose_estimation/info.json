@@ -1,5 +1,8 @@
 {
   "name": "pose_estimation",
   "description": "YOLOv8n pose estimation using a Torq VMFB model.",
-  "task_category": "keypoint_detection"
+  "task_category": "keypoint_detection",
+  "validation": [
+    {"dataset": "pictograph/coco-2017-pose", "config": "default", "split": "validation", "samples": 50}
+  ]
 }

@@ -1,8 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
-import logging
 import sys
 from pathlib import Path
 
@@ -14,61 +12,22 @@ from gemma3.setup_demo import (
     ensure_gemma3_models,
     local_gemma3_model_path,
 )
-from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
-from utils.log import configure_logging
-from utils.metrics import MetricsRun
-from utils.model_setup import resolve_default_model
-from utils.runtime import RuntimeConfig, npu_clock
+from utils.tasks.text_generation import infer_main, llm_kwargs
 
 
-def main(args: argparse.Namespace):
-
-    logging.getLogger("Gemma3").info("Starting assistant...")
-    ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
-    runtime = RuntimeConfig.from_args(args)
-
-    with npu_clock():
-        gemma3 = Gemma3Static(
-            args.model,
-            args.max_seq_len,
-            max_prompt_tokens=args.max_inp_len,
-            runtime=runtime,
-            instruct_model=args.instruct_model,
-            cache_keep_n=None if args.no_kv_cache_window else args.kv_cache_window,
-            temperature=args.temperature,
-            top_p=args.top_p,
-            top_k=args.top_k,
-            max_gen_tokens=args.max_gen_tokens,
-            lm_head_path=args.lm_head,
-            disable_lm_head=args.no_lm_head,
-            prefill_model_path=args.batch_prefill_model,
-            disable_prefill=args.no_batch_prefill_model,
-        )
-        with MetricsRun(args.metrics_out) as m:
-            run_chat_loop(
-                lambda text, should_stop: gemma3.run(text, should_stop=should_stop),
-                gemma3.run_stream,
-                lambda: print_llm_stats(gemma3, m),
-                debug=args.logging.upper() == "DEBUG",
-            )
+def make_runner(args, runtime):
+    return Gemma3Static(
+        args.model, runtime=runtime,
+        instruct_model=args.instruct_model, **llm_kwargs(args),
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Gemma3 VMFB inference.")
-    add_llm_inference_args(parser)
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model is None:
-        args.model = str(
-            resolve_default_model(
-                parser,
-                local_gemma3_model_path,
-                download=download_gemma3,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local Gemma3 model found; pass -m/--model or run "
-                    "`python setup_demos.py gemma3` from torq-examples root"
-                ),
-            )
-        )
-    main(args)
+    infer_main(
+        make_runner,
+        description="Run Gemma3 VMFB inference.",
+        demo="gemma3",
+        local_model=local_gemma3_model_path,
+        ensure_models=ensure_gemma3_models,
+        download=download_gemma3,
+    )

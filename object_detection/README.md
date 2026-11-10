@@ -196,3 +196,16 @@ Video inference options:
 - `--profile`: print Torq resource profiling info and exit
 
 Use `python src/infer.py -h` and `python src/infer_video.py -h` to see all options.
+
+## Validation
+
+`src/validate.py` detects objects in 50 images of the COCO val2017 mini-500 subset ([LibreYOLO/coco-val2017-mini500](https://huggingface.co/datasets/LibreYOLO/coco-val2017-mini500)) and scores the detections against the labelled objects (greedy one-to-one matching with the same label and IoU at or above 0.5): precision and recall over all images, with the accuracy as their F1. Crowd regions are not counted:
+
+```sh
+cd object_detection
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's minimum accuracy and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.

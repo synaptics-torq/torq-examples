@@ -46,3 +46,16 @@ python src/infer.py -m ../models/Synaptics/moonshine-tiny-bf16-torq path/to/audi
 > The demo defaults to the DMA/dmabuf allocator and automatically uses device-backed I/O. Use `--tda cpu` to run with host NumPy inputs, or `--device-io` to explicitly enable device-backed I/O with another allocator.
 
 Run `python src/infer.py -h` to see all available inference options.
+
+## Validation
+
+`src/validate.py` transcribes 20 utterances of LibriSpeech test-clean ([openslr/librispeech_asr](https://huggingface.co/datasets/openslr/librispeech_asr)) and scores each transcript against its reference with the word error rate:
+
+```sh
+cd moonshine
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints PASS/FAIL against the demo's maximum WER and exits 1 on FAIL; `--metrics-out` records the same metrics as `src/infer.py`. Run `python src/validate.py -h` to see all available validation options.
