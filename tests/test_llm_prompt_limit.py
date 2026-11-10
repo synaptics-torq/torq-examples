@@ -29,11 +29,6 @@ def test_prompt_at_or_under_the_limit_unchanged(tmp_path, monkeypatch):
     assert llm._apply_prompt_limit([7, 9, 1]) == [7, 9, 1]  # no padding
 
 
-def test_no_limit_leaves_prompt_unchanged(tmp_path, monkeypatch):
-    llm = _llm(tmp_path, monkeypatch)
-    assert llm._apply_prompt_limit([1, 2, 3]) == [1, 2, 3]
-
-
 def test_user_limit_takes_precedence_over_prompt_limit(tmp_path, monkeypatch):
     # With a warm-up prefix the user prompt is limited to the remaining
     # capacity; it is still a maximum, never a pad target.

@@ -21,7 +21,6 @@ from pathlib import Path
 from utils.datasets import fetch_rows
 from utils.tasks.vision import (
     infer_main,
-    iou,
     match_boxes,
     round_box,
     validate_main,
@@ -30,7 +29,6 @@ from utils.tasks.vision import (
 __all__ = [
     "infer_main",
     "validate_main",
-    "iou",
     "match_boxes",
     "score_item",
     "aggregate",

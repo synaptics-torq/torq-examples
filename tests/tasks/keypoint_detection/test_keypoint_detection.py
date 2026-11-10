@@ -1,13 +1,12 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""Host tests for the ``keypoint_detection`` task category: the IoU, the
-person matching and the keypoint accuracy, the COCO keypoints loader, and
-the ``validate_main`` flow end to end (exit code, printed lines, metrics
-JSON) with fake dataset rows, runner and detect hook in place of the
-download and the model."""
+"""Host tests for the ``keypoint_detection`` task category: the person
+matching and keypoint accuracy, and the COCO keypoints loader run through
+``validate_main`` with fake dataset rows, runner and detect hook in place of
+the download and the model (the shared box math and validate flow are tested
+with ``object_detection``)."""
 
-import json
 import sys
 from unittest import mock
 
@@ -18,16 +17,6 @@ from utils.tasks import keypoint_detection as pose
 
 
 # ── box math ─────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("a,b,expected", [
-    ((0, 0, 10, 10), (0, 0, 10, 10), 1.0),  # identical
-    ((0, 0, 10, 10), (20, 0, 10, 10), 0.0),  # disjoint
-    ((0, 0, 10, 10), (3, 0, 10, 10), 70 / 130),  # at or above the 0.5 threshold
-    ((0, 0, 10, 10), (5, 5, 10, 10), 25 / 175),  # below it
-])
-def test_iou(a, b, expected):
-    assert pose.iou(a, b) == pytest.approx(expected)
 
 
 def test_match_boxes_one_to_one():
@@ -155,33 +144,8 @@ def test_loader_keeps_only_labelled_keypoints(tmp_path):
     rows = [_row(str(tmp_path / "a.jpg"), [([0.4, 0.0, 99.6, 200.0], {0: (50.2, 100.0), 5: (10.0, 20.0)})])]
     code, _, seen = _run(pose, tmp_path, rows, 0.0, [[]])
     assert seen[0]["image"] == tmp_path / "a.jpg"
+    assert seen[0]["name"] == "pictograph/coco-2017-pose #0"
     assert seen[0]["expected"] == [{"box": [0, 0, 100, 200], "keypoints": [[0, 50, 100], [5, 10, 20]]}]
     assert code == 0
 
 
-def test_validate_fail_exits_1_and_writes_metrics(tmp_path, capsys):
-    rows = [_row(str(tmp_path / "a.jpg"), [([0, 0, 100, 200], {0: (50, 100)})])]
-    code, metrics_out, _ = _run(pose, tmp_path, rows, 1.0, [[(np.array([0.0, 0.0, 100.0, 200.0]), 0.9, _kpts({0: (90, 100)}))]])
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "  [FAIL] pictograph/coco-2017-pose #0" in out
-    assert "accuracy=0.0000 min=1.0" in out
-    doc = json.loads(metrics_out.read_text())
-    assert doc["measurements"]["latency"] == 123_000.0
-
-
-def test_validate_pass_exits_0(tmp_path, capsys):
-    rows = [_row(str(tmp_path / "a.jpg"), [([0, 0, 100, 200], {0: (50, 100)})])]
-    code, _, _ = _run(pose, tmp_path, rows, 1.0, [[(np.array([0.0, 0.0, 100.0, 200.0]), 0.9, _kpts({0: (52, 101)}))]])
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "  [PASS] pictograph/coco-2017-pose #0" in out
-    assert out.rstrip().endswith("PASS")
-
-
-def test_validate_dummy_min_accuracy_always_fails(tmp_path, capsys):
-    rows = [_row(str(tmp_path / "a.jpg"), [([0, 0, 100, 200], {0: (50, 100)})])]
-    code, _, _ = _run(pose, tmp_path, rows, 2.0, [[(np.array([0.0, 0.0, 100.0, 200.0]), 0.9, _kpts({0: (50, 100)}))]])
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "accuracy=1.0000 min=2.0" in out

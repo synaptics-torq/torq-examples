@@ -1,12 +1,11 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""Host tests for the ``face_recognition`` task category: the box helpers it
-re-exports, the centred-face score, the LFW loader, and the ``validate_main``
-flow end to end (exit code, printed lines, metrics JSON) with fake dataset
-rows, runner and detect hook in place of the download and the model."""
+"""Host tests for the ``face_recognition`` task category: the centred-face
+score and the LFW loader, run through ``validate_main`` with fake dataset rows,
+runner and detect hook in place of the download and the model (the shared
+box math and validate flow are tested with ``object_detection``)."""
 
-import json
 import sys
 from unittest import mock
 
@@ -17,42 +16,6 @@ from utils.tasks import face_recognition as face
 
 
 # ── box math ─────────────────────────────────────────────────────────────────
-
-
-@pytest.mark.parametrize("a,b,expected", [
-    ((0, 0, 10, 10), (0, 0, 10, 10), 1.0),  # identical
-    ((0, 0, 10, 10), (20, 0, 10, 10), 0.0),  # disjoint
-    ((0, 0, 10, 10), (5, 0, 10, 10), 1 / 3),  # half overlap: 50 / 150
-    ((0, 0, 10, 10), (5, 5, 10, 10), 25 / 175),  # corner overlap
-    ((0, 0, 10, 10), (0, 0, 0, 10), 0.0),  # zero-area box
-])
-def test_iou(a, b, expected):
-    assert face.iou(a, b) == pytest.approx(expected)
-
-
-def test_match_boxes_greedy_one_to_one():
-    expected = [{"box": [0, 0, 10, 10]}, {"box": [50, 50, 10, 10]}]
-    predicted = [
-        {"box": [51, 50, 10, 10]},  # best match for the second face
-        {"box": [0, 0, 10, 10]},  # best match for the first face
-        {"box": [1, 1, 10, 10]},  # duplicate: stays unmatched
-    ]
-    assert sorted(face.match_boxes(predicted, expected)) == [(0, 1), (1, 0)]
-
-
-def test_match_boxes_below_the_iou_threshold_does_not_match():
-    assert face.match_boxes([{"box": [5, 5, 10, 10]}], [{"box": [0, 0, 10, 10]}]) == []
-
-
-@pytest.mark.parametrize("tp,n_predicted,n_expected,expected", [
-    (1, 1, 1, 1.0),
-    (0, 0, 0, 0.0),  # nothing detected, nothing expected
-    (1, 2, 2, 0.5),  # precision 0.5, recall 0.5
-    (1, 1, 2, 2 / 3),  # precision 1.0, recall 0.5
-    (0, 1, 1, 0.0),  # no matches
-])
-def test_f1_score(tp, n_predicted, n_expected, expected):
-    assert face.f1_score(tp, n_predicted, n_expected) == pytest.approx(expected)
 
 
 def test_score_item_needs_a_box_over_the_image_centre():
@@ -141,27 +104,3 @@ def test_loader_centre_from_the_image_size(tmp_path):
     assert code == 0
 
 
-def test_validate_fail_exits_1_and_writes_metrics(tmp_path, capsys):
-    code, metrics_out, _ = _run(face, tmp_path, _rows(tmp_path), 1.0, [[("face", 0.9, [0, 0, 50, 50])]])
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "  [FAIL] Person_0_0001.jpg" in out
-    assert "no face box contains the image centre [125.0, 100.0]" in out
-    assert "accuracy=0.0000 min=1.0" in out
-    doc = json.loads(metrics_out.read_text())
-    assert doc["measurements"]["latency"] == 123_000.0
-
-
-def test_validate_pass_exits_0(tmp_path, capsys):
-    code, _, _ = _run(face, tmp_path, _rows(tmp_path, 2), 1.0, [[("face", 0.9, [80, 60, 90, 90])]] * 2)
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "  [PASS] Person_1_0001.jpg" in out
-    assert "accuracy=1.0000 min=1.0" in out
-
-
-def test_validate_dummy_min_accuracy_always_fails(tmp_path, capsys):
-    code, _, _ = _run(face, tmp_path, _rows(tmp_path), 2.0, [[("face", 0.9, [80, 60, 90, 90])]])
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "accuracy=1.0000 min=2.0" in out

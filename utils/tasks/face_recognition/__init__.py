@@ -17,14 +17,11 @@ CONTRIBUTING.md metrics; validate prints PASS/FAIL and exits 1 on FAIL.
 from pathlib import Path
 
 from utils.datasets import fetch_rows
-from utils.tasks.vision import f1_score, infer_main, iou, match_boxes, round_box, validate_main
+from utils.tasks.vision import infer_main, round_box, validate_main
 
 __all__ = [
     "infer_main",
     "validate_main",
-    "iou",
-    "match_boxes",
-    "f1_score",
     "score_item",
     "aggregate",
     "LOADERS",

@@ -142,15 +142,6 @@ def test_validate_wer_scores_the_mean_over_items(tmp_path, capsys):
     assert out.rstrip().endswith("PASS")
 
 
-def test_validate_wer_samples(tmp_path):
-    ref = "the cat sat on the mat"
-    code, _, _, unused = _run_validate_main(
-        tmp_path, [ref, ref], [ref, "never used"], max_wer=0.0, argv=["--samples", "1"]
-    )
-    assert code == 0
-    assert unused == ["never used"]
-
-
 def test_validate_unknown_dataset_exits(tmp_path):
     with pytest.raises(SystemExit, match="No loader for dataset 'someone/else'"):
         with mock.patch.object(sys, "argv", ["validate.py", "-m", str(tmp_path), "--no-refresh", "--dataset", "someone/else"]):

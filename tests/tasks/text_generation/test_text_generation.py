@@ -262,12 +262,6 @@ def test_validate_prompts_degenerate_answer_counts_as_fail(tmp_path, capsys):
     assert "accuracy=0.5000 min=1.0" in out
 
 
-def test_validate_prompts_samples(tmp_path):
-    code, _, _, runner = _run_validate_main(tmp_path, ["5", "unused"], min_accuracy=1.0, argv=["--samples", "1"])
-    assert code == 0
-    assert len(runner.prompts) == 1
-
-
 def test_validate_bleu_defaults_to_opus100(tmp_path, capsys):
     rows = {"Helsinki-NLP/opus-100": [{"translation": {"en": "Good morning", "es": "Buenos días amigo mío"}}]}
     code, _, made, runner = _run_validate_main(

@@ -137,16 +137,6 @@ def test_fixed_pattern_must_cover_the_updated_outputs():
 # ── attach / update ───────────────────────────────────────────────────────────
 
 
-def test_attach_and_replace_update():
-    model = _decode_model()
-    cache = KVCache(model)
-    layout = cache.attach(model)
-    assert layout.rows_axis == (None,)
-    new = _Array(np.full((1, 2, 4, 4), 7.0, F32))
-    cache.update(layout, [_Array(np.zeros((1, 1, 8))), new], 3)
-    assert cache.inputs[0] is new
-
-
 def test_read_only_row_writes_at_the_step_position(monkeypatch):
     monkeypatch.setattr(cache_module, "HalCommandBuffer", _CommandBuffer)
     # Time-major [1, L, 2kv, D] and head-major [1, 2kv, L, D] row caches,

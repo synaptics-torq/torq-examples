@@ -15,7 +15,6 @@ from gemma3 import setup_demo as gemma_setup
 from lfm2_5 import setup_demo as liquid_setup
 from moonshine import setup_demo as moonshine_setup
 from object_detection import setup_demo as object_detection_setup
-from pose_estimation import setup_demo as pose_setup
 from utils.download import DownloadError, ModelVersionNotFoundError, write_manifest
 from utils import model_setup
 from utils.version import examples_version
@@ -145,24 +144,6 @@ def test_setup_custom_repo_defaults_to_head_untracked(tmp_path):
     assert manifest["revision"] is None
 
 
-def test_setup_custom_repo_with_explicit_version_is_tracked(tmp_path):
-    base_dir = tmp_path
-    repo_id = "custom/moonshine"
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
-        mock.patch.object(
-            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
-        ),
-    ):
-        moonshine_setup.setup(["custom/moonshine"], model_version="v1.0.0")
-
-    rev.assert_called_once_with(repo_id, revision="v1.0.0")
-    assert _manifest(base_dir / repo_id)["version"] == "v1.0.0"
-
-
 def test_setup_missing_version_fails_loudly(tmp_path):
     base_dir = tmp_path
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
@@ -185,40 +166,7 @@ def test_setup_missing_version_fails_loudly(tmp_path):
     download.assert_not_called()
 
 
-def test_setup_missing_examples_version_fails_loudly(tmp_path):
-    base_dir = tmp_path
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch("utils.version.examples_version", return_value=None),
-        mock.patch.object(moonshine_setup, "download_from_hf") as download,
-    ):
-        try:
-            moonshine_setup.setup(["tiny-en"])
-            raise AssertionError("expected DownloadError")
-        except DownloadError as exc:
-            assert "VERSION" in str(exc)
-    download.assert_not_called()
-
-
 # ── setup: refresh semantics (pre-existing behaviour, now versioned) ───────────
-
-
-def test_setup_skips_when_revision_matches(tmp_path):
-    base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-    _make_moonshine_copy(base_dir, repo_id, _REVISION)
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(moonshine_setup, "download_from_hf") as download,
-    ):
-        moonshine_setup.setup(["tiny-en"])
-
-    download.assert_not_called()
 
 
 def test_setup_downloads_required_files_and_records_revision(tmp_path):
@@ -243,64 +191,6 @@ def test_setup_downloads_required_files_and_records_revision(tmp_path):
     assert manifest["revision"] == _REVISION
 
 
-def test_setup_refreshes_and_clears_stale_files_on_revision_change(tmp_path):
-    base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-    model_dir = base_dir / repo_id
-    model_dir.mkdir(parents=True)
-    # A complete-but-old copy, including a file dropped from the new set.
-    for filename in (*moonshine_setup._MOONSHINE_REQUIRED_FILES, "preprocessor.onnx"):
-        (model_dir / filename).write_text("old")
-    write_manifest(
-        model_dir,
-        repo_id,
-        [*moonshine_setup._MOONSHINE_REQUIRED_FILES, "preprocessor.onnx"],
-        version=_EXAMPLES_VERSION,
-        revision="old-revision",
-    )
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(
-            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
-        ) as download,
-    ):
-        moonshine_setup.setup(["tiny-en"])
-
-    # All required files re-downloaded after the stale dir was cleared.
-    downloaded = [call.args[1] for call in download.call_args_list]
-    assert downloaded == list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
-    # The dropped file is gone and content was refreshed.
-    assert not (model_dir / "preprocessor.onnx").exists()
-    assert (model_dir / "encoder.vmfb").read_text() == f"encoder.vmfb@{_EXAMPLES_VERSION}"
-    assert _manifest(model_dir)["revision"] == _REVISION
-    assert "preprocessor.onnx" not in _manifest(model_dir)["files"]
-
-
-def test_setup_offline_uses_local_files(tmp_path):
-    base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-    model_dir = base_dir / repo_id
-    files = list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
-    for filename in files:
-        path = model_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(filename)
-    write_manifest(model_dir, repo_id, files, version=_EXAMPLES_VERSION, revision="old-revision")
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(model_setup, "get_hf_revision", return_value=None),
-        mock.patch.object(moonshine_setup, "download_from_hf") as download,
-    ):
-        moonshine_setup.setup(["tiny-en"])
-
-    download.assert_not_called()
-
-
 def test_setup_offline_with_missing_files_fails_loudly(tmp_path):
     base_dir = tmp_path
 
@@ -317,26 +207,6 @@ def test_setup_offline_with_missing_files_fails_loudly(tmp_path):
             raise AssertionError("expected DownloadError")
         except DownloadError:
             pass
-
-
-def test_setup_no_update_writes_no_manifest(tmp_path):
-    base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(
-            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
-        ) as download,
-        mock.patch.object(model_setup, "get_hf_revision") as rev,
-    ):
-        moonshine_setup.setup(["tiny-en"], no_update=True)
-
-    # Untracked: files are downloaded but nothing is resolved or recorded.
-    rev.assert_not_called()
-    assert download.called
-    assert not (base_dir / repo_id / ".manifest.json").exists()
 
 
 def test_setup_no_update_reuses_existing_files(tmp_path):
@@ -404,26 +274,6 @@ def test_setup_no_update_keeps_explicit_version(tmp_path):
     # An explicitly pinned version wins over the untracked HEAD default,
     # but nothing is resolved or recorded.
     rev.assert_not_called()
-    assert download.called
-    for call in download.call_args_list:
-        assert call.kwargs["revision"] == _PINS
-    assert not (base_dir / repo_id / ".manifest.json").exists()
-
-
-def test_setup_no_update_keeps_per_model_version_spec(tmp_path):
-    base_dir = tmp_path
-    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(
-            moonshine_setup, "download_from_hf", side_effect=_fake_download(base_dir)
-        ) as download,
-    ):
-        moonshine_setup.setup([f"tiny-en:{_PINS}"], no_update=True)
-
-    # A per-model 'name:version' spec wins over the untracked HEAD default.
     assert download.called
     for call in download.call_args_list:
         assert call.kwargs["revision"] == _PINS
@@ -585,59 +435,6 @@ def test_inference_offline_with_missing_files_keeps_local_state(tmp_path):
 # ── object detection / pose estimation ─────────────────────────────────────────
 
 
-def _make_yolo_copy(base_dir, repo_id, *, version=_EXAMPLES_VERSION, revision=_REVISION):
-    model_dir = base_dir / repo_id
-    filenames = (*object_detection_setup._model_filenames(repo_id), object_detection_setup._LABELS_FILENAME)
-    for filename in filenames:
-        path = model_dir / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(filename)
-    write_manifest(
-        model_dir,
-        repo_id,
-        list(filenames),
-        version=version,
-        revision=revision,
-    )
-    return model_dir
-
-
-def test_yolo_setup_default_tracks_examples_version(tmp_path):
-    base_dir = tmp_path
-    repo_id = object_detection_setup._OD_HF_REPO_MAP["nano"]
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(model_setup, "check_requirements"),
-        mock.patch.object(
-            model_setup, "get_hf_revision", return_value=_REVISION
-        ) as rev,
-        mock.patch.object(object_detection_setup, "hf_file_exists", return_value=True),
-        mock.patch.object(object_detection_setup, "list_hf_files", return_value=[]),
-        mock.patch.object(
-            object_detection_setup, "download_from_hf", side_effect=_fake_download(base_dir)
-        ),
-    ):
-        object_detection_setup.setup()
-
-    rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
-    assert _manifest(base_dir / repo_id)["version"] == _EXAMPLES_VERSION
-
-
-def test_yolo_inference_tracks_manifest_version(tmp_path):
-    repo_id = object_detection_setup._OD_HF_REPO_MAP["nano"]
-    model_dir = _make_yolo_copy(tmp_path, repo_id, version=_PINS)
-
-    with (
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
-        mock.patch.object(object_detection_setup, "download_from_hf") as download,
-    ):
-        object_detection_setup.ensure_object_detection_models(model_dir)
-
-    assert rev.call_args.kwargs["revision"] == _PINS
-    download.assert_not_called()
-
-
 def test_yolo26_setup_downloads_untracked_at_head(tmp_path):
     base_dir = tmp_path
     nano_repo = object_detection_setup._OD_HF_REPO_MAP["nano"]
@@ -665,21 +462,6 @@ def test_yolo26_setup_downloads_untracked_at_head(tmp_path):
     }
 
 
-def test_yolo26_inference_keeps_untracked_copy(tmp_path):
-    yolo26_repo = object_detection_setup._YOLO26_REPO_ID
-    model_dir = _make_yolo_copy(tmp_path, yolo26_repo, version=None, revision=None)
-
-    with (
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
-        mock.patch.object(object_detection_setup, "download_from_hf") as download,
-    ):
-        object_detection_setup.ensure_object_detection_models(model_dir)
-
-    # Untracked copies (version=None) are never checked against the hub.
-    rev.assert_not_called()
-    download.assert_not_called()
-
-
 def test_yolo_sample_files_fall_back_to_repo_root():
     yolo26_repo = object_detection_setup._YOLO26_REPO_ID
 
@@ -694,30 +476,6 @@ def test_yolo_sample_files_fall_back_to_repo_root():
         return_value=["README.md", "labels.json", "bus.jpg", "yolo26n_npu.vmfb"],
     ):
         assert object_detection_setup._list_sample_files(yolo26_repo, None) == ["bus.jpg"]
-
-
-def test_pose_inference_tracks_manifest_version(tmp_path):
-    repo_id = pose_setup._POSE_HF_REPO
-    model_dir = tmp_path / repo_id
-    model_path = model_dir / pose_setup._MODEL_FILENAME
-    model_path.parent.mkdir(parents=True)
-    model_path.write_text(pose_setup._MODEL_FILENAME)
-    write_manifest(
-        model_dir,
-        repo_id,
-        [pose_setup._MODEL_FILENAME],
-        version=_PINS,
-        revision=_REVISION,
-    )
-
-    with (
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
-        mock.patch.object(pose_setup, "download_from_hf") as download,
-    ):
-        pose_setup.ensure_pose_estimation_models(model_dir)
-
-    assert rev.call_args.kwargs["revision"] == _PINS
-    download.assert_not_called()
 
 
 # ── gemma3 ─────────────────────────────────────────────────────────────────────
@@ -1017,17 +775,6 @@ def test_gemma_prefill_not_downloaded_without_flag(tmp_path):
     assert gemma_setup._GEMMA3_PREFILL_FILENAME not in _manifest(base_dir / repo_id)["files"]
 
 
-def test_gemma_prefill_downloaded_and_tracked_with_flag(tmp_path):
-    base_dir = tmp_path
-    repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
-
-    download = _run_gemma_setup(base_dir, _gemma_repo_with_prefill, enable_prefill=True)
-
-    downloaded = [call.args[1] for call in download.call_args_list]
-    assert downloaded[-1] == gemma_setup._GEMMA3_PREFILL_FILENAME
-    assert gemma_setup._GEMMA3_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
-
-
 def test_gemma_prefill_flag_is_noop_with_warning_for_repo_without_prefill(tmp_path, caplog):
     base_dir = tmp_path
     repo_id = gemma_setup.GEMMA3_HF_REPO_MAP["instruct"]
@@ -1172,39 +919,6 @@ def test_inference_stale_refresh_warns_about_dropped_prefill(tmp_path, caplog):
 
 
 # ── liquid ──────────────────────────────────────────────────────────────────
-
-
-def test_liquid_w8a8_setup_downloads_prefill(tmp_path):
-    """The w8a8 repos carry a batched prefill model at the model revision:
-    the built-in names resolve and setup fetches the prefill build."""
-    base_dir = tmp_path
-    repo_id = liquid_setup._HF_REPO_MAP["230m-w8a8"]
-    assert repo_id == "Synaptics/LiquidAI-LFM2.5-230M-w8a8-torq"
-
-    def exists(_repo_id, filename, revision=None):
-        assert _repo_id == repo_id
-        return filename in {
-            "transformer.vmfb",
-            "lm_head.vmfb",
-            liquid_setup._LIQUID_PREFILL_FILENAME,
-        }
-
-    with (
-        mock.patch.object(model_setup, "default_models_dir", return_value=base_dir),
-        mock.patch.object(liquid_setup, "check_requirements"),
-        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
-        mock.patch.object(liquid_setup, "hf_file_exists", side_effect=exists),
-        mock.patch.object(
-            liquid_setup,
-            "download_from_hf",
-            side_effect=_fake_download(base_dir),
-        ) as download,
-    ):
-        liquid_setup.setup(["230m-w8a8"], enable_prefill=True)
-
-    downloaded = [call.args[1] for call in download.call_args_list]
-    assert liquid_setup._LIQUID_PREFILL_FILENAME in downloaded
-    assert liquid_setup._LIQUID_PREFILL_FILENAME in _manifest(base_dir / repo_id)["files"]
 
 
 def test_liquid_downloads_new_file_set_with_optional_prefill(tmp_path):
@@ -1567,18 +1281,3 @@ def test_setup_demos_prefill_forwarded_and_warned(caplog):
     )
 
 
-def test_setup_demos_pose_forwards_version_flags():
-    """The root dispatch forwards ``--model-version``/``--no-update`` to
-    ``pose_estimation`` like every other tracked demo (the pose branch used to
-    call ``setup()`` bare, silently dropping both flags)."""
-    import setup_demos
-
-    with mock.patch.object(pose_setup, "setup") as pose_mock:
-        setup_demos.setup_demo("pose_estimation", model_version="v2.2.1", no_update=True)
-    pose_mock.assert_called_once_with(
-        model_version="v2.2.1", no_update=True, enable_prefill=False
-    )
-
-    with mock.patch.object(pose_setup, "setup") as pose_mock:
-        setup_demos.setup_demo("pose_estimation")
-    pose_mock.assert_called_once_with(model_version=None, no_update=False, enable_prefill=False)

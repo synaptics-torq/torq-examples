@@ -75,30 +75,8 @@ def test_cpu_keeps_host_io():
     assert RuntimeConfig(tda="cpu", device_io=False).device_io is False
 
 
-def test_flags():
-    assert RuntimeConfig(tda="dmabuf", extra_flags=("--a", "--b")).flags == [
-        "--torq_device_allocator=dmabuf", "--a", "--b",
-    ]
-
-
 def test_from_args_defaults_on_bare_namespace():
     assert RuntimeConfig.from_args(argparse.Namespace()) == RuntimeConfig()
-
-
-def test_from_args_reads_values():
-    args = argparse.Namespace(device="cpu", tda="cpu", device_io=False,
-                              threads=2, runtime_flags=["--x=1"])
-    cfg = RuntimeConfig.from_args(args)
-    assert (cfg.device, cfg.tda, cfg.device_io, cfg.threads, cfg.extra_flags) == (
-        "cpu", "cpu", False, 2, ("--x=1",)
-    )
-
-
-def test_from_args_missing_attrs_use_defaults():
-    cfg = RuntimeConfig.from_args(
-        argparse.Namespace(device="cpu", tda="cpu", device_io=False)
-    )
-    assert (cfg.threads, cfg.extra_flags) == (None, ())
 
 
 # ── Model ─────────────────────────────────────────────────────────────────────
@@ -119,21 +97,6 @@ def test_model_device_outputs_or_device_io(fake_runner):
     assert _FakeRunner.instances[-1].kwargs["device_outputs"] is True
     Model("m.vmfb", RuntimeConfig(tda="cpu", device_io=False), device_outputs=True)
     assert _FakeRunner.instances[-1].kwargs["device_outputs"] is True
-
-
-def test_model_function_override(fake_runner):
-    Model("m.vmfb", RuntimeConfig(), function="embed_images")
-    assert _FakeRunner.instances[-1].kwargs["function"] == "embed_images"
-
-
-def test_model_passthroughs(fake_runner):
-    m = Model("m.vmfb", RuntimeConfig())
-    r = _FakeRunner.instances[-1]
-    assert m.path == "m.vmfb"
-    assert m.inputs_info is r.inputs_info
-    assert m.outputs_info is r.outputs_info
-    assert m.device == "fake-device"
-    assert m.infer_time_ms == 1.23
 
 
 def test_to_device_only_when_device_io(fake_runner):

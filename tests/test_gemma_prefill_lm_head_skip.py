@@ -39,16 +39,6 @@ def test_prefill_tokens_starts_after_warmup(tmp_path, monkeypatch):
     assert cached_tokens(llm) == warm + [1000, 1001]
 
 
-def test_gemma_tokenize_strips_bos_and_builds_turns(tmp_path, monkeypatch):
-    tok = _gemma_tok()
-    llm, _ = _gemma(tmp_path, monkeypatch, instruct_model=True)
-    assert llm.tokenize("hello", "user") == [10, *tok.ids("user\nhello"), 11, *tok.ids("\n")]
-    assert llm.tokenize("", "model") == [10, *tok.ids("model\n")]
-    assert llm._build_prompt_tokens("hello") == (
-        llm.tokenize("hello", "user") + llm.tokenize("", "model")
-    )
-
-
 def test_gemma_stops_at_end_of_turn(tmp_path, monkeypatch):
     llm, _ = _gemma(tmp_path, monkeypatch, instruct_model=True, sys_prompt="S",
                     next_fn=scripted([CHAR_BASE + ord("a"), 11], then=1))

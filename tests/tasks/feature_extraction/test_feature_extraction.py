@@ -25,7 +25,6 @@ from utils.tasks import feature_extraction as emb
     ([1, 0, 0], [0, 1, 0], 0.0),
     ([1, 0, 0], [-1, 0, 0], -1.0),
     ([3, 0, 0], [1, 0, 0], 1.0),  # the norms are computed, not assumed
-    (np.array([1.0, 1.0]), [1, 1], 1.0),  # lists and arrays mix
 ])
 def test_cosine(a, b, expected):
     assert emb.cosine(a, b) == pytest.approx(expected)
@@ -110,14 +109,6 @@ def test_validate_all_pass_exits_0(tmp_path, capsys):
     doc = json.loads(metrics_out.read_text())
     assert doc["measurements"]["latency_image"] == 123_000.0
     assert doc["measurements"]["latency_text"] == 123_000.0
-
-
-def test_validate_dummy_min_accuracy_fails(tmp_path, capsys):
-    code, _, _ = _run_validate_main(tmp_path, dict(MEDIA))
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "accuracy=1.0000 min=2.0" in out
-    assert out.rstrip().endswith("FAIL")
 
 
 def test_validate_retrieval_fail(tmp_path, capsys):

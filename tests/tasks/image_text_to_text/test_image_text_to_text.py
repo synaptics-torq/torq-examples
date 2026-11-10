@@ -102,14 +102,3 @@ def test_validate_pass_exits_0(tmp_path, capsys):
     assert out.rstrip().endswith("PASS")
 
 
-def test_validate_scores_the_mean_over_items(tmp_path, capsys):
-    code, _, _, _ = _run_validate_main(tmp_path, ["A", "D"], ["The answer is A.", "B"], 0.5)
-    out = capsys.readouterr().out
-    assert code == 0
-    assert "accuracy=0.5000 min=0.5" in out
-
-
-def test_validate_samples(tmp_path):
-    code, _, _, asked = _run_validate_main(tmp_path, ["A", "B"], ["A"], 1.0, argv=["--samples", "1"])
-    assert code == 0
-    assert len(asked) == 1

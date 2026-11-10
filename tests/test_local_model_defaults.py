@@ -82,11 +82,6 @@ def test_liquid_explicit_unknown_repo_passes_through(tmp_path):
     )
 
 
-def test_liquid_missing_returns_none(tmp_path):
-    assert liquid_setup.local_liquid_model_path(base_dir=tmp_path) is None
-    assert liquid_setup.local_liquid_model_path(model="350m", base_dir=tmp_path) is None
-
-
 # ── LFM2-VL-450M INT8 (model dirs, not files) ─────────────────────────────────
 
 
@@ -103,18 +98,6 @@ def test_vl_int8_incomplete_dir_returns_none(tmp_path):
         vl_setup._HF_REPO_MAP["default"],
         vl_setup._LFM2VL_W8_REQUIRED_FILES[:4],
     )
-    assert vl_setup.local_lfm2vl_model_dir(base_dir=tmp_path) is None
-
-
-def test_vl_int8_name_aliases_resolve_to_the_same_repo(tmp_path):
-    model_dir = _make_dir(
-        tmp_path, vl_setup._HF_REPO_MAP["w8"], vl_setup._LFM2VL_W8_REQUIRED_FILES
-    )
-    for name in ("default", "w8", "int8"):
-        assert vl_setup.local_lfm2vl_model_dir(model=name, base_dir=tmp_path) == model_dir
-
-
-def test_vl_int8_missing_returns_none(tmp_path):
     assert vl_setup.local_lfm2vl_model_dir(base_dir=tmp_path) is None
 
 

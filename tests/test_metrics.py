@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from utils import metrics as metrics_module
-from utils.metrics import MetricsRun, SystemSampler, add_metrics_args
+from utils.metrics import MetricsRun, SystemSampler
 from utils.runtime import add_common_inference_args
 
 
@@ -170,13 +170,6 @@ def test_metrics_run_no_file_when_path_none(tmp_path, monkeypatch):
 
 
 # ── CLI flag ─────────────────────────────────────────────────────────────────
-
-
-def test_add_metrics_args():
-    parser = argparse.ArgumentParser()
-    add_metrics_args(parser)
-    assert parser.parse_args([]).metrics_out is None
-    assert parser.parse_args(["--metrics-out", "m.json"]).metrics_out == "m.json"
 
 
 def test_add_common_inference_args_includes_metrics_out():

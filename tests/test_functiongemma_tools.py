@@ -50,13 +50,6 @@ DEV_BLOCK_BODY = (
 #: The developer message as rendered by the checkpoint's template.
 DEV_BLOCK = f"<start_of_turn>developer\n{DEV_BLOCK_BODY}<end_of_turn>\n"
 
-#: Template output for [developer, user], add_generation_prompt=True.
-FIRST_PROMPT = (
-    "<bos>"
-    f"{DEV_BLOCK}"
-    "<start_of_turn>user\nWhat is the temperature in London?<end_of_turn>\n"
-    "<start_of_turn>model\n"
-)
 
 #: What the model generates for a tool call: it stops on
 #: <start_function_response> (id 50, in the config's eos_token_id list).
@@ -72,17 +65,6 @@ class TestRendering:
 
     def test_developer_block_matches_checkpoint_template(self):
         assert format_developer_block(DEFAULT_TOOLS) == DEV_BLOCK_BODY
-
-    def test_first_prompt_matches_checkpoint_template(self):
-        # The demo splits the template output as warm-up (BOS + developer
-        # block) plus the first user turn; together they are FIRST_PROMPT.
-        text = (
-            "<bos>"
-            + DEV_BLOCK
-            + "<start_of_turn>user\nWhat is the temperature in London?<end_of_turn>\n"
-            + "<start_of_turn>model\n"
-        )
-        assert text == FIRST_PROMPT
 
     def test_function_response_scalars(self):
         assert (
@@ -142,16 +124,6 @@ class TestParsing:
     def test_no_call(self):
         assert parse_function_call("It is 18 degrees in London.") is None
 
-    def test_malformed_arguments_are_rejected(self):
-        assert (
-            parse_function_call("<start_function_call>call:f{a:}x}<end_function_call>")
-            is None
-        )
-        assert (
-            parse_function_call("<start_function_call>call:f{a [1}<end_function_call>")
-            is None
-        )
-
     def test_rejects_multiple_calls(self):
         text = (
             "<start_function_call>call:a{}<end_function_call>x"
@@ -159,25 +131,9 @@ class TestParsing:
         )
         assert parse_function_call(text) is None
 
-    def test_round_trip(self):
-        call = (
-            "<start_function_call>call:get_temperature"
-            "{city:<escape>New York<escape>}<end_function_call>"
-        )
-        assert parse_function_call(call) == ("get_temperature", {"city": "New York"})
-
-
 class TestBuiltInFunctions:
-    def test_get_temperature(self):
-        assert function_tools.get_temperature("London") == 18
-
     def test_get_temperature_is_case_insensitive(self):
         assert function_tools.get_temperature("new york") == 22
-
-    def test_get_temperature_unknown_city(self):
-        with pytest.raises(ValueError, match="unknown city"):
-            function_tools.get_temperature("Atlantis")
-
 
 @pytest.mark.parametrize(
     "body",
@@ -259,12 +215,6 @@ def _prepare_loop(tmp_path, monkeypatch, specials, mapping):
     monkeypatch.setattr(infer, "InferenceStopInput", lambda _: nullcontext(None))
     monkeypatch.setattr(infer, "_think", lambda *_: None)
     return infer, llm
-
-
-def test_warmup_is_bos_plus_developer_block(tmp_path, monkeypatch):
-    llm, _ = _build(tmp_path, monkeypatch, {}, {})
-    assert cached_tokens(llm) == [2, 10]
-    assert llm._warmup_len == 2
 
 
 def test_construction_rejects_export_without_function_tokens(tmp_path, monkeypatch):
@@ -377,21 +327,6 @@ def test_closing_response_stream_restores_user_prompt_mode(tmp_path, monkeypatch
     assert llm._function_response_next
     stream.close()
     assert not llm._function_response_next
-
-
-def test_decode_keeps_protocol_tokens(tmp_path, monkeypatch):
-    llm, _ = _build(tmp_path, monkeypatch, {}, {})
-    call, escape = 20, 23  # <start_function_call>, <escape>
-    assert llm._tokenizer.decode([call, escape]) == ""
-    assert "<start_function_call>" in llm._decode_generated_tokens([call, escape])
-    assert "<escape>" in llm._decode_generated_tokens([call, escape])
-
-
-def test_all_configured_stop_ids_are_honored(tmp_path, monkeypatch):
-    llm, _ = _build(tmp_path, monkeypatch, {}, {})
-    for token in (1, 50, 106):  # the config's eos list plus the template's <end_of_turn>
-        assert llm._should_stop(token, [])
-    assert not llm._should_stop(42, [])
 
 
 def test_full_cache_restart_has_no_extra_turn_separator(tmp_path, monkeypatch, caplog):

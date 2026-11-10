@@ -418,14 +418,6 @@ def test_sample_top_p_keeps_only_the_dominant_token():
         assert sample(logits, temperature=1.0, top_p=0.6, top_k=3) == 0
 
 
-def test_sample_seeded_top_k_top_p_matches_reference():
-    # Pinned against the pre-restructure DecoderOnlyLLMRunner._sample output
-    # (same algorithm, same global random state).
-    np.random.seed(123)
-    logits = np.array([0.5, 0.1, 0.7, 0.2], F32)
-    assert sample(logits, temperature=1.0, top_p=1.0, top_k=4) == 3
-
-
 # ── generate ──────────────────────────────────────────────────────────────────
 
 

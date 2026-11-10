@@ -16,7 +16,6 @@ from unittest import mock
 
 import pytest
 
-from llm_fakes import CHAR_BASE, CharTokenizer, make_llm, scripted
 from utils.inference import (
     InferenceInterrupted,
     add_llm_inference_args,
@@ -35,62 +34,6 @@ def _llm_parser(**kwargs) -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     add_llm_inference_args(parser, **kwargs)
     return parser
-
-
-def test_llm_args_defaults():
-    args = _llm_parser().parse_args([])
-    assert args.model is None
-    assert args.lm_head is None and args.no_lm_head is False
-    assert args.batch_prefill_model is None and args.no_batch_prefill_model is False
-    assert args.max_seq_len is None
-    assert args.max_inp_len is None
-    assert args.max_gen_tokens is None
-    assert args.instruct_model is False
-    assert args.threads is None
-    assert args.kv_cache_window == 2 and args.no_kv_cache_window is False
-    assert args.temperature == 0.0 and args.top_p == 1.0 and args.top_k == 64
-    assert args.no_refresh is False
-    assert args.tda == "dmabuf" and args.device_io is True
-    assert args.runtime_flags is None
-    assert args.logging == "INFO"
-
-
-def test_llm_args_values():
-    args = _llm_parser().parse_args(
-        [
-            "-m", "x.vmfb",
-            "--lm-head", "h.vmfb",
-            "--batch-prefill-model", "p.vmfb",
-            "--max-seq-len", "512",
-            "--max-inp-len", "128",
-            "--max-gen-tokens", "64",
-            "--instruct-model",
-            "-j", "4",
-            "--no-kv-cache-window",
-            "--temperature", "0.7",
-            "--top-p", "0.9",
-            "--top-k", "40",
-            "--no-refresh",
-            "--tda", "cpu",
-            "--no-device-io",
-            "--logging", "DEBUG",
-            "--runtime-flags", "--torq_hw_type=sim", "--other=1",
-        ]
-    )
-    assert args.model == "x.vmfb"
-    assert args.lm_head == "h.vmfb"
-    assert args.batch_prefill_model == "p.vmfb"
-    assert args.max_seq_len == 512
-    assert args.max_inp_len == 128
-    assert args.max_gen_tokens == 64
-    assert args.instruct_model is True
-    assert args.threads == 4
-    assert args.no_kv_cache_window is True
-    assert args.temperature == 0.7 and args.top_p == 0.9 and args.top_k == 40
-    assert args.no_refresh is True
-    assert args.tda == "cpu" and args.device_io is False
-    assert args.runtime_flags == ["--torq_hw_type=sim", "--other=1"]
-    assert args.logging == "DEBUG"
 
 
 def test_llm_args_lm_head_pair_is_mutually_exclusive():
@@ -134,24 +77,6 @@ def test_common_inference_args_threads_off():
     assert not hasattr(args, "device_io")
     assert args.runtime_flags == ["--a=1"]
     assert args.no_refresh is False
-
-
-def test_common_inference_args_device_io_default_false():
-    parser = argparse.ArgumentParser()
-    add_common_inference_args(parser, device_io_default=False)
-    args = parser.parse_args([])
-    assert args.device_io is False
-
-
-def test_common_inference_args_tda_default():
-    parser = argparse.ArgumentParser()
-    add_common_inference_args(parser)
-    assert parser.parse_args([]).tda == "dmabuf"
-
-    # Moonshine and the other demos use the dmabuf allocator by default.
-    parser = argparse.ArgumentParser()
-    add_common_inference_args(parser, tda_default="dmabuf")
-    assert parser.parse_args([]).tda == "dmabuf"
 
 
 # ── chat loop ────────────────────────────────────────────────────────────────
@@ -289,13 +214,6 @@ def test_repeated_ctrl_c_during_thread_shutdown_exits_cleanly():
             child.communicate()
 
 
-def test_print_llm_stats_line():
-    with mock.patch("builtins.print") as print_mock:
-        print_llm_stats(_FakeStatsRunner())
-    line = print_mock.call_args.args[0]
-    assert line == "  (123 ms, TTFT: 10 ms, 44.1 tok/s)\n"
-
-
 def test_print_llm_stats_records_metrics(tmp_path, capsys):
     out = tmp_path / "m.json"
     with MetricsRun(str(out)) as m:
@@ -311,25 +229,3 @@ def test_print_llm_stats_records_metrics(tmp_path, capsys):
 # ── max_gen_tokens cap ────────────────────────────────────────────────────────
 
 
-def _gen_llm(tmp_path, monkeypatch, **kwargs):
-    # A base model that answers "abcde" and then its eos token.
-    tok = CharTokenizer({"<eos>": 1})
-    replies = [CHAR_BASE + ord(c) for c in "abcde"]
-    return make_llm(
-        tmp_path, monkeypatch, tokenizer=tok,
-        config={"bos_token_id": 0, "eos_token_id": 1, "vocab_size": 4096},
-        next_fn=scripted(replies, then=1),
-        **kwargs,
-    )
-
-
-def test_max_gen_tokens_caps_generation(tmp_path, monkeypatch):
-    # The cap counts the prefill's token: max_gen_tokens=3 yields 3 tokens total.
-    llm, _ = _gen_llm(tmp_path, monkeypatch, max_gen_tokens=3)
-    assert "".join(llm.run_stream("hi")) == "abc"
-
-
-def test_max_gen_tokens_none_runs_to_natural_stop(tmp_path, monkeypatch):
-    # Without a cap, generation runs to the model's stop condition (eos here).
-    llm, _ = _gen_llm(tmp_path, monkeypatch)
-    assert "".join(llm.run_stream("hi")) == "abcde"

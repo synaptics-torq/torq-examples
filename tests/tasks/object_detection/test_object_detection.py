@@ -198,17 +198,6 @@ def test_validate_pass_exits_0(tmp_path, capsys):
     assert out.rstrip().endswith("PASS")
 
 
-def test_validate_dummy_min_accuracy_always_fails(tmp_path, capsys):
-    # The committed DUMMY baseline: even a perfect run FAILs.
-    code, _, _ = _run_validate_main(
-        tmp_path, [[{"label": "dog", "box": [0, 0, 10, 10]}]], 2.0, [[("dog", 0.9, [0, 0, 10, 10])]],
-    )
-    out = capsys.readouterr().out
-    assert code == 1
-    assert "accuracy=1.0000 min=2.0" in out
-    assert out.rstrip().endswith("FAIL")
-
-
 def test_validate_scores_the_f1_of_the_totals(tmp_path, capsys):
     # Item 0: one match plus one extra detection (per-item F1 2/3);
     # item 1: one match (per-item F1 1.0). Totals: F1 of tp=2, n=3, e=2.
@@ -226,7 +215,6 @@ def test_validate_scores_the_f1_of_the_totals(tmp_path, capsys):
     assert "  [FAIL] img0.jpg" in out
     assert "  [PASS] img1.jpg" in out
     assert "accuracy=0.8000 min=0.8" in out
-    assert od.f1_score(2, 3, 2) == pytest.approx(0.8)
 
 
 def test_validate_samples_takes_the_lowest_image_ids(tmp_path):

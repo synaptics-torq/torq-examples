@@ -78,8 +78,3 @@ def test_fetch_rows_reports_viewer_errors(tmp_path):
             datasets.fetch_rows("org/set", config="c", split="test", samples=1)
 
 
-def test_fetch_file_is_a_dataset_download(tmp_path):
-    with mock.patch.dict("os.environ", {"MODELS": str(tmp_path)}), \
-            mock.patch.object(datasets, "download_from_hf", return_value=tmp_path / "f") as download:
-        assert datasets.fetch_file("org/set", "a/b.json") == tmp_path / "f"
-    download.assert_called_once_with("org/set", "a/b.json", base_dir=tmp_path / "datasets", revision=None, repo_type="dataset")

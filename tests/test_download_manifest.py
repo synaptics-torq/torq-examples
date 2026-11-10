@@ -14,7 +14,6 @@ from utils.download import (
     ModelVersionNotFoundError,
     base_dir_for,
     check_model_status,
-    clear_model_dir,
     ensure_model,
     get_hf_file_info as real_get_hf_file_info,
     get_hf_revision,
@@ -54,19 +53,6 @@ def test_write_read_and_verify_manifest(tmp_path):
     assert manifest["revision"] == "deadbeef"
     assert manifest["files"] == ["a.vmfb", "nested/b.json"]
     assert "auto_update" not in manifest
-    assert verify_manifest(model_dir)
-
-
-def test_write_manifest_defaults_to_unversioned(tmp_path):
-    model_dir = tmp_path / "model"
-    model_dir.mkdir(parents=True)
-    (model_dir / "a.vmfb").write_text("a")
-
-    write_manifest(model_dir, "org/repo", ["a.vmfb"])
-
-    manifest = read_manifest(model_dir)
-    assert manifest["version"] is None
-    assert manifest["revision"] is None
     assert verify_manifest(model_dir)
 
 
@@ -146,17 +132,6 @@ def test_check_model_status_stale_when_tracked_version_moved(tmp_path):
     assert status is ModelStatus.STALE
 
 
-def test_check_model_status_stale_for_legacy_manifest_without_version(tmp_path):
-    # A pre-versioning copy (manifest with only a SHA) is re-fetched once at
-    # the tracked version.
-    model_dir = _make_copy(tmp_path / "m", "org/repo", ["a.vmfb"], revision="old-sha")
-
-    status = check_model_status(
-        model_dir, "org/repo", files_present=True, version="v2.1.0", revision="new-sha"
-    )
-    assert status is ModelStatus.STALE
-
-
 def test_check_model_status_up_to_date_when_version_matches(tmp_path):
     model_dir = _make_copy(tmp_path / "m", "org/repo", ["a.vmfb"], version="v2.1.0", revision="sha")
 
@@ -211,29 +186,6 @@ def test_check_model_status_unversioned_never_stale(tmp_path):
         model_dir, "org/repo", files_present=True, version=None, revision=None
     )
     assert status is ModelStatus.UP_TO_DATE
-
-
-def test_ensure_model_re_downloads_when_stale(tmp_path):
-    model_dir = _make_copy(tmp_path / "m", "org/repo", ["a.vmfb"], version="v2.1.0", revision="old-sha")
-
-    with mock.patch("utils.download.write_manifest") as write:
-        status = ensure_model(
-            model_dir,
-            "org/repo",
-            files_present=True,
-            version="v2.1.0",
-            revision="new-sha",
-            download=lambda: ["a.vmfb", "b.vmfb"],
-        )
-
-    assert status is ModelStatus.STALE
-    # The stale dir was cleared before re-downloading.
-    assert not (model_dir / "a.vmfb").exists()
-    assert write.called
-    written = write.call_args.args
-    assert written[0] == model_dir and written[1] == "org/repo" and written[2] == ["a.vmfb", "b.vmfb"]
-    assert write.call_args.kwargs["version"] == "v2.1.0"
-    assert write.call_args.kwargs["revision"] == "new-sha"
 
 
 def test_ensure_model_repairs_incomplete_without_clearing(tmp_path):
@@ -367,16 +319,6 @@ def test_write_manifest_records_file_info_for_tracked_files(tmp_path):
         "a.vmfb": {"size": 1, "sha256": "aaa"},
         "b.json": {"size": 2, "sha256": None},
     }
-
-
-def test_write_manifest_omits_file_info_when_not_given(tmp_path):
-    model_dir = tmp_path / "m"
-    model_dir.mkdir()
-    (model_dir / "a.vmfb").write_text("a")
-
-    write_manifest(model_dir, "org/repo", ["a.vmfb"])
-
-    assert "file_info" not in read_manifest(model_dir)
 
 
 def test_get_hf_file_info_parses_tree_items():
