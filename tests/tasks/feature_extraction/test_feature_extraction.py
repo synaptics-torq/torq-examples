@@ -106,6 +106,10 @@ def test_validate_all_retrieved_scores_one(tmp_path, capsys):
     assert "  [PASS] image dog.jpg" in out and "  [PASS] audio bark" in out
     assert out.rstrip().endswith("accuracy=1.0000 (3/3 items)")
     doc = json.loads(metrics_out.read_text())
+    assert doc["validation"] == [
+        {"dataset": "nlphuji/flickr30k", "config": "TEST", "split": "test", "samples": 10, "rows": [0, 1]},
+        {"dataset": "CLAPv2/Clotho", "config": "default", "split": "validation", "samples": 10, "rows": [0]},
+    ]
     assert doc["measurements"]["latency_image"] == 123_000.0
     assert doc["measurements"]["accuracy"] == 100.0
     assert doc["measurements"]["latency_text"] == 123_000.0
@@ -122,11 +126,15 @@ def test_validate_retrieval_fail(tmp_path, capsys):
 
 
 def test_modalities_filter(tmp_path, capsys):
-    code, _, made = _run_validate_main(tmp_path, dict(MEDIA), argv=["--modalities", "text,audio"])
+    code, metrics_out, made = _run_validate_main(tmp_path, dict(MEDIA), argv=["--modalities", "text,audio"])
     out = capsys.readouterr().out
     assert code == 0
     assert made["items"] == [("audio", "bark", "a bark")]
     assert "image" not in out.split("accuracy")[0]
+    # the metrics record the dataset actually scored, not all defaults
+    assert json.loads(metrics_out.read_text())["validation"] == [
+        {"dataset": "CLAPv2/Clotho", "config": "default", "split": "validation", "samples": 10, "rows": [0]},
+    ]
 
 
 def test_modalities_unknown_errors(tmp_path, capsys):

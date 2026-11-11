@@ -117,6 +117,10 @@ def validate_main(
     )
     items, datasets = load_items(args, validation, {**LOADERS, **(loaders or {})})
     items = [it for it in items if it["kind"] in mods]
+    # The metrics list only the datasets, and rows, actually scored.
+    for spec in datasets:
+        spec["rows"] = [it["row"] for it in items if it["spec"] is spec]
+    datasets = [spec for spec in datasets if spec["rows"]]
     if not items:
         parser.error(f"no {demo} validation items for --modalities {args.modalities}")
     queries = list(dict.fromkeys(it["query"] for it in items))
