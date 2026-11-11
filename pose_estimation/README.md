@@ -64,8 +64,7 @@ cd pose_estimation
 python src/infer.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --image ../models/Synaptics/yolov8-pose-nano-320-int8-torq/samples/pose.jpg \
-  --device torq \
-  --device-io
+  --device torq
 ```
 
 To save or display the annotated image:
@@ -76,7 +75,6 @@ python src/infer.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --image ../models/Synaptics/yolov8-pose-nano-320-int8-torq/samples/pose.jpg \
   --device torq \
-  --device-io \
   --save-image \
   --display
 ```
@@ -86,7 +84,7 @@ python src/infer.py \
 Image inference options:
 - `--device`: Torq device URI, defaults to `torq`
 - `--tda {cpu,dmabuf}`: allocator backing Torq buffers, defaults to `dmabuf`
-- `--device-io`: preallocate input buffers and keep outputs as device arrays
+- `--device-io` / `--no-device-io`: preallocate input buffers and keep outputs as device arrays (default: enabled)
 - `--save-image`: save the annotated output image as `output_pose.jpg`
 - `--display`: show the annotated image with GStreamer/Wayland
 
@@ -98,7 +96,6 @@ python src/infer_video.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --video ../models/Synaptics/yolov8-pose-nano-320-int8-torq/samples/body_pose.mp4 \
   --device torq \
-  --device-io \
   --rotate 0
 ```
 
@@ -110,7 +107,6 @@ python src/infer_video.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --camera-device auto \
   --device torq \
-  --device-io \
   --display \
   --rotate 0
 ```
@@ -124,7 +120,6 @@ python src/infer_video.py \
   --camera-device /dev/video0 \
   --camera-control-device /dev/v4l-subdev2 \
   --device torq \
-  --device-io \
   --display \
   --exposure-auto 0
 ```
@@ -137,7 +132,6 @@ python src/infer_video.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --rtsp-url rtsp://user:pass@host:port/stream \
   --device torq \
-  --device-io \
   --rotate 0 \
   --display
 ```
@@ -150,7 +144,6 @@ python src/infer_video.py \
   --model ../models/Synaptics/yolov8-pose-nano-320-int8-torq/yolo_pose.vmfb \
   --video ../models/Synaptics/yolov8-pose-nano-320-int8-torq/samples/body_pose.mp4 \
   --device torq \
-  --device-io \
   --profile
 ```
 
@@ -169,3 +162,16 @@ Video inference options:
 - `--profile`: print Torq resource profiling info and exit
 
 Use `python src/infer.py -h` and `python src/infer_video.py -h` to see all options.
+
+## Validation
+
+`src/validate.py` detects persons in 50 images of COCO val2017 keypoints ([pictograph/coco-2017-pose](https://huggingface.co/datasets/pictograph/coco-2017-pose)) and scores them against the labelled persons: a person matches by box IoU at or above 0.5, and the accuracy is the fraction of labelled keypoints within 5% of the box size of the predicted keypoint:
+
+```sh
+cd pose_estimation
+python src/validate.py
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints each item's result and the overall accuracy; `--metrics-out` records it as the `accuracy` metric next to the performance metrics of `src/infer.py`. There is no pass mark: the score is there so you can weigh accuracy against speed (e.g. between model variants). Run `python src/validate.py -h` to see all available validation options.

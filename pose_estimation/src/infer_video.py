@@ -1,23 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from pose_estimation.setup_demo import (
     download_pose_estimation,
     ensure_pose_estimation_models,
     local_pose_model_path,
 )
-from utils.runtime import (
-    build_runtime_flags,
-    cleanup_npu_after_inference,
-    run_profile_if_requested,
-    setup_npu_and_runner,
-)
-from utils.video import build_video_argparser, run_video_inference_loop
+from utils.runtime import Model, RuntimeConfig, npu_clock, run_profile_if_requested
+from utils.video import build_video_argparser, run_video_inference_loop, setup_display_and_camera
 from utils.pose_estimation import (
     annotate_pose_frame,
     dequantize_out,
@@ -25,18 +17,19 @@ from utils.pose_estimation import (
     preprocess_frame_cv,
 )
 from utils.log import configure_logging
+from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 
 
-def make_process_fn(runner):
+def make_process_fn(model):
     def process_fn(bgr_frame):
         input_data, pad_info, orig_shape = preprocess_frame_cv(bgr_frame)
-        raw_out = runner.infer(input_data)
+        raw_out = model.run(input_data)[0]
         outputs = dequantize_out(raw_out, 0.0056150914169847965, -117)
         detections = postprocess_pose(outputs, orig_shape, pad_info)
         annotated, frame_detections = annotate_pose_frame(bgr_frame, detections)
         log_str = f"Poses: {len(detections)}"
-        return annotated, frame_detections, runner.infer_time_ms, log_str
+        return annotated, frame_detections, model.infer_time_ms, log_str
     return process_fn
 
 
@@ -48,7 +41,7 @@ def main():
         model_help="Path to the model VMFB (default: the one setup_demo.py downloaded)",
     )
     args = parser.parse_args()
-    configure_logging("INFO")
+    configure_logging(args.logging)
 
     if args.model is None:
         args.model = str(
@@ -65,16 +58,16 @@ def main():
         )
 
     ensure_pose_estimation_models(Path(args.model).parent, refresh=not args.no_refresh)
-    runtime_flags = build_runtime_flags(args.tda, args.runtime_flags)
+    runtime = RuntimeConfig.from_args(args)
 
-    if run_profile_if_requested(args, runtime_flags):
+    if run_profile_if_requested(args, runtime):
         return
 
-    runner = setup_npu_and_runner(args, runtime_flags)
-    try:
-        run_video_inference_loop(args, make_process_fn(runner), "Pose Estimation")
-    finally:
-        cleanup_npu_after_inference()
+    with npu_clock():
+        setup_display_and_camera(args)
+        model = Model(args.model, runtime)
+        with MetricsRun(args.metrics_out) as m:
+            run_video_inference_loop(args, make_process_fn(model), "Pose Estimation", metrics=m)
 
 
 if __name__ == "__main__":

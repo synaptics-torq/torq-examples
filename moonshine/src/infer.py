@@ -1,29 +1,22 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
 import logging
 import os
-import sys
-from pathlib import Path
 from typing import NamedTuple
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 import soundfile as sf
 from tokenizers import Tokenizer
 
-from runner import MoonshineRunner
 from moonshine.setup_demo import (
     download_moonshine,
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
-from utils.inference import add_common_inference_args
-from utils.log import configure_logging
-from utils.model_setup import resolve_default_model
-from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
+from moonshine.src.runner import MoonshineRunner
+from utils.runtime import add_common_inference_args
+from utils.tasks.automatic_speech_recognition import infer_main
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -34,7 +27,7 @@ class TranscriptionResult(NamedTuple):
     audio_duration_ms: float
 
 
-def _transcribe(
+def transcribe_wav(
     wav: str | os.PathLike,
     runner: MoonshineRunner,
     tokenizer: Tokenizer,
@@ -48,13 +41,16 @@ def _transcribe(
     return TranscriptionResult(text, audio_duration_ms)
 
 
-def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
+def _print_result(result: TranscriptionResult, runner: MoonshineRunner, metrics=None) -> None:
     ttft = runner.time_to_first_token
     total = runner.last_infer_time
     decode_ms = total - ttft
     decode_tokens = max(0, runner.generated_tokens - 1)
     tps = decode_tokens / decode_ms * 1000 if decode_ms > 0 else 0
     rtf = total / result.audio_duration_ms if result.audio_duration_ms > 0 else 0
+    if metrics is not None:
+        metrics.add("latency", int(total * 1e6))
+        metrics.add("real_time_factor", rtf * 100)
     print(
         f"{GREEN}Transcribed: {result.text}{RESET}"
         f"  ({total:.0f} ms, TTFT: {ttft:.0f} ms, "
@@ -62,41 +58,7 @@ def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
     )
 
 
-def main(args: argparse.Namespace):
-    logger = logging.getLogger("Moonshine")
-    logger.info("Starting demo...")
-
-    ensure_moonshine_models(args.model_dir, refresh=not args.no_refresh)
-
-    setup_npu_for_inference()
-
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
-    device_io = args.device_io or args.tda == "dmabuf"
-    runner = MoonshineRunner(
-        args.model_dir,
-        n_threads=args.threads,
-        runtime_flags=runtime_flags,
-        device_io=device_io,
-    )
-
-    tokenizer_path = args.tokenizer
-    if tokenizer_path is None:
-        candidate = os.path.join(args.model_dir, "tokenizer.json")
-        tokenizer_path = candidate if os.path.isfile(candidate) else "tokenizer.json"
-    tokenizer = Tokenizer.from_file(tokenizer_path)
-
-    try:
-        for wav in args.inputs:
-            result = _transcribe(wav, runner, tokenizer)
-            _print_result(result, runner)
-    except KeyboardInterrupt:
-        logger.info("Stopped by user.")
-    finally:
-        cleanup_npu_after_inference()
-
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Run Moonshine speech-to-text inference.")
+def add_args(parser) -> None:
     parser.add_argument(
         "inputs",
         type=str,
@@ -119,25 +81,41 @@ if __name__ == "__main__":
         metavar="PATH",
         help="Path to tokenizer.json (default: auto-detect in model dir)",
     )
-    add_common_inference_args(
-        parser,
-        tda_default="dmabuf",
-        device_io_default=False,
-        device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
+    add_common_inference_args(parser)
+
+
+def make_runner(args, runtime):
+    model = MoonshineRunner(args.model_dir, runtime=runtime)
+    tokenizer_path = args.tokenizer
+    if tokenizer_path is None:
+        candidate = os.path.join(args.model_dir, "tokenizer.json")
+        tokenizer_path = candidate if os.path.isfile(candidate) else "tokenizer.json"
+    return model, Tokenizer.from_file(tokenizer_path)
+
+
+def loop(runner, args, metrics) -> None:
+    logging.getLogger("Moonshine").info("Starting demo...")
+    model, tokenizer = runner
+    try:
+        for wav in args.inputs:
+            result = transcribe_wav(wav, model, tokenizer)
+            _print_result(result, model, metrics)
+    except KeyboardInterrupt:
+        logging.getLogger("Moonshine").info("Stopped by user.")
+
+
+if __name__ == "__main__":
+    infer_main(
+        make_runner,
+        loop,
+        description="Run Moonshine speech-to-text inference.",
+        demo="moonshine",
+        local_model=local_moonshine_model_dir,
+        ensure_models=ensure_moonshine_models,
+        download=download_moonshine,
+        add_args=add_args,
+        message=(
+            "no local Moonshine model found; pass -m/--model-dir or run "
+            "`python setup_demos.py moonshine` from torq-examples root"
+        ),
     )
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model_dir is None:
-        args.model_dir = str(
-            resolve_default_model(
-                parser,
-                local_moonshine_model_dir,
-                download=download_moonshine,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local Moonshine model found; pass -m/--model-dir or run "
-                    "`python setup_demos.py moonshine` from torq-examples root"
-                ),
-            )
-        )
-    main(args)

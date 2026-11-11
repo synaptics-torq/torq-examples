@@ -1,0 +1,352 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
+
+"""Host tests for the ``text_generation`` task category: the shared LLM
+constructor kwargs, the degenerate-output detector, the ported corpus
+BLEU, the answer extractors and dataset loaders, and the validate modes end
+to end (exit code, printed accuracy, metrics JSON) with fake dataset rows in
+place of the download."""
+
+import argparse
+import json
+import sys
+from unittest import mock
+
+import pytest
+
+from utils.inference import ContextOverflow, add_llm_inference_args
+from utils.tasks import text_generation as tg
+from utils.tasks.text_generation import corpus_bleu, is_degenerate, llm_kwargs, normalize_translation
+
+
+class _FakeRunner:
+    """A scripted LLM runner: ``run`` returns the next answer in order
+    (an exception in the script is raised instead)."""
+
+    last_infer_time = 123.4
+    time_to_first_token = 10.0
+    generated_tokens = 5
+
+    def __init__(self, answers):
+        self._answers = iter(answers)
+        self.prompts = []
+
+    def reset(self):
+        pass
+
+    def run(self, prompt, should_stop=None):
+        answer = next(self._answers)
+        if isinstance(answer, Exception):
+            raise answer
+        self.prompts.append(prompt)
+        return answer
+
+
+# ── llm_kwargs ───────────────────────────────────────────────────────────────
+
+
+def _args(**overrides):
+    parser = argparse.ArgumentParser()
+    add_llm_inference_args(parser)
+    args = parser.parse_args([])
+    for key, value in overrides.items():
+        setattr(args, key, value)
+    return args
+
+
+def test_llm_kwargs_mapping():
+    args = _args(
+        max_seq_len=512, max_inp_len=128, max_gen_tokens=64,
+        temperature=0.7, top_p=0.9, top_k=40,
+        lm_head="h.vmfb", batch_prefill_model="p.vmfb", kv_cache_window=3, max_cache_rolls=5,
+    )
+    assert llm_kwargs(args) == dict(
+        max_seq_len=512,
+        max_prompt_tokens=128,
+        cache_keep_n=3,
+        temperature=0.7,
+        top_p=0.9,
+        top_k=40,
+        max_gen_tokens=64,
+        max_cache_rolls=5,
+        truncate_prompts=True,
+        lm_head_path="h.vmfb",
+        disable_lm_head=False,
+        prefill_model_path="p.vmfb",
+        disable_prefill=False,
+    )
+
+
+def test_llm_kwargs_no_kv_window_disables_cache_keep_n():
+    assert llm_kwargs(_args(no_kv_cache_window=True))["cache_keep_n"] is None
+
+
+def test_llm_kwargs_flags_a_demo_disabled_fall_back_to_defaults():
+    # functiongemma disables the instruct/kv-window/max-inp-len flags.
+    parser = argparse.ArgumentParser()
+    add_llm_inference_args(parser, with_instruct=False, with_kv_window=False,
+                           with_max_inp_len=False)
+    kwargs = llm_kwargs(parser.parse_args([]))
+    assert kwargs["max_prompt_tokens"] is None
+    assert kwargs["cache_keep_n"] is None
+    assert kwargs["temperature"] == 0.0
+    assert kwargs["disable_lm_head"] is False
+
+
+# ── degenerate detector ──────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("answer", [
+    "the the the the the the the the the the",  # one 6-gram, all of them
+    "Paris " * 20,  # a repeated word loop
+    "a" * 20,  # one character 20 times in a row
+    "no\n" * 25,  # a repeated line
+])
+def test_is_degenerate_repetition(answer):
+    assert is_degenerate(answer)
+
+
+@pytest.mark.parametrize("answer", [
+    "",
+    "The capital of France is Paris.",  # 6 words: a single, unrepeated 6-gram
+    "It was written by a famous playwright from England.",
+    "a" * 19,
+])
+def test_is_degenerate_normal_answers(answer):
+    assert not is_degenerate(answer)
+
+
+# ── corpus BLEU (ported from gemma3/src/validate.py) ─────────────────────────
+
+
+def test_corpus_bleu_perfect_match_is_100():
+    assert corpus_bleu(["the quick brown fox"], ["the quick brown fox"]) == pytest.approx(100.0)
+
+
+def test_corpus_bleu_zero_on_empty_or_no_overlap():
+    assert corpus_bleu([], ["a reference sentence here"]) == 0.0
+    assert corpus_bleu(["a b c d"], ["w x y z"]) == 0.0
+
+
+def test_corpus_bleu_short_hypothesis_is_zero():
+    # The single-reference implementation has no order-skipping: fewer than
+    # max_n tokens in the whole corpus leaves a zero order.
+    assert corpus_bleu(["hello world foo"], ["hello world foo"]) == 0.0
+
+
+def test_corpus_bleu_partial_overlap_between_zero_and_100():
+    assert 0 < corpus_bleu(
+        ["the cat sat on the mat"], ["the cat sat on the rug"]
+    ) < 100
+
+
+def test_normalize_translation_strips_preamble_and_wrappers():
+    assert normalize_translation('Here is the translation: "Buenos días."') == "Buenos días."
+    assert normalize_translation("**Hola**") == "Hola"
+
+
+# ── answer extractors and loaders ────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("answer,expected", [
+    ("B", "B"), ("b) because", "B"), ("(C) the third", "C"), ("The answer is D.", "D"),
+    ("Answer: A", "A"), ("I think A is right", "A"), ("none of them", None),
+])
+def test_first_choice_letters(answer, expected):
+    assert tg.first_choice(answer, "ABCD") == expected
+
+
+def test_first_choice_digits():
+    assert tg.first_choice("2. Use a fork", "12") == "2"
+    assert tg.first_choice("Solution 1 works", "12") == "1"
+    assert tg.first_choice("3", "12") is None
+
+
+def test_last_number():
+    assert tg.last_number("2 + 3 = 5, so she earns $1,234.50") == 1234.5
+    assert tg.last_number("no digits") is None
+
+
+def _fetch(rows_by_dataset):
+    def fetch_rows(dataset, *, config, split, samples, offset=0):
+        return rows_by_dataset[dataset][offset:offset + samples]
+    return fetch_rows
+
+
+def test_piqa_mmlu_pro_and_opus100_loaders():
+    rows = {
+        "baber/piqa": [{"goal": "Dry a phone", "sol1": "Rice", "sol2": "Water", "label": 0}],
+        "TIGER-Lab/MMLU-Pro": [{"question_id": 7, "question": "2+2?", "options": ["3", "4", "5"], "answer": "B"}],
+        "Helsinki-NLP/opus-100": [{"translation": {"en": "Hello", "es": "Hola"}}],
+    }
+    with mock.patch.object(tg, "fetch_rows", _fetch(rows)):
+        (piqa,) = tg.LOADERS["baber/piqa"]({"dataset": "baber/piqa", "config": "default", "split": "validation", "samples": 5, "offset": 0})
+        (mmlu,) = tg.LOADERS["TIGER-Lab/MMLU-Pro"]({"dataset": "TIGER-Lab/MMLU-Pro", "config": "default", "split": "test", "samples": 5, "offset": 0})
+        (opus,) = tg.LOADERS["Helsinki-NLP/opus-100"]({"dataset": "Helsinki-NLP/opus-100", "config": "es-en", "split": "test", "samples": 5, "offset": 0})
+    assert "1. Rice\n2. Water" in piqa["prompt"] and piqa["expected"] == "1"
+    assert piqa["check"]("1") and not piqa["check"]("2")
+    assert "A. 3\nB. 4\nC. 5" in mmlu["prompt"] and mmlu["check"]("B") and not mmlu["check"]("D")
+    assert opus == {"name": "Helsinki-NLP/opus-100 #0", "src": "Hola", "tgt": "Hello", "tgt_lang": "English"}
+
+
+# ── validate modes end to end ────────────────────────────────────────────────
+
+VALIDATION = [{"dataset": "openai/gsm8k", "config": "main", "split": "test", "samples": 10}]
+GSM8K = [
+    {"question": "Tom has 2 apples and buys 3. How many?", "answer": "2 + 3 = 5\n#### 5"},
+    {"question": "A shirt costs $1,000 twice. Total?", "answer": "2 * 1000\n#### 2,000"},
+]
+
+
+def _run_validate_main(tmp_path, answers, argv=(), rows=None, loaders=None):
+    metrics_out = tmp_path / "metrics.json"
+    runner = _FakeRunner(answers)
+    made = {}
+
+    def make_runner(args, runtime):
+        made["temperature"] = args.temperature
+        made["truncate_prompts"] = args.truncate_prompts
+        made["mode"] = args.mode
+        return runner
+
+    rows = rows or {"openai/gsm8k": GSM8K}
+    with mock.patch.object(tg, "fetch_rows", _fetch(rows)), mock.patch.object(sys, "argv", [
+        "validate.py",
+        "-m", str(tmp_path / "model.vmfb"),
+        "--no-refresh",
+        "--metrics-out", str(metrics_out),
+        *argv,
+    ]):
+        try:
+            tg.validate_main(
+                make_runner,
+                demo="test",
+                validation=VALIDATION,
+                local_model=lambda: None,
+                ensure_models=lambda model_dir, **kwargs: None,
+                loaders=loaders,
+            )
+            code = 0
+        except SystemExit as e:
+            code = e.code
+    return code, metrics_out, made, runner
+
+
+def test_validate_prompts_scores_against_the_labels_and_writes_metrics(tmp_path, capsys):
+    code, metrics_out, made, runner = _run_validate_main(
+        tmp_path, ["2 + 3 = 5\nThe answer is 5.", "It costs a lot."],
+    )
+    out = capsys.readouterr().out
+    assert code == 0  # no pass mark: the accuracy is reported, never a verdict
+    assert made["temperature"] == 0.0  # greedy decoding forced
+    assert made["truncate_prompts"] is False  # a prompt that does not fit is skipped
+    assert made["mode"] == "prompts"
+    assert runner.prompts[0].startswith("Tom has 2 apples")
+    assert "  [PASS] openai/gsm8k #0" in out
+    assert "  [FAIL] openai/gsm8k #1" in out
+    assert "(expected '2000')" in out
+    assert out.rstrip().endswith("accuracy=0.5000")
+    doc = json.loads(metrics_out.read_text())
+    assert doc["measurements"]["accuracy"] == 50.0
+    assert doc["measurements"]["time_to_first_token"] == 10_000_000.0  # 10 ms in ns
+    assert doc["measurements"]["tokens_per_second"] == pytest.approx(5 / (123.4 - 10.0) * 1000)
+    assert "cpu_load" in doc["measurements"]
+
+
+def test_validate_prompts_last_number_ignores_thousands_separators(tmp_path, capsys):
+    _run_validate_main(tmp_path, ["5", "So the total is 2,000"])
+    assert capsys.readouterr().out.rstrip().endswith("accuracy=1.0000")
+
+
+def test_validate_prompts_degenerate_answer_counts_as_fail(tmp_path, capsys):
+    _run_validate_main(tmp_path, ["5 " * 12, "2000"])
+    out = capsys.readouterr().out
+    assert out.count("[FAIL]") == 1  # only the repeated-word answer
+    assert out.rstrip().endswith("accuracy=0.5000")
+
+
+def test_validate_bleu_defaults_to_opus100(tmp_path, capsys):
+    rows = {"Helsinki-NLP/opus-100": [{"translation": {"en": "Good morning", "es": "Buenos días amigo mío"}}]}
+    code, metrics_out, made, runner = _run_validate_main(
+        tmp_path, ["Buenos días amigo mío"], argv=["--mode", "bleu"], rows=rows,
+    )
+    out = capsys.readouterr().out
+    assert made["mode"] == "bleu"
+    assert runner.prompts == ['Translate to Spanish: "Good morning"']
+    assert "Corpus BLEU-4: 100.00" in out
+    assert out.rstrip().endswith("bleu=1.0000")
+    assert json.loads(metrics_out.read_text())["measurements"]["bleu"] == 100.0
+    assert code == 0
+
+
+def test_validate_mode_needs_a_matching_dataset(tmp_path, capsys):
+    code, _, _, _ = _run_validate_main(
+        tmp_path, [], argv=["--mode", "bleu", "--dataset", "openai/gsm8k", "--config", "main", "--split", "test"],
+    )
+    assert code == 2
+    assert "--mode bleu needs a translation dataset" in capsys.readouterr().err
+
+
+def test_validate_skips_items_that_do_not_fit(tmp_path, capsys):
+    def too_big(runner):
+        raise ContextOverflow("Developer tool block exceeds --max-inp-len")
+
+    rows = [
+        {"name": "tools", "prompt": "p", "expected": "-", "check": lambda a: True, "prepare": too_big},
+        {"name": "long", "prompt": "p", "expected": "-", "check": lambda a: True},
+        *({"name": f"ok{i}", "prompt": "p", "expected": "-", "check": lambda a: True} for i in range(3)),
+    ]
+    loaders = {"x/tools": lambda spec: [dict(r) for r in rows[spec["offset"]:spec["offset"] + spec["samples"]]]}
+    code, metrics_out, _, runner = _run_validate_main(
+        tmp_path, [ContextOverflow("prompt of 300 tokens exceeds the 256-token KV cache"), "fine", "fine", "fine"],
+        argv=["--dataset", "x/tools", "--samples", "3"], loaders=loaders,
+    )
+    out = capsys.readouterr().out
+    assert "  [SKIP] tools (Developer tool block exceeds --max-inp-len)" in out
+    assert "  [SKIP] long (prompt of 300 tokens exceeds the 256-token KV cache)" in out
+    assert all(f"  [PASS] ok{i}" in out for i in range(3))  # the next rows replace the skipped ones
+    assert out.rstrip().endswith("accuracy=1.0000")  # skipped items are left out of the score
+    doc = json.loads(metrics_out.read_text())
+    assert doc["validation"][0]["rows"] == [2, 3, 4]
+    assert doc["measurements"]["accuracy"] == 100.0
+    assert code == 0
+
+
+def test_validate_rows_replays_the_recorded_rows(tmp_path, capsys):
+    def too_big(runner):
+        raise ContextOverflow("Developer tool block exceeds --max-inp-len")
+
+    rows = [{"name": f"r{i}", "prompt": "p", "expected": "-", "check": lambda a: True} for i in range(6)]
+    rows[3]["prepare"] = too_big
+    loads = []
+
+    def loader(spec):
+        loads.append((spec["offset"], spec["samples"]))
+        return [dict(r) for r in rows[spec["offset"]:spec["offset"] + spec["samples"]]]
+
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(json.dumps({"validation": [
+        {"dataset": "x/tools", "config": "c", "split": "s", "samples": 4, "rows": [0, 2, 3, 5]},
+    ]}))
+    code, metrics_out, _, _ = _run_validate_main(
+        tmp_path, ["fine"] * 3, argv=["--rows", str(recorded)], loaders={"x/tools": loader},
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert loads == [(0, 1), (2, 2), (5, 1)]  # one load per run of consecutive rows
+    assert "  [SKIP] r3 (Developer tool block exceeds --max-inp-len)" in out
+    assert "r4" not in out  # a replayed run never substitutes rows
+    assert json.loads(metrics_out.read_text())["validation"] == [
+        {"dataset": "x/tools", "config": "c", "split": "s", "samples": 4, "rows": [0, 2, 5]},
+    ]
+
+
+@pytest.mark.parametrize("extra, error", [
+    (["--samples", "3"], "--rows cannot be combined with --dataset, --config, --split or --samples"),
+    ([], "no recorded validation rows"),
+])
+def test_validate_rows_errors(tmp_path, extra, error):
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(json.dumps({"validation": [{"dataset": "openai/gsm8k"}]}))  # no rows
+    code, _, _, _ = _run_validate_main(tmp_path, [], argv=["--rows", str(recorded), *extra])
+    assert error in code

@@ -3,26 +3,27 @@
 
 from __future__ import annotations
 
+"""Chat LLMs on the Torq NPU: ``LLM`` (turns, warm-up prefix, rolling KV
+window, text streaming) on top of ``utils.decoder.Decoder``, and
+``ChatTemplate``, the data that tells chat formats apart.
+"""
+
 import json
 import logging
 import os
 import time
-from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sized
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import ml_dtypes
 import numpy as np
 from tokenizers import Tokenizer
 
-from utils.inference import (
-    InferenceInterrupted,
-    ManagedSelfAttnCacheRunner,
-    SplitLMHeadRunner,
-    StopCheck,
-    _raise_if_stopped,
-)
+from utils.cache import KVCache
+from utils.decoder import Decoder, generate, sample
+from utils.inference import ContextOverflow, StopCheck
+from utils.runtime import Model, RuntimeConfig, load_lut
 
 
 _SIDECAR_SUFFIXES: Final[frozenset[str]] = frozenset(
@@ -188,236 +189,195 @@ def resolve_token_id_lut(
     return token_id_lut
 
 
-def _tensor_signature(info) -> tuple[tuple, object]:
-    """Comparable (shape, dtype) signature of a tensor metadata entry."""
-    try:
-        dtype = np.dtype(info.dtype)
-    except (AttributeError, TypeError, ValueError):
-        dtype = str(info.dtype)
-    return tuple(info.shape), dtype
+
+@dataclass(frozen=True)
+class ChatTemplate:
+    """How an instruct model's chat turns are written.
+
+    ``turn`` formats one message from ``{role}`` and ``{text}``;
+    ``generation_prompt`` opens the model's answer. ``bos_prefix`` starts the
+    warm-up (system prompt) with the BOS token, ``strip_bos`` drops a BOS the
+    tokenizer prepends to every encode, and ``stop_tokens`` end an answer in
+    addition to the config's ``eos_token_id``.
+    """
+
+    turn: str
+    generation_prompt: str
+    bos_prefix: bool = False
+    strip_bos: bool = False
+    stop_tokens: tuple[str, ...] = ()
 
 
-def _tensor_signature_matches(a, b) -> bool:
-    return _tensor_signature(a) == _tensor_signature(b)
+GEMMA = ChatTemplate(
+    turn="<start_of_turn>{role}\n{text}<end_of_turn>\n",
+    generation_prompt="<start_of_turn>model\n",
+    bos_prefix=True,
+    strip_bos=True,
+    stop_tokens=("<end_of_turn>",),
+)
+CHATML = ChatTemplate(
+    turn="<|im_start|>{role}\n{text}<|im_end|>\n",
+    generation_prompt="<|im_start|>assistant\n",
+    stop_tokens=("<|im_end|>", "<|endoftext|>"),
+)
 
 
-def _tensor_info(info) -> str:
-    """Short "shape/dtype" description of a tensor metadata entry."""
-    shape, dtype = _tensor_signature(info)
-    return f"shape={shape}, dtype={dtype}"
+class LLM:
+    """A chat LLM: a ``Decoder`` plus conversation state.
 
+    The model files next to *model_path* are picked up automatically: a split
+    LM head (``lm_head.vmfb``), a batched prefill model
+    (``transformer_prefill.vmfb``), the CPU embedding table
+    (``token_embeddings.npy``), the trimmed-vocabulary map
+    (``token_id_lut.npy``), ``config.json`` and ``tokenizer.json``.
 
-class DecoderOnlyLLMRunner(ABC):
-    """Shared runner for decoder-only LLM VMFBs with managed KV cache."""
+    *template* is the model family's chat format. With *chat* (an instruct
+    model) prompts are wrapped in chat turns and the system prompt is
+    prefilled once as a warm-up prefix that every conversation reuses.
+    Otherwise (a base model) the text is completed as is, and an answer also
+    stops at a blank line; the template's stop tokens apply either way.
 
-    __slots__ = (
-        "_logger",
-        "_debug_logging",
-        "_model",
-        "_model_dir",
-        "_config",
-        "_tokenizer",
-        "_max_prompt_tokens",
-        "_max_seq_len",
-        "_max_user_tokens",
-        "_max_gen_tokens",
-        "_temperature",
-        "_top_p",
-        "_top_k",
-        "_bos_token_id",
-        "_eos_token_id",
-        "_eos_token_ids",
-        "_bos_token",
-        "_eos_token",
-        "_reset_cache_state",
-        "_warmup_len",
-        "_token_embeddings",
-        "_token_id_lut",
-        "_pos_buf",
-        "_emb_buf",
-        "_id_buf",
-        "_extra_step_inputs",
-        "_cache_keep_n",
-        "_cache_tokens",
-        "_turn_pos",
-        "_pending_token",
-        "_n_tokens_gen",
-        "_last_infer_ns",
-        "_time_to_first_token_ns",
-        "_start_time_ns",
-        "_prefill_model",
-        "_prefill_size",
-        "_prefill_emb_buf",
-        "_prefill_id_buf",
-    )
+    The KV cache is shared across turns, so later turns see the earlier ones.
+    When the conversation no longer fits, the cache rolls: it keeps the
+    warm-up prefix plus the last *cache_keep_n* tokens, replayed at their new
+    positions (cached keys carry positional encodings, so moving them is not
+    enough). Without a window the conversation restarts after the prefix.
+    """
 
     def __init__(
         self,
         model_path: str | os.PathLike,
+        runtime: RuntimeConfig,
+        *,
+        template: ChatTemplate | None = None,
+        chat: bool = True,
+        sys_prompt: str | None = None,
         max_seq_len: int | None = None,
         max_prompt_tokens: int | None = None,
-        n_threads: int | None = None,
-        *,
         cache_keep_n: int | None = None,
         temperature: float = 0.0,
         top_p: float = 1.0,
         top_k: int = 64,
         max_gen_tokens: int | None = None,
-        runtime_flags: list[str] | None = None,
-        device_io: bool = False,
+        max_cache_rolls: int | None = None,
+        truncate_prompts: bool = True,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
         disable_prefill: bool = False,
     ) -> None:
         self._logger = logging.getLogger(self.__class__.__name__)
-        self._debug_logging = self._logger.isEnabledFor(logging.DEBUG)
-
-        lm_head_path = resolve_lm_head_path(
-            model_path,
-            lm_head_path,
-            disable_lm_head=disable_lm_head,
-            logger=self._logger,
-        )
-        prefill_path = resolve_prefill_model_path(
-            model_path,
-            prefill_model_path,
-            disable_prefill=disable_prefill,
-            logger=self._logger,
-        )
-        self._model = ManagedSelfAttnCacheRunner(
-            model_path,
-            n_threads=n_threads,
-            runtime_flags=runtime_flags,
-            device_io=device_io,
-        )
-        if lm_head_path is not None:
-            self._model = SplitLMHeadRunner(
-                self._model,
-                lm_head_path,
-                n_threads=n_threads,
-                runtime_flags=runtime_flags,
-            )
-
-        self._validate_decode_model()
-        model_seq_len = self._query_model_seq_len()
-        if max_seq_len is not None and model_seq_len is not None:
-            if max_seq_len != model_seq_len:
-                self._logger.warning(
-                    "max_seq_len=%d does not match model KV cache dim=%d; using %d",
-                    max_seq_len,
-                    model_seq_len,
-                    model_seq_len,
-                )
-            max_seq_len = model_seq_len
-        elif max_seq_len is None and model_seq_len is not None:
-            max_seq_len = model_seq_len
-            self._logger.debug("Derived max_seq_len=%d from model metadata", max_seq_len)
-        elif max_seq_len is None:
-            raise ValueError(
-                "Cannot determine max_seq_len: model has no reflection metadata. "
-                "Pass max_seq_len explicitly."
-            )
-
-        self._model_dir = Path(self._model.model_path).parent
-        with open(self._model_dir / "config.json") as f:
-            self._config = json.load(f)
-
-        self._bos_token_id = self._config["bos_token_id"]
-        # Checkpoints may list several stop IDs (FunctionGemma: [1, 50],
-        # where 50 is <start_function_response>); keep the first for display
-        # and honor every configured stop.
-        eos_token_id = self._config["eos_token_id"]
-        self._eos_token_ids = eos_token_id if isinstance(eos_token_id, list) else [eos_token_id]
-        self._eos_token_id = self._eos_token_ids[0]
-        self._tokenizer = Tokenizer.from_file(str(self._model_dir / "tokenizer.json"))
-        self._bos_token = self._tokenizer.decode(
-            [self._bos_token_id], skip_special_tokens=False
-        )
-        self._eos_token = self._tokenizer.decode(
-            [self._eos_token_id], skip_special_tokens=False
-        )
-
+        self._template = template
+        self._chat = chat and template is not None
+        self._sys_prompt = sys_prompt
         self._max_prompt_tokens = max_prompt_tokens
-        self._max_seq_len = max_seq_len
         self._max_user_tokens = None
         self._max_gen_tokens = max_gen_tokens
+        self._max_cache_rolls = max_cache_rolls
+        self._truncate_prompts = truncate_prompts
+        self._rolls = 0  # mid-answer window rolls in the current answer
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
         self._top_k = top_k
 
-        self._on_model_config_loaded(self._config)
+        model_dir = Path(model_path).parent
+        with open(model_dir / "config.json") as f:
+            self._config = json.load(f)
+        self._tokenizer = Tokenizer.from_file(str(model_dir / "tokenizer.json"))
+        self._bos_token_id = self._config["bos_token_id"]
+        # Checkpoints may list several stop IDs (FunctionGemma: [1, 50]).
+        eos = self._config["eos_token_id"]
+        self._eos_token_ids = eos if isinstance(eos, list) else [eos]
+        stop_ids = [self._tokenizer.token_to_id(t) for t in (template.stop_tokens if template else ())]
+        self._stop_ids = set(self._eos_token_ids) | {i for i in stop_ids if i is not None}
+        self._nl_token_id = self._tokenizer.encode("\n").ids[-1]
+        self._double_nl_token_id = self._tokenizer.encode("\n\n").ids[-1]
 
-        self._token_embeddings = self._load_embeddings()
-        self._token_id_lut = resolve_token_id_lut(
-            self._query_logits_size(),
-            self._config.get("vocab_size"),
-            self._load_token_id_lut(),
-            self._logger,
+        self._decoder, self._cache = self._load_decoder(
+            model_path, model_dir, runtime, lm_head_path, disable_lm_head,
+            prefill_model_path, disable_prefill,
         )
-        if self._token_id_lut is not None:
-            self._logger.info(
-                "Loaded token ID LUT (%d entries) for trimmed vocab remap",
-                len(self._token_id_lut),
-            )
+        self._max_seq_len = self._resolve_max_seq_len(max_seq_len, self._decoder.seq_len)
 
-        self._init_step_buffers()
-
-        self._prefill_model = None
-        self._prefill_size = None
-        self._prefill_emb_buf = None
-        self._prefill_id_buf = None
-        if prefill_path is not None:
-            self._setup_prefill_model(prefill_path, n_threads, runtime_flags, device_io)
-            prefill_token_info = self._prefill_model.inputs_info[0]
-            if self._token_embeddings is not None:
-                self._prefill_emb_buf = np.zeros(
-                    (1, self._prefill_size, self._token_embeddings.shape[-1]),
-                    dtype=np.dtype(prefill_token_info.dtype),
-                )
-            else:
-                self._prefill_id_buf = np.zeros(
-                    prefill_token_info.shape, dtype=np.dtype(prefill_token_info.dtype)
-                )
-        else:
-            self._logger.debug(
-                "No batched prefill model available; prompts will be "
-                "prefilled with single-token decode steps."
-            )
-
+        self._pending_token = None  # predicted, but not yet in the KV cache
+        self._cache_tokens: list[int] = []  # the tokens in the KV cache, in order
         self._turn_pos = 0
-        self._pending_token = None
-        self._cache_tokens = []
         self._warmup_len = self._warmup()
-        if self._warmup_len > 0:
-            self._reset_cache_state = self._model.save_kv_state()
-        else:
-            self._reset_cache_state = []
+        self._warmup_state = self._cache.snapshot() if self._warmup_len else None
         self._turn_pos = self._warmup_len
-        if (
-            self._cache_keep_n is not None
-            and self._warmup_len + self._cache_keep_n >= self._max_seq_len
-        ):
+        if cache_keep_n is not None and self._warmup_len + cache_keep_n >= self._max_seq_len:
             self._logger.warning(
                 "kv-cache-window (%d) plus warm-up (%d) fills the %d-token KV "
                 "cache; fewer history tokens will be retained to make room "
                 "for new tokens.",
-                self._cache_keep_n,
-                self._warmup_len,
-                self._max_seq_len,
+                cache_keep_n, self._warmup_len, self._max_seq_len,
             )
 
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
-        self._start_time_ns = 0
-
         self._logger.info("Loaded model '%s'", str(model_path))
-        if self._debug_logging:
-            self._logger.warning(
-                "DEBUG logging enabled: inference time metrics may be inflated"
+        if self._logger.isEnabledFor(logging.DEBUG):
+            self._logger.warning("DEBUG logging enabled: inference time metrics may be inflated")
+
+    def _load_decoder(
+        self, model_path, model_dir, runtime, lm_head_path, disable_lm_head,
+        prefill_model_path, disable_prefill,
+    ) -> tuple[Decoder, KVCache]:
+        head_path = resolve_lm_head_path(
+            model_path, lm_head_path, disable_lm_head=disable_lm_head, logger=self._logger
+        )
+        prefill_path = resolve_prefill_model_path(
+            model_path, prefill_model_path, disable_prefill=disable_prefill, logger=self._logger
+        )
+        body = Model(model_path, runtime, device_outputs=True)
+        head = Model(head_path, runtime, device_outputs=True) if head_path else None
+        prefill = Model(prefill_path, runtime, device_outputs=True) if prefill_path else None
+
+        emb_path = model_dir / "token_embeddings.npy"
+        lut_path = model_dir / "token_id_lut.npy"
+        logits = (head or body).outputs_info
+        logits_size = logits[0].shape[-1] if logits and isinstance(logits[0].shape[-1], int) else None
+        vocab_lut = resolve_token_id_lut(
+            logits_size,
+            self._config.get("vocab_size"),
+            np.load(lut_path) if lut_path.exists() else None,
+            self._logger,
+        )
+        if vocab_lut is not None:
+            self._logger.info("Loaded token ID LUT (%d entries) for trimmed vocab remap", len(vocab_lut))
+
+        cache = KVCache(body)
+        decoder = Decoder(
+            body, cache, head=head, prefill=prefill,
+            embed_lut=load_lut(emb_path) if emb_path.exists() else None,
+            vocab_lut=vocab_lut,
+        )
+        if prefill is not None:
+            self._logger.info(
+                "Loaded %d-token batched prefill model '%s'", decoder.prefill_size, str(prefill_path)
             )
+        return decoder, cache
+
+    def _resolve_max_seq_len(self, requested: int | None, model_seq_len: int | None) -> int:
+        if model_seq_len is None:
+            if requested is None:
+                raise ValueError(
+                    "Cannot determine max_seq_len: model has no reflection metadata. "
+                    "Pass max_seq_len explicitly."
+                )
+            return requested
+        if requested is not None and requested != model_seq_len:
+            self._logger.warning(
+                "max_seq_len=%d does not match model KV cache dim=%d; using %d",
+                requested, model_seq_len, model_seq_len,
+            )
+        return model_seq_len
+
+    @property
+    def is_instruct_model(self) -> bool:
+        return self._chat
 
     @property
     def max_seq_len(self) -> int:
@@ -426,7 +386,7 @@ class DecoderOnlyLLMRunner(ABC):
     @property
     def prefill_size(self) -> int | None:
         """Fixed prompt chunk size when a batched prefill model is loaded."""
-        return self._prefill_size
+        return self._decoder.prefill_size
 
     @property
     def last_infer_time(self) -> float:
@@ -440,588 +400,162 @@ class DecoderOnlyLLMRunner(ABC):
     def generated_tokens(self) -> int:
         return self._n_tokens_gen
 
-    @abstractmethod
-    def tokenize(self, text: str, role: str | None = None) -> list[int]:
-        """Tokenize text, optionally using a model-specific chat role."""
-        ...
+    # ── Text <-> tokens (the template is data; these are the hooks) ──────────
 
-    def _on_model_config_loaded(self, cfg: dict) -> None:
-        """Hook for subclasses to derive model-specific fields from config."""
+    def tokenize(self, text: str, role: str | None = None) -> list[int]:
+        """Token ids of *text*; with a *role*, of one chat turn.
+
+        The role ``"model"`` / ``"assistant"`` gives the generation prompt
+        that opens an answer (*text* is ignored).
+        """
+        if not self._chat or role is None:
+            return self._tokenizer.encode(text).ids
+        if role in ("model", "assistant"):
+            text = self._template.generation_prompt
+        else:
+            text = self._template.turn.format(role=role, text=text)
+        ids = self._tokenizer.encode(text).ids
+        if self._template.strip_bos and ids and ids[0] == self._bos_token_id:
+            ids = ids[1:]
+        return ids
 
     def _build_prompt_tokens(self, user_input: str) -> list[int]:
-        """Build prompt tokens for a single user request."""
-        return self.tokenize(user_input)
+        if not self._chat:
+            return self.tokenize(user_input)
+        return self.tokenize(user_input, "user") + self.tokenize("", "model")
 
     def _build_warmup_tokens(self) -> list[int]:
-        """Build reusable prefix tokens to prefill after cache reset."""
-        return []
+        if not self._chat:
+            return []
+        bos = [self._bos_token_id] if self._template.bos_prefix else []
+        return bos + self.tokenize(self._sys_prompt or "", "system")
+
+    def _should_stop(self, token: int, gen: list[int]) -> bool:
+        if token in self._stop_ids:
+            return True
+        if not self._chat and len(gen) > 2:
+            # A base model has no end-of-turn token: stop at a blank line.
+            if token == self._double_nl_token_id:
+                return True
+            return all(t == self._nl_token_id for t in gen[-2:])
+        return False
 
     def _decode_generated_tokens(self, tokens: list[int]) -> str:
         return self._tokenizer.decode(tokens)
 
-    def _should_stop(self, token: int, gen: list[int]) -> bool:
-        """Return True when generation should stop after *token*."""
-        return token in self._eos_token_ids
+    def _apply_prompt_limit(self, tokens: list[int]) -> list[int]:
+        """Truncate the prompt to the configured maximum input length.
 
-    def _stop(self, token: int, gen: list[int]) -> bool:
-        """Compatibility alias for older subclasses/tests."""
-        return self._should_stop(token, gen)
-
-    def _load_embeddings(self) -> np.ndarray | None:
-        paths = list(self._model_dir.glob("token_embeddings.npy"))
-        if not paths:
-            return None
-        arr = np.load(paths[0], mmap_mode="r")
-        if arr.dtype == np.dtype("V2"):
-            arr = arr.view(ml_dtypes.bfloat16)
-        return arr
-
-    def _load_token_id_lut(self) -> np.ndarray | None:
-        paths = list(self._model_dir.glob("token_id_lut.npy"))
-        if not paths:
-            return None
-        return np.load(paths[0])
-
-    def _init_step_buffers(self) -> None:
-        """Build the per-step input buffers from the model's input metadata.
-
-        Input 0 is the token input (embedding vector or token id), input 1 is
-        ``position_ids``; both shapes and dtypes are taken from the model's
-        reflection data rather than assumed. Any further non-cache inputs
-        (e.g. the fixed ``attention_mask`` of newer static exports) are
-        constant per step and are built by :meth:`_build_extra_step_inputs`.
+        Shorter prompts pass through unchanged: the static exports bake a
+        causal mask into the graph, so padding tokens would be attended over
+        and make the model emit EOS immediately. Without *truncate_prompts*,
+        a prompt that would be cut (here or to fit the KV cache) raises
+        ``ContextOverflow`` instead.
         """
-        in_info = self._model.inputs_info
-        if not in_info or len(in_info) < 2:
-            raise ValueError(
-                f"Model '{self._model.model_path}' has no input metadata; "
-                "cannot build the per-step input buffers."
-            )
-        n_user = len(in_info) - self._model.n_cache_inputs
-        if n_user < 2:
-            raise ValueError(
-                f"Model '{self._model.model_path}' has only {n_user} non-cache "
-                "input(s); expected at least (tokens, position_ids)."
-            )
-        token_info, pos_info = in_info[0], in_info[1]
-        self._pos_buf = np.zeros(pos_info.shape, dtype=np.dtype(pos_info.dtype))
-        if self._token_embeddings is not None:
-            emb_hidden = self._token_embeddings.shape[-1]
-            tok_shape = tuple(token_info.shape)
-            if (
-                len(tok_shape) >= 3
-                and isinstance(tok_shape[-1], int)
-                and tok_shape[-1] != emb_hidden
-            ):
-                raise ValueError(
-                    f"token_embeddings.npy has hidden size {emb_hidden} but the "
-                    f"model's token input expects {tok_shape[-1]} "
-                    f"(shape {tok_shape})."
-                )
-            self._emb_buf = np.zeros(
-                (1, 1, emb_hidden),
-                # The LUT may be stored at higher precision than the model's
-                # token input (e.g. an f32 embedding file for a bf16 export);
-                # the buffer follows the input the runtime actually expects
-                # and the lookup is cast on assignment.
-                dtype=np.dtype(token_info.dtype),
-            )
-            self._id_buf = None
-        else:
-            self._emb_buf = None
-            self._id_buf = np.zeros(token_info.shape, dtype=np.dtype(token_info.dtype))
-        self._extra_step_inputs = self._build_extra_step_inputs(in_info[2:n_user])
+        limit = self._max_user_tokens if self._max_user_tokens is not None else self._max_prompt_tokens
+        if isinstance(limit, int) and len(tokens) > limit:
+            if not self._truncate_prompts:
+                raise ContextOverflow(f"prompt of {len(tokens)} tokens exceeds --max-inp-len {limit}")
+            return tokens[:limit]
+        capacity = self._max_seq_len - self._warmup_len
+        if not self._truncate_prompts and len(tokens) > capacity:
+            raise ContextOverflow(f"prompt of {len(tokens)} tokens exceeds the {capacity}-token KV cache")
+        return tokens
 
-    def _build_extra_step_inputs(self, infos) -> list[np.ndarray]:
-        """Constant per-step inputs beyond (tokens, position_ids).
+    # ── KV cache bookkeeping ─────────────────────────────────────────────────
 
-        Newer static exports add a fixed ``attention_mask`` input sized at
-        the compiled KV-cache length; every step feeds it all-ones. Override
-        for models whose extra inputs are not constant masks.
-        """
-        return [np.ones(info.shape, dtype=np.dtype(info.dtype)) for info in infos]
-
-    def _validate_decode_model(self) -> None:
-        """Fail early when the main model is not a single-token decode build.
-
-        A fixed-size batched build (for example a ``transformer_prefill.vmfb``
-        export deployed over the main model path) only rejects a single
-        token deep inside the runtime with an opaque shape assertion. Catch
-        it at load time and say how to fix the deployment.
-        """
-        info = self._model.inputs_info
-        if not info or not info[0].shape:
-            return
-        shape = tuple(info[0].shape)
-        if isinstance(shape[0], int) and shape[0] != 1:
-            raise ValueError(
-                f"Model '{self._model.model_path}' expects batch size "
-                f"{shape[0]} (first input shape {shape}); only batch size "
-                "1 is supported."
-            )
-        if len(shape) > 1 and isinstance(shape[1], int) and shape[1] > 1:
-            raise ValueError(
-                f"Model '{self._model.model_path}' expects {shape[1]} tokens "
-                f"per step (first input shape {shape}); it looks like a "
-                "fixed-size batched build rather than the single-token "
-                "decode model. Pass the decode model (e.g. "
-                "'transformer.vmfb') via -m, and provide the batched build "
-                "as a sibling 'transformer_prefill.vmfb' or via "
-                "--batch-prefill-model."
-            )
-
-    def _query_model_seq_len(self) -> int | None:
-        """Extract max sequence length from the KV cache input shape."""
-        if (seq_len := self._model.kv_seq_len) is not None:
-            return seq_len
-        info = self._model.inputs_info
-        if info is None or len(info) < 3:
-            return None
-        kv_shape = info[2].shape
-        if len(kv_shape) >= 3 and isinstance(kv_shape[2], int):
-            return kv_shape[2]
-        return None
-
-    def _query_logits_size(self) -> int | None:
-        info = self._model.outputs_info
-        if not info:
-            return None
-        logits_shape = info[0].shape
-        if logits_shape and isinstance(logits_shape[-1], int):
-            return logits_shape[-1]
-        return None
-
-    def _reset_cache(self) -> None:
-        if self._reset_cache_state:
-            self._model.restore_kv_state(self._reset_cache_state)
-        else:
-            self._model.reset_kv()
-
-    def reset(self) -> None:
-        """Reset the model to its post-warmup state (a fresh conversation)."""
-        self._reset_cache()
-        self._turn_pos = self._warmup_len
-        self._pending_token = None
-        self._cache_tokens = self._cache_tokens[:self._warmup_len]
-
-    def _roll_cache(self, keep: int, should_stop: StopCheck | None) -> None:
-        # Cached keys carry positional encodings. Moving their tensors leaves
-        # those encodings at the old positions; replay tokens at the new ones.
-        tokens = self._cache_tokens[-keep:] if keep else []
-        self._reset_cache()
-        self._turn_pos = self._warmup_len
-        self._cache_tokens = self._cache_tokens[:self._warmup_len]
-        self._prefill(
-            tokens,
-            start=self._turn_pos,
-            should_stop=should_stop,
-            produce_next_token=False,
-        )
-
-    def llm_step(
-        self,
-        token: int,
-        seq_pos: int,
-        *,
-        compute_logits: bool = True,
-        sample_next: bool = True,
-    ) -> int:
-        if sample_next and not compute_logits:
-            raise ValueError("sample_next=True requires compute_logits=True")
-        return self._llm_tokens_step(
-            self._model,
-            [token],
-            seq_pos,
-            compute_logits=compute_logits,
-            sample_next=sample_next,
-        )
-
-    def _llm_tokens_step(
-        self,
-        model,
-        tokens: list[int],
-        seq_pos: int,
-        *,
-        compute_logits: bool = True,
-        sample_next: bool = True,
-    ) -> int:
-        """Run one or more consecutive tokens through *model*.
-
-        A single token is the usual decode step on the main model. A
-        fixed-size chunk is a batched prefill step: the prefill model's graph
-        expands the single *seq_pos* (the chunk's start position) across the
-        whole chunk and returns the final position's sampleable output (its
-        hidden state routed through the shared LM head, or logits when the
-        prefill model has the head baked in).
-        """
-        if sample_next and not compute_logits:
-            raise ValueError("sample_next=True requires compute_logits=True")
-
-        if len(tokens) == 1:
-            if self._emb_buf is not None:
-                self._emb_buf[0, 0, :] = self._token_embeddings[tokens[0]]
-                first = self._emb_buf
-            else:
-                self._id_buf[0, 0] = tokens[0]
-                first = self._id_buf
-        else:
-            if self._prefill_emb_buf is not None:
-                self._prefill_emb_buf[...] = self._token_embeddings[tokens]
-                first = self._prefill_emb_buf
-            else:
-                self._prefill_id_buf[0, :] = tokens
-                first = self._prefill_id_buf
-
-        self._pos_buf[0, 0] = seq_pos
-        step_inputs = [first, self._pos_buf, *self._extra_step_inputs]
-
-        if not compute_logits and isinstance(model, SplitLMHeadRunner):
-            results = model.infer(step_inputs, skip_lm_head=True)
-        else:
-            results = model.infer(step_inputs)
-        self._turn_pos = seq_pos + len(tokens)
-        self._cache_tokens[seq_pos:] = tokens
-        self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
-
-        if not sample_next:
-            return 0
-
-        logits = results[0].to_host() if hasattr(results[0], "to_host") else results[0]
-        compact_idx = self._sample(np.asarray(logits)[0, -1])
-        if self._token_id_lut is not None:
-            token_id = int(self._token_id_lut[compact_idx])
-        else:
-            token_id = compact_idx
-        if self._debug_logging:
-            self._logger.debug(
-                "Token ID: %d, Token: %r",
-                token_id,
-                self._tokenizer.decode([token_id], skip_special_tokens=False),
-            )
-        return token_id
-
-    def _setup_prefill_model(
-        self,
-        prefill_path: str | os.PathLike,
-        n_threads: int | None,
-        runtime_flags: list[str] | None,
-        device_io: bool,
-    ) -> None:
-        """Load the fixed-size batched prefill model for prompt chunks."""
-        decode_body = (
-            self._model._body
-            if isinstance(self._model, SplitLMHeadRunner)
-            else self._model
-        )
-        prefill_body = ManagedSelfAttnCacheRunner(
-            prefill_path,
-            n_threads=n_threads,
-            runtime_flags=runtime_flags,
-            device_io=device_io,
-        )
-        prefill_size = self._query_prefill_size(prefill_body)
-        if prefill_size > self._max_seq_len:
-            raise ValueError(
-                f"Batched prefill size {prefill_size} from '{prefill_path}' "
-                f"exceeds the model max sequence length {self._max_seq_len}."
-            )
-        # The prefill model and the decode model have the same per-layer cache
-        # layout; use one set of on-device buffers for both.
-        prefill_body.share_kv_cache(decode_body)
-        self._validate_prefill_inputs(prefill_body, prefill_size)
-        self._prefill_size = prefill_size
-        self._prefill_model = self._wrap_prefill_model(prefill_body)
-        self._logger.info(
-            "Loaded %d-token batched prefill model '%s'", prefill_size, str(prefill_path)
-        )
-
-    def _wrap_prefill_model(self, prefill_body):
-        """Adapt the prefill body so its first output is sampleable logits.
-
-        The decode model's first output is always logits (a fused head, or
-        the split head applied on the way out), so the prefill model must
-        land in the same space:
-
-        * prefill emits the head's *input* (hidden states) -> route it
-          through the standalone head.
-        * prefill already emits logits (head baked in at export time) -> use
-          it directly, no wrapper.
-        """
-        prefill_out = prefill_body.outputs_info[0]
-        if isinstance(self._model, SplitLMHeadRunner):
-            head_in = self._model._lm_head.inputs_info[0]
-            if _tensor_signature_matches(prefill_out, head_in):
-                self._logger.info(
-                    "Prefill model emits hidden states; reusing the decode "
-                    "model's compiled LM head."
-                )
-                return SplitLMHeadRunner(prefill_body, self._model._lm_head)
-            if _tensor_signature_matches(prefill_out, self._model.outputs_info[0]):
-                self._logger.info(
-                    "Prefill model has its LM head baked in; using it directly."
-                )
-                return prefill_body
-            raise ValueError(
-                f"Prefill model's first output {_tensor_info(prefill_out)} "
-                f"matches neither the LM head input {_tensor_info(head_in)} "
-                f"nor the decode model's logits "
-                f"{_tensor_info(self._model.outputs_info[0])}; cannot use it "
-                "for batched prefill."
-            )
-        if _tensor_signature_matches(prefill_out, self._model.outputs_info[0]):
-            return prefill_body
-        raise ValueError(
-            "Batched prefill model emits hidden states, but the decode model "
-            "has no standalone LM head to sample from. Load the split decode "
-            "pair (transformer.vmfb + lm_head.vmfb) or a prefill model with "
-            "a fused head."
-        )
-
-    def _validate_prefill_inputs(self, prefill_body, prefill_size: int) -> None:
-        """Prefill and decode models must take the same per-step inputs.
-
-        The same buffers (positions, extra inputs) are fed to both models
-        every step, so everything but the token input's sequence length must
-        line up; a mismatch would otherwise surface as an opaque runtime
-        shape assertion deep in inference.
-        """
-        decode_in = self._model.inputs_info
-        prefill_in = prefill_body.inputs_info
-        n_decode_user = len(decode_in) - self._model.n_cache_inputs
-        n_prefill_user = len(prefill_in) - prefill_body.n_cache_inputs
-        if n_prefill_user != n_decode_user:
-            raise ValueError(
-                f"Prefill model has {n_prefill_user} non-cache inputs, the "
-                f"decode model has {n_decode_user}; they must match."
-            )
-        d_tok, p_tok = decode_in[0], prefill_in[0]
-        d_shape, d_dtype = _tensor_signature(d_tok)
-        p_shape, p_dtype = _tensor_signature(p_tok)
-        if d_dtype != p_dtype:
-            raise ValueError(
-                f"Prefill token input {_tensor_info(p_tok)} does not match "
-                f"the decode model's token input {_tensor_info(d_tok)}."
-            )
-        if (
-            len(d_shape) >= 2
-            and isinstance(d_shape[1], int)
-            and isinstance(p_shape[1], int)
-            and (d_shape[1] != 1 or p_shape[1] != prefill_size)
-        ):
-            raise ValueError(
-                f"Prefill token input sequence length {p_shape[1]} does not "
-                f"match its declared chunk size {prefill_size} (decode "
-                f"model expects 1)."
-            )
-        if d_shape[2:] != p_shape[2:]:
-            raise ValueError(
-                f"Prefill token input {_tensor_info(p_tok)} does not match "
-                f"the decode model's token input {_tensor_info(d_tok)}."
-            )
-        for i in range(1, n_decode_user):
-            if not _tensor_signature_matches(decode_in[i], prefill_in[i]):
-                raise ValueError(
-                    f"Prefill non-cache input {i} {_tensor_info(prefill_in[i])} "
-                    f"does not match the decode model's "
-                    f"{_tensor_info(decode_in[i])}."
-                )
-
-    @staticmethod
-    def _query_prefill_size(prefill_body) -> int:
-        """Fixed prompt chunk size from the prefill model's token input shape."""
-        info = prefill_body.inputs_info
-        if not info:
-            raise ValueError(
-                "Prefill model has no input metadata; cannot determine its "
-                "fixed prompt chunk size."
-            )
-        shape = info[0].shape
-        if len(shape) < 2 or not isinstance(shape[1], int) or shape[1] < 1:
-            raise ValueError(
-                f"Cannot determine fixed prefill size from first input shape "
-                f"{shape}; expected (1, N, ...)."
-            )
-        return shape[1]
-
-    def _sample(self, logits: np.ndarray) -> int:
-        st = time.perf_counter_ns()
-        logits = logits.astype(np.float32, copy=False)
-
-        if self._temperature <= 0:
-            token_id = int(logits.argmax())
-            self._logger.debug(
-                "Sampling time: %.3f ms", (time.perf_counter_ns() - st) / 1e6
-            )
-            return token_id
-
-        k = min(self._top_k, logits.shape[-1])
-        top_k_idx = np.argpartition(logits, -k)[-k:]
-        x = logits[top_k_idx]
-
-        x /= self._temperature
-        x -= x.max()
-        np.exp(x, out=x)
-        x /= x.sum()
-
-        order = np.argsort(x)[::-1]
-        cdf = np.cumsum(x[order])
-        cut = int(np.searchsorted(cdf, self._top_p)) + 1
-        keep = order[:cut]
-        p = x[keep]
-        p /= p.sum()
-        token_id = int(np.random.choice(top_k_idx[keep], p=p))
-        self._logger.debug(
-            "Sampling time: %.3f ms", (time.perf_counter_ns() - st) / 1e6
-        )
-        return token_id
+    def _next_token(self, logits: np.ndarray) -> int:
+        index = sample(logits, self._temperature, self._top_p, self._top_k)
+        return self._decoder.token_id(index)
 
     def _prefill(
-        self,
-        tokens: list[int],
-        start: int = 0,
-        should_stop: StopCheck | None = None,
-        *,
-        produce_next_token: bool = True,
-    ) -> tuple[int, int]:
-        if not tokens:
-            # Nothing to feed: return without consuming a cache slot
-            return 0, start
-        pos = start
-        if self._prefill_model is not None and len(tokens) >= self._prefill_size:
-            chunk = self._prefill_size
-            full_chunks = len(tokens) // chunk
-            remainder = len(tokens) - full_chunks * chunk
-            # Every complete chunk before the final unit is body-only: it only
-            # extends the shared KV cache, so the LM head is skipped.
-            body_only_chunks = full_chunks if remainder else full_chunks - 1
-            for i in range(body_only_chunks):
-                _raise_if_stopped(should_stop)
-                self._llm_tokens_step(
-                    self._prefill_model,
-                    tokens[i * chunk:(i + 1) * chunk],
-                    pos,
-                    compute_logits=False,
-                    sample_next=False,
-                )
-                pos += chunk
-                _raise_if_stopped(should_stop)
-            if remainder:
-                # Fall back to single-token decode for any remainder.
-                rem_tokens = tokens[full_chunks * chunk:]
-                for tok_id in rem_tokens[:-1]:
-                    _raise_if_stopped(should_stop)
-                    self.llm_step(tok_id, pos, compute_logits=False, sample_next=False)
-                    pos += 1
-                    _raise_if_stopped(should_stop)
-                _raise_if_stopped(should_stop)
-                tok = self.llm_step(
-                    rem_tokens[-1],
-                    pos,
-                    compute_logits=produce_next_token,
-                    sample_next=produce_next_token,
-                )
-                _raise_if_stopped(should_stop)
-                pos += 1
-            else:
-                _raise_if_stopped(should_stop)
-                tok = self._llm_tokens_step(
-                    self._prefill_model,
-                    tokens[len(tokens) - chunk:],
-                    pos,
-                    compute_logits=produce_next_token,
-                    sample_next=produce_next_token,
-                )
-                _raise_if_stopped(should_stop)
-                pos += chunk
-            return tok, pos
-        for tok_id in tokens[:-1]:
-            _raise_if_stopped(should_stop)
-            self.llm_step(tok_id, pos, compute_logits=False, sample_next=False)
-            pos += 1
-            _raise_if_stopped(should_stop)
-        if tokens:
-            _raise_if_stopped(should_stop)
-            tok = self.llm_step(
-                tokens[-1],
-                pos,
-                compute_logits=produce_next_token,
-                sample_next=produce_next_token,
-            )
-            _raise_if_stopped(should_stop)
-        else:
-            tok = 0
-        pos += 1
-        return tok, pos
+        self, tokens: list[int], should_stop: StopCheck | None = None, *, want_next: bool = True
+    ) -> int | None:
+        """Prefill *tokens* at the end of the cache; the next token, or None."""
+        start = self._turn_pos
+        logits = self._decoder.prefill(tokens, start, want_logits=want_next, should_stop=should_stop)
+        self._cache_tokens[start:] = tokens
+        self._turn_pos = start + len(tokens)
+        return self._next_token(logits) if want_next and tokens else None
 
     def _warmup(self) -> int:
         tokens = self._build_warmup_tokens()
         if not tokens:
             return 0
-
         self._logger.info("Warm-up started...")
         if isinstance(self._max_prompt_tokens, int):
             tokens = tokens[: self._max_prompt_tokens]
             self._max_user_tokens = max(0, self._max_prompt_tokens - len(tokens))
-        n = len(tokens)
-        self._prefill(tokens, produce_next_token=False)
+        self._prefill(tokens, want_next=False)
         self._logger.info(
-            "Warm-up complete: system prompt consumed %d tokens, "
-            "remaining capacity is %d tokens",
-            n,
-            self._max_seq_len - n,
+            "Warm-up complete: system prompt consumed %d tokens, remaining capacity is %d tokens",
+            len(tokens), self._max_seq_len - len(tokens),
         )
-        return n
+        return len(tokens)
+
+    def _reset_cache(self) -> None:
+        if self._warmup_state is not None:
+            self._cache.restore(self._warmup_state)
+        else:
+            self._cache.reset()
+        self._turn_pos = self._warmup_len
+        del self._cache_tokens[self._warmup_len:]
+
+    def reset(self) -> None:
+        """Back to the post-warm-up state (a fresh conversation)."""
+        self._reset_cache()
+        self._pending_token = None
+
+    def _roll_cache(self, keep: int, should_stop: StopCheck | None) -> None:
+        """Keep the warm-up prefix plus the last *keep* tokens, replayed at
+        their new positions."""
+        tokens = self._cache_tokens[-keep:] if keep else []
+        self._reset_cache()
+        self._prefill(tokens, should_stop, want_next=False)
+
+    def _on_cache_full(self, should_stop: StopCheck | None) -> int | None:
+        """Roll the window mid-answer; the new position, or None to stop."""
+        if self._cache_keep_n is not None:
+            if self._max_cache_rolls is not None and self._rolls >= self._max_cache_rolls:
+                # A greedy model stuck in a loop never emits EOS; without this
+                # bound the window would roll on indefinitely.
+                self._logger.warning("KV window rolled %d times; stopping generation", self._rolls)
+                return None
+            self._rolls += 1
+            keep = min(self._cache_keep_n, max(0, self._max_seq_len - self._warmup_len - 1))
+            self._roll_cache(keep, should_stop)
+            self._logger.debug(
+                "Circular KV cache: replayed last %d entries after %d protected prefix tokens",
+                keep, self._warmup_len,
+            )
+        if self._turn_pos >= self._max_seq_len:
+            # No window, or the warm-up alone fills the cache.
+            self._logger.warning("KV cache full; stopping generation")
+            return None
+        return self._turn_pos
 
     def prefill_tokens(self, tokens: list[int]) -> tuple[int, int]:
         """Prefill tokens at the current cache end; returns (next_token, new_pos)."""
-        return self._prefill(tokens, start=self._turn_pos, should_stop=None)
+        return self._prefill(tokens), self._turn_pos
 
-    def _apply_prompt_limit(self, tokens: list[int]) -> list[int]:
-        """Truncate the prompt to the configured maximum input length.
+    # ── Answers ──────────────────────────────────────────────────────────────
 
-        Prompts shorter than the limit pass through unchanged: the static
-        exports bake a causal mask into the graph, so padding tokens would
-        be attended over and make the model emit EOS immediately.
-        """
-        limit = (
-            self._max_user_tokens
-            if self._max_user_tokens is not None
-            else self._max_prompt_tokens
-        )
-        if isinstance(limit, int) and len(tokens) > limit:
-            return tokens[:limit]
-        return tokens
-
-    def run(
-        self,
-        user_input: str,
-        should_stop: StopCheck | None = None,
-    ) -> str:
+    def run(self, user_input: str, should_stop: StopCheck | None = None) -> str:
         return "".join(self.run_stream(user_input, should_stop=should_stop))
 
-    def run_stream(
-        self,
-        user_input: str,
-        should_stop: StopCheck | None = None,
-    ) -> Iterator[str]:
-        """Yield decoded text chunks as tokens are generated.
+    def run_stream(self, user_input: str, should_stop: StopCheck | None = None) -> Iterator[str]:
+        """Yield the answer as decoded text chunks.
 
-        The KV cache is shared across turns: the conversation so far stays in
-        the cache and this prompt is prefilled right after it, so later turns
-        see the earlier ones. When the conversation (or this prompt alone) no
-        longer fits, the cache rolls: the sliding window keeps the warm-up
-        prefix plus up to ``cache_keep_n`` recent tokens, replayed at their new
-        positions. Without a window the conversation restarts from the warm-up
-        prefix.
+        The time spent in the caller between chunks is not counted in
+        ``last_infer_time``.
         """
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
-
+        self._rolls = 0
         tokens = self._apply_prompt_limit(self._build_prompt_tokens(user_input))
-        self._start_time_ns = time.perf_counter_ns()
-        # Sampling predicts a token; its KV entry is written on the next step.
-        # Carry the last prediction across normal stops and closed streams.
+        start_ns = time.perf_counter_ns()
+        # The last predicted token goes into the cache first.
         pending = [] if self._pending_token is None else [self._pending_token]
         if self._turn_pos + len(pending) + len(tokens) > self._max_seq_len:
             if self._cache_keep_n is not None:
@@ -1037,85 +571,47 @@ class DecoderOnlyLLMRunner(ABC):
                 self._roll_cache(keep, should_stop)
                 self._logger.debug(
                     "Circular KV cache at turn start: replayed last %d entries "
-                    "after %d protected prefix tokens",
-                    keep,
-                    self._warmup_len,
+                    "after %d protected prefix tokens", keep, self._warmup_len,
                 )
             else:
                 self.reset()
                 pending = []
-                self._logger.warning(
-                    "KV cache full, starting a fresh conversation"
-                )
+                self._logger.warning("KV cache full, starting a fresh conversation")
             room = max(0, self._max_seq_len - self._turn_pos - len(pending))
             if len(tokens) > room:
                 tokens = tokens[:room]
-                self._logger.warning(
-                    "Prompt truncated to fit the KV cache (%d tokens)", len(tokens)
-                )
-
+                self._logger.warning("Prompt truncated to fit the KV cache (%d tokens)", len(tokens))
         if not tokens:
             self._logger.warning("No prompt tokens fit in the KV cache")
             return
-        tokens = pending + tokens
 
         gen: list[int] = []
         yield_ns = 0
+        text = ""
         try:
             self._pending_token = None
-            next_tok, pos = self._prefill(
-                tokens,
-                start=self._turn_pos,
+            first = self._prefill(pending + tokens, should_stop)
+            self._time_to_first_token_ns = time.perf_counter_ns() - start_ns
+            for token in generate(
+                self._decoder, first, self._turn_pos,
+                next_token=self._next_token,
+                stop=self._should_stop,
+                max_new=self._max_gen_tokens,
+                on_full=lambda pos: self._on_cache_full(should_stop),
                 should_stop=should_stop,
-            )
-            self._pending_token = next_tok
-            self._time_to_first_token_ns = time.perf_counter_ns() - self._start_time_ns
-
-            prev_text = self._decode_generated_tokens([next_tok])
-            yield_start_ns = time.perf_counter_ns()
-            yield prev_text
-            yield_ns += time.perf_counter_ns() - yield_start_ns
-
-            gen = [next_tok]
-            while not self._should_stop(next_tok, gen):
-                _raise_if_stopped(should_stop)
-                if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
-                    self._logger.info(
-                        "Max generation tokens reached (%d)", self._max_gen_tokens
-                    )
-                    break
-                if pos >= self._max_seq_len:
-                    if self._cache_keep_n is not None:
-                        keep = min(
-                            self._cache_keep_n,
-                            max(0, self._max_seq_len - self._warmup_len - 1),
-                        )
-                        self._roll_cache(keep, should_stop)
-                        pos = self._turn_pos
-                        self._logger.debug(
-                            "Circular KV cache: replayed last %d entries after "
-                            "%d protected prefix tokens",
-                            keep,
-                            self._warmup_len,
-                        )
-                    if pos >= self._max_seq_len:
-                        # No window, or the warm-up alone fills the cache.
-                        # Another step would write past the last cache slot.
-                        self._logger.warning("KV cache full; stopping generation")
-                        break
-                next_tok = self.llm_step(next_tok, pos)
-                self._pending_token = next_tok
-                _raise_if_stopped(should_stop)
-                gen.append(next_tok)
-                pos += 1
-                full_text = self._decode_generated_tokens(gen)
-                chunk = full_text[len(prev_text) :]
-                yield_start_ns = time.perf_counter_ns()
+            ):
+                if gen:  # the step that produced *token* wrote the previous one
+                    self._cache_tokens.append(gen[-1])
+                    self._turn_pos += 1
+                gen.append(token)
+                self._pending_token = token
+                full = self._decode_generated_tokens(gen)
+                chunk, text = full[len(text):], full
+                t = time.perf_counter_ns()
                 yield chunk
-                yield_ns += time.perf_counter_ns() - yield_start_ns
-                prev_text = full_text
+                yield_ns += time.perf_counter_ns() - t
+            if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
+                self._logger.info("Max generation tokens reached (%d)", self._max_gen_tokens)
         finally:
             self._n_tokens_gen = max(0, len(gen) - 1)
-            self._last_infer_ns = (
-                time.perf_counter_ns() - self._start_time_ns - yield_ns
-            )
+            self._last_infer_ns = time.perf_counter_ns() - start_ns - yield_ns

@@ -1,0 +1,9 @@
+{
+  "name": "functiongemma",
+  "description": "Interactive function calling with FunctionGemma 270M Torq VMFB exports.",
+  "task_category": "text_generation",
+  "batch_prefill": true,
+  "validation": [
+    {"dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard", "config": "simple", "samples": 50}
+  ]
+}

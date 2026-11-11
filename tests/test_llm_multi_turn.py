@@ -1,288 +1,329 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import importlib.util
+"""Multi-turn KV cache behaviour of the shared ``utils.llm.LLM``, driven end
+to end over fake models: the pending token handoff between turns, reset back
+to the warm-up prefix, turn-start and in-turn window rolls (kept tokens
+replayed at their new positions), the no-window restart, prompt
+truncation, and batched-prefill parity.
+"""
+
 import logging
-import sys
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import Mock
 
-import numpy as np
 import pytest
 
 from gemma3.src.runner import Gemma3Static
+from llm_fakes import CHAR_BASE, CharTokenizer, cached_tokens, make_llm, scripted
 from qwen2_5.src.runner import QwenStatic
 from qwen3.src.runner import Qwen3Static
+from utils.inference import ContextOverflow
+from utils.tasks.text_generation import run_prompts, run_teacher_forced
+
+# Built from pieces, not literals, so the strings match the templates'.
+IM_START, IM_END = "<|" + "im_start|>", "<|" + "im_end|>"
+ENDOFTEXT = "<|" + "endoftext|>"
 
 
-def _load(name, path):
-    spec = importlib.util.spec_from_file_location(name, Path(__file__).resolve().parents[1] / path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _chars(text: str) -> list[int]:
+    return [CHAR_BASE + ord(ch) for ch in text]
 
 
-LiquidStatic = _load("liquid_multi_turn", "LiquidAI/LiquidAI-LFM2.5/src/runner.py").LiquidStatic
-pytestmark = pytest.mark.skipif(not hasattr(np, "zeros"), reason="Requires real numpy")
+#: The answer's stop token: <end_of_turn> for Gemma, im_end for Qwen.
+STOP = 106
+
+#: (tokenizer specials, auto-BOS, config, answer stop token) per binding.
+SPECS = {
+    Gemma3Static: (
+        {"<bos>": 2, "<eos>": 1, "<start_of_turn>": 105, "<end_of_turn>": 106},
+        2,
+        {"bos_token_id": 2, "eos_token_id": 1, "vocab_size": 4096},
+        106,
+    ),
+    QwenStatic: (
+        {IM_START: 105, IM_END: 106, ENDOFTEXT: 98, "<eos>": 1},
+        None,
+        {"bos_token_id": 1, "eos_token_id": 1, "vocab_size": 4096},
+        106,
+    ),
+    Qwen3Static: (
+        {IM_START: 105, IM_END: 106, ENDOFTEXT: 98, "<eos>": 1},
+        None,
+        {"bos_token_id": 1, "eos_token_id": 1, "vocab_size": 4096},
+        106,
+    ),
+}
 
 
-class Tokenizer:
-    def encode(self, text):
-        ids = [12] if "model\n" in text or "assistant\n" in text else [10, 11]
-        return SimpleNamespace(ids=ids)
-
-    def decode(self, ids):
-        return " ".join(map(str, ids))
-
-
-class Device:
-    def __init__(self, array):
-        self.array = array
-
-    def to_host(self):
-        return self.array
+def _build(cls, tmp, monkeypatch, *, instruct, next_fn, seq=64, keep=None, cap=None,
+           prefill_size=None, sys_prompt="S"):
+    specials, bos_id, config, stop = SPECS[cls]
+    kwargs = dict(instruct_model=instruct, sys_prompt=sys_prompt, max_gen_tokens=cap)
+    if keep is not None:
+        kwargs["cache_keep_n"] = keep
+    llm, models = make_llm(
+        tmp, monkeypatch, cls, tokenizer=CharTokenizer(specials, bos_id=bos_id),
+        config=config, seq=seq, prefill_size=prefill_size, next_fn=next_fn, **kwargs,
+    )
+    return llm, models, stop
 
 
-class Cache:
-    infer_time_ms = 0
-
-    def __init__(self, capacity):
-        self._kv_cache = [Device(np.zeros((1, 1, capacity, 1), dtype=np.int64))]
-        self.calls = []
-
-    @property
-    def tokens(self):
-        return self._kv_cache[0].to_host().reshape(-1)
-
-    def infer(self, inputs):
-        tokens = inputs[0][0].tolist()
-        pos = int(inputs[1][0, 0])
-        assert 0 <= pos and pos + len(tokens) <= len(self.tokens)
-        self.calls.append((tokens, pos))
-        self.tokens[pos:pos + len(tokens)] = tokens
-        logits = np.zeros((1, 1, 100), dtype=np.float32)
-        logits[0, 0, {20: 21, 21: 99}.get(tokens[-1], 20)] = 1
-        return [logits]
-
-    def restore_kv_state(self, state):
-        self._kv_cache[0] = Device(state[0].copy())
-
-    def reset_kv(self):
-        self.tokens[:] = 0
+def fill(llm, tokens) -> None:
+    """Occupy the first ``len(tokens)`` cache positions as prior history."""
+    llm._cache.inputs[0].to_host()[0, 0, : len(tokens), 0] = tokens
+    llm._cache_tokens = list(tokens)
+    llm._turn_pos = len(tokens)
 
 
-class PositionCache(Cache):
-    """Store each key's encoded position alongside its token."""
-
-    def __init__(self, capacity):
-        super().__init__(capacity)
-        self._kv_cache = [Device(np.zeros((1, 1, capacity, 2), dtype=np.int64))]
-
-    @property
-    def tokens(self):
-        return self._kv_cache[0].to_host()[0, 0, :, 0]
-
-    def infer(self, inputs):
-        pos = int(inputs[1][0, 0])
-        positions = self._kv_cache[0].to_host()[0, 0, :, 1]
-        np.testing.assert_array_equal(positions[:pos], np.arange(pos))
-        result = super().infer(inputs)
-        positions[pos:pos + inputs[0].shape[1]] = np.arange(pos, pos + inputs[0].shape[1])
-        return result
-
-    def reset_kv(self):
-        self._kv_cache[0].to_host()[:] = 0
-
-
-def _runner(cls=Gemma3Static, instruct=False, batched=False, cap=None, capacity=128):
-    runner = cls.__new__(cls)
-    runner._logger = logging.getLogger("test_multi_turn")
-    runner._instruct_model = instruct
-    runner._bos_token_id = 1
-    runner._eos_token_id = 99
-    runner._eos_token_ids = [99]
-    runner._nl_token_id = 8
-    runner._double_nl_token_id = 9
-    if cls is Gemma3Static:
-        runner._end_of_turn_id = 99
-    if cls in (QwenStatic, Qwen3Static):
-        runner._im_end_id = 99
-        runner._endoftext_id = 98
-    if cls is Qwen3Static:
-        runner._thinking = True
-    runner._warmup_len = runner._turn_pos = 2 if instruct else 0
-    runner._pending_token = None
-    runner._max_seq_len = capacity
-    runner._max_gen_tokens = cap
-    runner._cache_keep_n = runner._max_user_tokens = runner._max_prompt_tokens = None
-    runner._tokenizer = Tokenizer()
-    runner._model = Cache(capacity)
-    runner._model.tokens[:runner._warmup_len] = 7
-    runner._cache_tokens = runner._model.tokens[:runner._warmup_len].tolist()
-    runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()] if instruct else []
-    runner._prefill_model = runner._model if batched else None
-    runner._prefill_size = 2 if batched else None
-    runner._prefill_emb_buf = runner._emb_buf = None
-    runner._prefill_id_buf = np.zeros((1, 2), dtype=np.int64)
-    runner._id_buf = np.zeros((1, 1), dtype=np.int64)
-    runner._pos_buf = np.zeros((1, 1), dtype=np.int64)
-    runner._extra_step_inputs = []
-    runner._token_id_lut = None
-    runner._temperature = 0
-    runner._debug_logging = False
-    return runner
-
-
-@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static, LiquidStatic])
+@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
 @pytest.mark.parametrize("instruct", [False, True])
 @pytest.mark.parametrize("batched", [False, True])
 @pytest.mark.parametrize("cap", [None, 1])
-def test_next_turn_preserves_final_prediction(cls, instruct, batched, cap):
-    runner = _runner(cls, instruct, batched, cap)
-    assert runner.run("first") == ("20 21 99" if cap is None else "20")
-    end = runner._turn_pos
-    history = runner._model.tokens[:end].tolist()
-    final = 99 if cap is None else 20
-    runner.run("second")
-    prompt = runner._build_prompt_tokens("second")
-    assert runner._model.tokens[:end + 1 + len(prompt)].tolist() == history + [final] + prompt
+def test_next_turn_prefills_right_after_first_answer(
+    cls, instruct, batched, cap, tmp_path, monkeypatch
+):
+    # The first answer's final prediction is not in the cache yet; the second
+    # turn prefills it right after the first turn, then its own prompt. Qwen
+    # chat turns are long, so the cache is big.
+    A = _chars("Hi")
+    llm, models, stop = _build(
+        cls, tmp_path, monkeypatch, instruct=instruct, seq=128,
+        next_fn=scripted((A + [STOP]) * 2, then=STOP),
+        cap=cap, prefill_size=2 if batched else None,
+    )
+    warm = cached_tokens(llm)
+    p1 = llm._build_prompt_tokens("first")
+    p2 = llm._build_prompt_tokens("second")
+    if cap is None:
+        assert llm.run("first") == "Hi"
+        assert cached_tokens(llm) == warm + p1 + A
+        assert llm._pending_token == stop
+        assert llm.run("second") == "Hi"
+        assert cached_tokens(llm) == warm + p1 + A + [stop] + p2 + A
+        assert llm._pending_token == stop
+    else:
+        assert llm.run("first") == "H"
+        assert cached_tokens(llm) == warm + p1
+        assert llm._pending_token == A[0]
+        assert llm.run("second") == "i"
+        assert cached_tokens(llm) == warm + p1 + [A[0]] + p2
+        assert llm._pending_token == A[1]
+    # The bookkeeping list mirrors the cache at every step.
+    assert llm._cache_tokens == cached_tokens(llm)
 
 
-def test_closing_stream_preserves_last_yielded_token():
-    runner = _runner()
-    stream = runner.run_stream("first")
-    assert next(stream) == "20"
+def test_closing_stream_preserves_last_yielded_token(tmp_path, monkeypatch):
+    A = _chars("Hi")
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False,
+                          next_fn=scripted((A + [STOP]) * 2, then=STOP))
+    stream = llm.run_stream("q")
+    assert next(stream) == "H"
     stream.close()
-    end = runner._turn_pos
-    runner.run("second")
-    assert runner._model.tokens[end] == 20
+    assert llm._pending_token == A[0]
+    end = llm._turn_pos
+    llm.run("r")
+    assert cached_tokens(llm)[end] == A[0]
+    assert cached_tokens(llm) == [2, *_chars("q"), A[0], 2, *_chars("r"), A[1]]
+    assert llm._pending_token == stop
 
 
 @pytest.mark.parametrize("instruct", [False, True])
-def test_turn_start_rollover_uses_occupied_cache(instruct):
-    runner = _runner(instruct=instruct, cap=1, capacity=8)
-    runner._cache_keep_n = 3
-    runner._turn_pos = 6
-    runner._model.tokens[runner._warmup_len:6] = [1, 2, 3, 4, 5, 6][runner._warmup_len:]
-    runner._cache_tokens = runner._model.tokens[:6].tolist()
-    runner._pending_token = 99
-    prefix = runner._model.tokens[:runner._warmup_len].tolist()
-    runner.run("next")
-    prompt = runner._build_prompt_tokens("next")
-    keep = min(3, 8 - len(prefix) - 1 - len(prompt))
-    expected = prefix + [4, 5, 6][-keep:] + [99] + prompt
-    assert runner._model.tokens[:len(expected)].tolist() == expected
-
-
-def test_reset_discards_pending_prediction_and_history():
-    runner = _runner(instruct=True, cap=1)
-    runner.run("first")
-    runner.reset()
-    assert runner._pending_token is None
-    assert runner._turn_pos == 2
-    runner.run("next")
-    assert runner._model.tokens[:5].tolist() == [7, 7, 10, 11, 12]
-
-
-def test_full_cache_without_window_discards_previous_prediction():
-    runner = _runner(cap=1, capacity=8)
-    runner._turn_pos = 7
-    runner._model.tokens[:7] = 6
-    runner._cache_tokens = runner._model.tokens[:7].tolist()
-    runner._pending_token = 99
-    runner.run("next")
-    assert runner._model.tokens.tolist() == [10, 11, 0, 0, 0, 0, 0, 0]
-
-
-@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
-@pytest.mark.parametrize("instruct", [False, True])
-@pytest.mark.parametrize("batched", [False, True])
-def test_full_cache_reserves_room_for_complete_prompt(cls, instruct, batched):
-    runner = _runner(cls, instruct, batched, cap=1, capacity=8)
-    runner._turn_pos = 8
-    runner._cache_keep_n = 8
-    runner._pending_token = 99
-    runner._model.tokens[runner._warmup_len:] = list(range(8))[runner._warmup_len:]
-    runner._cache_tokens = runner._model.tokens.tolist()
-    assert runner.run("next") == "20"
-    prompt = runner._build_prompt_tokens("next")
-    assert runner._model.tokens[-len(prompt) - 1:].tolist() == [99] + prompt
+def test_turn_start_rollover_keeps_warmup_and_last_n(instruct, tmp_path, monkeypatch):
+    # The window rolls before the new prompt: warm-up prefix plus the last
+    # kept history tokens, replayed at their new positions.
+    seq = 36 if instruct else 8
+    a = CHAR_BASE + ord("x")
+    llm, models, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=instruct,
+                               seq=seq, keep=3, next_fn=scripted([a, STOP], then=STOP))
+    warm = cached_tokens(llm)
+    hist = [31 + i for i in range(11 if instruct else 7)]
+    fill(llm, warm + hist)
+    llm._pending_token = stop
+    assert llm.run("q") == "x"
+    p1 = llm._build_prompt_tokens("q")
+    kept = hist[-3:]
+    assert cached_tokens(llm) == warm + kept + [stop] + p1 + [a]
+    assert llm._pending_token == stop
+    # The kept tokens were re-fed at the head of the cache, not their old spots.
+    assert ([kept[0]], len(warm)) in models["body"].calls
 
 
 @pytest.mark.parametrize("instruct", [False, True])
-@pytest.mark.parametrize("keep", [6, 8, 9])
-def test_large_window_frees_space_on_every_rollover(instruct, keep):
-    runner = _runner(instruct=instruct, cap=20, capacity=8)
-    runner._cache_keep_n = keep
-    runner._eos_token_id = runner._end_of_turn_id = 98
-    runner._eos_token_ids = [98]
-    assert len(runner.run("next").split()) == 20
-    assert runner._turn_pos <= 8
+def test_reset_returns_to_warmup_prefix(instruct, tmp_path, monkeypatch):
+    A = _chars("Hi")
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=instruct,
+                          next_fn=scripted((A + [STOP]) * 2, then=STOP))
+    warm = cached_tokens(llm)
+    assert llm.run("q") == "Hi"
+    llm.reset()
+    assert cached_tokens(llm) == warm
+    assert llm._pending_token is None
+    assert llm._turn_pos == len(warm)
+    p = llm._build_prompt_tokens("next")
+    assert llm.run("next") == "Hi"
+    assert cached_tokens(llm) == warm + p + A
+    assert llm._pending_token == stop
 
 
-def test_oversized_prompt_takes_priority_over_history():
-    runner = _runner(cap=1, capacity=8)
-    runner._cache_keep_n = 5
-    runner._turn_pos = 2
-    runner._model.tokens[:2] = [4, 5]
-    runner._cache_tokens = [4, 5]
-    runner._pending_token = 99
-    runner._tokenizer = Mock()
-    runner._tokenizer.encode.return_value = SimpleNamespace(ids=[10] * 8)
-    runner._tokenizer.decode.return_value = "answer"
-    runner.run("long")
-    assert runner._model.tokens.tolist() == [10] * 8
-
-
-def test_in_turn_rollover_then_next_turn_preserves_pending_token():
-    runner = _runner(capacity=8)
-    runner._turn_pos = 6
-    runner._model.tokens[:6] = [1, 2, 3, 4, 5, 6]
-    runner._cache_tokens = runner._model.tokens[:6].tolist()
-    runner._cache_keep_n = 3
-    assert runner.run("next") == "20 21 99"
-    assert runner._model.tokens[:5].tolist() == [6, 10, 11, 20, 21]
-    runner._max_gen_tokens = 1
-    runner.run("next")
-    assert runner._model.tokens[:8].tolist() == [6, 10, 11, 20, 21, 99, 10, 11]
-
-
-@pytest.mark.parametrize("cls", [Gemma3Static, QwenStatic, Qwen3Static])
-@pytest.mark.parametrize("batched", [False, True])
 @pytest.mark.parametrize("instruct", [False, True])
-def test_default_window_recomputes_key_positions_across_turns(cls, batched, instruct):
-    runner = _runner(cls, instruct=instruct, batched=batched, capacity=8)
-    runner._model = PositionCache(8)
-    runner._model.tokens[:runner._warmup_len] = 7
-    runner._model._kv_cache[0].to_host()[0, 0, :runner._warmup_len, 1] = np.arange(runner._warmup_len)
-    runner._reset_cache_state = [runner._model._kv_cache[0].to_host().copy()]
-    runner._prefill_model = runner._model if batched else None
-    runner._cache_keep_n = 2
+def test_full_cache_without_window_restarts_conversation(instruct, tmp_path, monkeypatch, caplog):
+    # No sliding window: a full cache restarts the conversation at the
+    # warm-up prefix and drops the pending prediction.
+    seq = 40 if instruct else 8
+    a = CHAR_BASE + ord("x")
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=instruct,
+                          seq=seq, next_fn=scripted([a, STOP], then=STOP))
+    warm = cached_tokens(llm)
+    fill(llm, warm + [30 + i for i in range(seq - len(warm))])
+    llm._pending_token = stop
+    with caplog.at_level(logging.WARNING):
+        assert llm.run("q") == "x"
+    assert "KV cache full, starting a fresh conversation" in caplog.text
+    p1 = llm._build_prompt_tokens("q")
+    assert cached_tokens(llm) == warm + p1 + [a]
+    assert llm._pending_token == stop
+
+
+def test_oversized_prompt_drops_history_and_truncates(tmp_path, monkeypatch, caplog):
+    # A prompt bigger than the whole window keeps nothing of the previous
+    # conversation (nor its pending token) and is truncated to fit.
+    a = CHAR_BASE + ord("x")
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=5,
+                          next_fn=scripted([a, STOP] * 2, then=STOP))
+    assert llm.run("q") == "x"
+    assert llm._pending_token == stop
+    prompt = "0123456789"  # 11 tokens with the auto-BOS: bigger than the 8-token cache
+    with caplog.at_level(logging.WARNING):
+        assert llm.run(prompt) == "x"
+    assert "Prompt truncated to fit the KV cache (8 tokens)" in caplog.text
+    chars = _chars(prompt)
+    assert cached_tokens(llm) == chars[2:7] + [a]
+    assert llm._pending_token == stop
+
+
+@pytest.mark.parametrize("max_inp, message", [
+    (None, "prompt of 11 tokens exceeds the 8-token KV cache"),
+    (4, "prompt of 11 tokens exceeds --max-inp-len 4"),
+])
+def test_untruncated_prompt_that_does_not_fit_raises(max_inp, message, tmp_path, monkeypatch):
+    # Validation must not score a cut-off question: it raises instead.
+    llm, _, _ = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=5,
+                       next_fn=scripted([], then=STOP))
+    llm._truncate_prompts = False
+    llm._max_prompt_tokens = max_inp
+    with pytest.raises(ContextOverflow, match=message):
+        llm.run("0123456789")
+
+
+@pytest.mark.parametrize("keep", [6, 8])
+def test_large_window_keeps_generating_on_rollover(keep, tmp_path, monkeypatch, caplog):
+    # A window bigger than the remaining room is clamped, and mid-answer
+    # rolls keep going until the answer completes.
+    a = [CHAR_BASE + 97 + i for i in range(20)]
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=keep,
+                          next_fn=scripted(a + [STOP], then=STOP))
+    with caplog.at_level(logging.WARNING):
+        assert llm.run("q") == "".join(chr(t - CHAR_BASE) for t in a)
+    assert llm._turn_pos <= 8
+    assert "stopping generation" not in caplog.text
+
+
+@pytest.mark.parametrize("rolls", [0, 2])
+def test_mid_answer_rolls_are_bounded(rolls, tmp_path, monkeypatch, caplog):
+    # A model that never emits a stop token stops after max_cache_rolls rolls.
+    x = CHAR_BASE + ord("x")
+    llm, _, _ = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=4,
+                       next_fn=scripted([], then=x))
+    llm._max_cache_rolls = rolls
+    with caplog.at_level(logging.WARNING):
+        answer = llm.run("q")
+    assert f"KV window rolled {rolls} times; stopping generation" in caplog.text
+    assert set(answer) == {"x"}
+    assert llm._cache_tokens == cached_tokens(llm)
+
+
+def test_in_turn_rollover_then_next_turn_preserves_pending(tmp_path, monkeypatch):
+    # The cache fills mid-answer; the roll keeps the last window tokens, and
+    # the next turn still picks up the pending prediction.
+    a, b, c = 120, 121, 122
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=3,
+                          next_fn=scripted([a, b, STOP, c], then=STOP))
+    fill(llm, [30, 31, 32, 33, 34, 35, 36])
+    llm.run("q")
+    p1 = llm._build_prompt_tokens("q")
+    assert cached_tokens(llm) == [34, 35, 36] + p1 + [a, b]
+    assert llm._pending_token == stop
+    llm._max_gen_tokens = 1
+    llm.run("q")
+    p2 = llm._build_prompt_tokens("q")
+    assert cached_tokens(llm) == [_chars("q")[0], a, b] + [stop] + p2
+    assert llm._pending_token == c
+
+
+def test_batched_prefill_matches_single_step_cache(tmp_path_factory, monkeypatch):
+    A = _chars("Hi")
+    spec = SPECS[Gemma3Static]
+    specials, bos_id, config, stop = spec
+    tok = CharTokenizer(specials, bos_id=bos_id)
+
+    def build(name, prefill_size):
+        return make_llm(
+            tmp_path_factory.mktemp(name), monkeypatch, Gemma3Static, tokenizer=tok,
+            config=config, next_fn=scripted((A + [STOP]) * 2, then=STOP),
+            prefill_size=prefill_size, instruct_model=True, sys_prompt="S",
+        )
+
+    single, _ = build("single", None)
+    batched, models = build("batched", 2)
+    assert models["prefill"] is not None
+    assert cached_tokens(single) == cached_tokens(batched)
+    for question in ("first", "second"):
+        assert single.run(question) == batched.run(question) == "Hi"
+        assert cached_tokens(single) == cached_tokens(batched)
+    assert models["prefill"].calls
+
+
+def test_repeated_turns_keep_bookkeeping_in_sync_with_cache(tmp_path, monkeypatch):
+    # Several turns over a small window: the turn-start roll (turn 4) and the
+    # mid-answer roll (turn 2) both leave _cache_tokens matching the cache.
+    a = CHAR_BASE + ord("x")
+    llm, _, stop = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=12, keep=3,
+                          next_fn=scripted([a, STOP] * 4, then=STOP))
     for _ in range(4):
-        assert runner.run("next") == "20 21 99"
-        assert runner._cache_tokens == runner._model.tokens[:runner._turn_pos].tolist()
+        assert llm.run("next") == "x"
+        assert llm._cache_tokens == cached_tokens(llm)
+        assert llm._turn_pos < 12
 
 
-def test_failed_step_does_not_advance_cache_position():
-    runner = _runner()
-    runner._model.infer = Mock(side_effect=RuntimeError("inference failed"))
+def test_failed_prefill_does_not_advance_position(tmp_path, monkeypatch):
+    llm, models, _ = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False,
+                            next_fn=scripted([], then=1))
+
+    def boom(inputs):
+        raise RuntimeError("inference failed")
+
+    models["body"].infer = boom
     with pytest.raises(RuntimeError, match="inference failed"):
-        runner.llm_step(10, 0)
-    assert runner._turn_pos == 0
+        llm.run("q")
+    assert llm._turn_pos == 0
+    assert llm._cache_tokens == []
+    assert llm._pending_token is None
 
 
-def test_generation_validation_resets_between_samples(monkeypatch):
-    monkeypatch.setitem(sys.modules, "runner", sys.modules[Gemma3Static.__module__])
-    validate = _load("gemma_multi_turn_validate", "gemma3/src/validate.py")
-    validator = validate.TextGenerationValidator.__new__(validate.TextGenerationValidator)
-    validator.dataset = [{"src": "a", "tgt": "b"}, {"src": "c", "tgt": "d"}]
-    validator.n = 2
-    validator.few_shot_prompt = None
-    validator.tgt_lang = "Spanish"
-    validator.verbose = False
-    validator.output_csv = None
-    validator.gemma3 = Mock(last_infer_time=1, time_to_first_token=1, generated_tokens=1)
-    validator.gemma3.run.return_value = "b"
-    validator.run()
-    assert [call[0] for call in validator.gemma3.method_calls] == ["reset", "run", "reset", "run"]
+def test_generation_validation_resets_between_samples(tmp_path, capsys):
+    runner = Mock(last_infer_time=1, time_to_first_token=1, generated_tokens=1)
+    runner.run.return_value = "b"
+    items = [
+        {"name": "a", "prompt": "a", "expected": "b", "check": lambda answer: answer == "b"},
+        {"name": "c", "prompt": "c", "expected": "b", "check": lambda answer: answer == "b"},
+    ]
+    assert run_prompts(runner, items) == 1.0
+    assert [call[0] for call in runner.method_calls] == ["reset", "run", "reset", "run"]
+
+
+def test_teacher_forced_validation_steps(tmp_path, monkeypatch, capsys):
+    specials, bos_id, config, _ = SPECS[Gemma3Static]
+    llm, _ = make_llm(tmp_path, monkeypatch, Gemma3Static,
+                      tokenizer=CharTokenizer(specials, bos_id=bos_id), config=config,
+                      next_fn=scripted([], then=1), instruct_model=True, sys_prompt="S")
+    run_teacher_forced(llm, [{"src": "hello", "tgt": "hola mundo", "tgt_lang": "Spanish"}])

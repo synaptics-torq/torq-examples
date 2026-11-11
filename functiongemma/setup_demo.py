@@ -3,10 +3,7 @@
 
 """Set up FunctionGemma using the shared Gemma export file layout."""
 
-import sys
 from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from gemma3.setup_demo import (
     _download_gemma3,
@@ -40,7 +37,7 @@ def ensure_functiongemma_models(model_dir, *, refresh=True):
     )
 
 
-def setup_functiongemma(models=None, model_version=None, no_update=False, enable_prefill=False):
+def setup(models=None, *, model_version=None, no_update=False, enable_prefill=False):
     result = setup_demo(
         FUNCTIONGEMMA_HF_REPO_MAP,
         [DEFAULT_MODEL] if models is None else models,
@@ -65,7 +62,7 @@ def setup_functiongemma(models=None, model_version=None, no_update=False, enable
 
 if __name__ == "__main__":
     demo_main(
-        setup_functiongemma, description="Download FunctionGemma model files.",
+        setup, description="Download FunctionGemma model files.",
         default_models=[DEFAULT_MODEL], repo_map=FUNCTIONGEMMA_HF_REPO_MAP,
         supports_prefill=True,
     )

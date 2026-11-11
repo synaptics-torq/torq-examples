@@ -275,13 +275,16 @@ def resolve_default_model(
     parser: argparse.ArgumentParser,
     resolve: Callable[[], Path | None],
     *,
-    download: Callable[[], object],
+    download: Callable[[], object] | None,
     message: str,
     no_refresh: bool = False,
 ) -> Path:
-    """Resolve a local default, downloading once unless ``no_refresh`` is set."""
+    """Resolve a local default, downloading once unless ``no_refresh`` is set.
+
+    With ``download=None`` a missing local model is an error straight away.
+    """
     model = resolve()
-    if model is None and not no_refresh:
+    if model is None and download is not None and not no_refresh:
         logger.info("No local model found; downloading on first run...")
         try:
             download()

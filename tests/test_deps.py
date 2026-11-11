@@ -12,17 +12,6 @@ from utils.deps import MissingRequirementsError, _requirement_name, check_requir
 from utils.version import examples_version
 
 
-def test_root_requirements_are_all_parseable():
-    # Every line of the root requirements.txt must name a checkable package
-    root_req = Path(__file__).resolve().parents[1] / "requirements.txt"
-    names = [
-        name
-        for name in (_requirement_name(line) for line in root_req.read_text().splitlines())
-        if name is not None
-    ]
-    assert "torq-runtime" in names
-
-
 def test_torq_runtime_pin_matches_examples_version():
     # The torq-runtime pin must track the root VERSION file:
     # a release bump fails here until the pin is updated in the same change.

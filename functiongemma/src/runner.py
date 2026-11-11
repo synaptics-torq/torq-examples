@@ -1,29 +1,31 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-"""FunctionGemma protocol on the shared Gemma 3 model runtime."""
+"""FunctionGemma: the function-calling protocol as hooks on the shared LLM."""
 
-from typing import Iterator
+from typing import Final, Iterator
 
-from gemma3.src.runner import Gemma3Static
 from functiongemma.src.function_tools import (
     DEFAULT_TOOLS,
     START_FUNCTION_RESPONSE,
     format_developer_block,
 )
-from utils.inference import StopCheck
+from utils.inference import ContextOverflow, StopCheck
+from utils.llm import GEMMA, LLM
+from utils.runtime import RuntimeConfig
 
 
-class FunctionGemmaStatic(Gemma3Static):
-    __slots__ = ("_tools", "_function_response_next")
+class FunctionGemmaStatic(LLM):
+    """FunctionGemma (Gemma 3 chat format) with its tool-calling protocol:
+    a developer tool block as the warm-up prefix, generation that stops at
+    a function call, and the function response fed back into the same turn."""
 
-    def __init__(self, *args, tools: list[dict] | None = None, **kwargs):
+    def __init__(self, model_path, *, runtime: RuntimeConfig, tools: list[dict] | None = None, **kwargs):
         self._tools = DEFAULT_TOOLS if tools is None else tools
         self._function_response_next = False
-        super().__init__(*args, instruct_model=True, **kwargs)
+        super().__init__(model_path, runtime, template=GEMMA, **kwargs)
 
-    def _on_model_config_loaded(self, cfg: dict) -> None:
-        super()._on_model_config_loaded(cfg)
+    def _check_export(self) -> None:
         stop = self._tokenizer.token_to_id(START_FUNCTION_RESPONSE)
         markers = (
             "<start_function_call>", "<end_function_call>",
@@ -37,6 +39,18 @@ class FunctionGemmaStatic(Gemma3Static):
                 f"{START_FUNCTION_RESPONSE} must be a configured stop token"
             )
 
+    def set_tools(self, tools: list[dict]) -> None:
+        """Declare *tools* instead: re-run the warm-up with their developer block."""
+        self._tools = tools
+        self._cache.reset()
+        self._cache_tokens.clear()
+        self._turn_pos = 0
+        self._warmup_len = self._warmup()
+        self._warmup_state = self._cache.snapshot() if self._warmup_len else None
+        self._turn_pos = self._warmup_len
+        self._pending_token = None
+        self._function_response_next = False
+
     @property
     def awaiting_function_response(self) -> bool:
         return self._pending_token is not None and self._pending_token == self._tokenizer.token_to_id(START_FUNCTION_RESPONSE)
@@ -46,13 +60,16 @@ class FunctionGemmaStatic(Gemma3Static):
         return self._tokenizer.decode(tokens, skip_special_tokens=False)
 
     def _build_warmup_tokens(self) -> list[int]:
+        # The first hook to run once the tokenizer is loaded.
+        self._check_export()
+        self._end_of_turn_id = self._tokenizer.token_to_id("<end_of_turn>")
         tokens = [self._bos_token_id] + self.tokenize(
             format_developer_block(self._tools), "developer"
         )
         if isinstance(self._max_prompt_tokens, int) and len(tokens) > self._max_prompt_tokens:
-            raise ValueError("Developer tool block exceeds --max-inp-len")
+            raise ContextOverflow("Developer tool block exceeds --max-inp-len")
         if len(tokens) >= self._max_seq_len:
-            raise ValueError("Developer tool block leaves no room in the KV cache")
+            raise ContextOverflow("Developer tool block leaves no room in the KV cache")
         return tokens
 
     def _build_prompt_tokens(self, user_input: str) -> list[int]:
@@ -75,11 +92,11 @@ class FunctionGemmaStatic(Gemma3Static):
         if limit is None:
             limit = self._max_prompt_tokens
         if isinstance(limit, int) and len(tokens) > limit:
-            raise ValueError("FunctionGemma prompt exceeds --max-inp-len")
+            raise ContextOverflow("FunctionGemma prompt exceeds --max-inp-len")
         pending = int(self._pending_token is not None)
         start = self._turn_pos if self._function_response_next else self._warmup_len
         if start + pending + len(tokens) > self._max_seq_len:
-            raise ValueError("FunctionGemma prompt exceeds available KV cache capacity")
+            raise ContextOverflow("FunctionGemma prompt exceeds available KV cache capacity")
         return tokens
 
     def _roll_cache(self, keep: int, should_stop: StopCheck | None) -> None:
@@ -97,3 +114,17 @@ class FunctionGemmaStatic(Gemma3Static):
             yield from self.run_stream(response_text, should_stop=should_stop)
         finally:
             self._function_response_next = False
+
+
+def format_answer(
+    answer: str,
+    infer_time: float,
+    ttft: float,
+    stats: list[str] | None = None,
+    agent_name: str = "Agent",
+) -> str:
+    GREEN: Final[str] = "\033[32m"
+    RESET: Final[str] = "\033[0m"
+    metrics = [f"{infer_time:.3f} ms", f"TTFT: {ttft:.3f} ms"]
+    metrics.extend(str(s) for s in (stats or []))
+    return GREEN + f"{agent_name}: {answer}" + RESET + f" ({', '.join(metrics)})"

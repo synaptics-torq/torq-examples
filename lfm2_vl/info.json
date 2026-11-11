@@ -1,0 +1,8 @@
+{
+  "name": "LiquidAI-LFM2-VL-450M",
+  "description": "Ask questions about an image and get an answer, using LiquidAI's LFM2-VL-450M vision-language model running entirely on the Synaptics Torq NPU.",
+  "task_category": "image_text_to_text",
+  "validation": [
+    {"dataset": "Lin-Chen/MMStar", "config": "val", "split": "val", "samples": 30}
+  ]
+}

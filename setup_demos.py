@@ -9,10 +9,13 @@ Usage:
 """
 
 import argparse
+import glob
+import json
 import logging
 import os
 import site
 import sys
+from importlib import import_module
 from typing import Final
 
 from utils.deps import MissingRequirementsError, check_requirements
@@ -22,25 +25,30 @@ from utils.log import add_logging_args, configure_logging
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
 
-DEMOS = [
-    "gemma3",
-    "functiongemma",
-    "qwen2_5",
-    "qwen3",
-    "LiquidAI-LFM2.5",
-    "moonshine",
-    "moonshine_streaming",
-    "LiquidAI-LFM2-VL-450M",
-    "object_detection",
-    "pose_estimation",
-    "face_id",
-    "EmbeddingGemma-2",
+REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+
+def _demo_folders() -> dict[str, dict]:
+    """Map demo folder (relative to the repo root) to its ``info.json``."""
+    folders: dict[str, dict] = {}
+    for info_path in sorted(glob.glob("*/info.json", root_dir=REPO_ROOT)):
+        with open(os.path.join(REPO_ROOT, info_path), encoding="utf-8") as f:
+            folders[os.path.dirname(info_path)] = json.load(f)
+    return folders
+
+
+_DEMO_FOLDERS: Final[dict[str, dict]] = _demo_folders()
+
+#: Demo names (the ``name`` field of each info.json), sorted by folder.
+DEMOS: Final[list[str]] = [
+    _DEMO_FOLDERS[folder]["name"] for folder in sorted(_DEMO_FOLDERS)
 ]
 
-# Demos whose setup supports the --with-batch-prefill flag (their models have a
-# batched prefill build). The flag is forwarded only to these; every other demo
-# is set up exactly as before and just gets a warning.
-_PREFILL_DEMOS: Final[frozenset[str]] = frozenset({"gemma3", "LiquidAI-LFM2.5"})
+#: Names of the demos whose info.json marks them as batched-prefill capable
+#: (shown in the --with-batch-prefill help text).
+_PREFILL_DEMOS: Final[list[str]] = sorted(
+    info["name"] for info in _DEMO_FOLDERS.values() if info.get("batch_prefill")
+)
 
 
 def _site_packages_dir() -> str:
@@ -62,20 +70,36 @@ def install():
     logger.info("Added '%s' to Python's import path. To undo, delete '%s'", repo_root, pth_file)
 
 
-def _load_demo_module(*path_parts):
-    """Load a demo's setup_demo.py by file path.
+#: Demo folder paths that were renamed, mapped to their new folder. Old paths
+#: keep working for one release; they resolve to the new folder with a
+#: deprecation warning.
+DEPRECATED_DEMOS: Final[dict[str, str]] = {
+    "LiquidAI/LiquidAI-LFM2.5": "lfm2_5",
+    "LiquidAI/LiquidAI-LFM2-VL-450M": "lfm2_vl",
+    "Face_ID": "face_id",
+    # "EmbeddingGemma-2" (the old folder) is still the demo's info.json name.
+}
 
-    The Liquid demos live under LiquidAI/ in directories whose names contain
-    dots and hyphens, so they are not importable as packages; load them by file
-    path instead.
+
+def _load_demo_setup(folder: str):
+    """Load the setup_demo module of a demo folder (relative to the repo root)."""
+    return import_module(f"{folder}.setup_demo")
+
+
+def resolve_demo(name: str) -> tuple[str, dict] | None:
+    """Resolve a demo by info name or folder path; return ``(folder, info)``.
+
+    Renamed demo folders (``DEPRECATED_DEMOS``) still resolve, with a
+    deprecation warning naming the new folder.
     """
-    import importlib.util
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), *path_parts)
-    modname = "_demo_" + "_".join(path_parts).replace(".", "_").replace("-", "_")
-    spec = importlib.util.spec_from_file_location(modname, path)
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
+    if name in DEPRECATED_DEMOS:
+        new = DEPRECATED_DEMOS[name]
+        logger.warning("Demo folder '%s' has been renamed to '%s'.", name, new)
+        name = new
+    for folder, info in _DEMO_FOLDERS.items():
+        if name in (folder, info["name"]):
+            return folder, info
+    return None
 
 
 def setup_demo(
@@ -85,61 +109,23 @@ def setup_demo(
     no_update: bool = False,
     enable_prefill: bool = False,
 ):
-    if enable_prefill and name not in _PREFILL_DEMOS:
+    resolved = resolve_demo(name)
+    if resolved is None:
+        logger.error("Unknown demo: '%s'. Valid demos: %s", name, ", ".join(DEMOS))
+        sys.exit(1)
+    folder, info = resolved
+    if enable_prefill and not info.get("batch_prefill"):
         logger.warning(
             "--with-batch-prefill has no effect for the '%s' demo (no batched prefill "
             "model); ignoring.", name,
         )
+    module = _load_demo_setup(folder)
     try:
-        if name == "gemma3":
-            from gemma3.setup_demo import DEFAULT_MODEL, setup_gemma3
-            setup_gemma3(
-                [DEFAULT_MODEL],
-                model_version=model_version,
-                no_update=no_update,
-                enable_prefill=enable_prefill,
-            )
-        elif name == "functiongemma":
-            from functiongemma.setup_demo import setup_functiongemma
-            setup_functiongemma(
-                model_version=model_version, no_update=no_update,
-                enable_prefill=enable_prefill,
-            )
-        elif name == "qwen2_5":
-            from qwen2_5.setup_demo import setup_qwen25
-            setup_qwen25(["instruct"], model_version=model_version, no_update=no_update)
-        elif name == "qwen3":
-            from qwen3.setup_demo import setup_qwen3
-            setup_qwen3(["instruct"], model_version=model_version, no_update=no_update)
-        elif name == "LiquidAI-LFM2.5":
-            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py")
-            _mod.setup_liquid(
-                ["230m"],
-                model_version=model_version,
-                no_update=no_update,
-                enable_prefill=enable_prefill,
-            )
-        elif name == "moonshine":
-            from moonshine.setup_demo import setup_moonshine
-            setup_moonshine(["tiny-en"], model_version=model_version, no_update=no_update)
-        elif name == "moonshine_streaming":
-            from moonshine_streaming.setup_demo import setup_moonshine_streaming
-            setup_moonshine_streaming(["streaming-tiny-en"], model_version=model_version, no_update=no_update)
-        elif name == "LiquidAI-LFM2-VL-450M":
-            _mod = _load_demo_module("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py")
-            _mod.setup_liquidvl_int8(["default"])
-        elif name == "EmbeddingGemma-2":
-            _mod = _load_demo_module("EmbeddingGemma-2", "setup_demo.py")
-            _mod.setup_embeddinggemma2(["default"], model_version=model_version, no_update=no_update)
-        elif name == "object_detection":
-            from object_detection.setup_demo import setup_object_detection
-            setup_object_detection(model_version=model_version, no_update=no_update)
-        elif name == "pose_estimation":
-            from pose_estimation.setup_demo import setup_pose_estimation
-            setup_pose_estimation(model_version=model_version, no_update=no_update)
-        elif name == "face_id":
-            from Face_ID.setup_demo import setup_face_id
-            setup_face_id()
+        module.setup(
+            model_version=model_version,
+            no_update=no_update,
+            enable_prefill=enable_prefill,
+        )
     except (DownloadError, MissingRequirementsError) as e:
         logger.error("Setup failed for '%s': %s", name, e)
         if e.__cause__:
@@ -152,7 +138,10 @@ if __name__ == "__main__":
     group = parser.add_mutually_exclusive_group()
     group.add_argument(
         "demos", nargs="*", default=[], metavar="DEMO",
-        help=f"Demo(s) to set up. Valid names: {', '.join(DEMOS)}",
+        help=(
+            f"Demo(s) to set up. Valid names: {', '.join(DEMOS)}, or a demo folder "
+            "path relative to the repo root (e.g. lfm2_5)"
+        ),
     )
     group.add_argument(
         "--all", action="store_true", dest="all_demos",
@@ -184,7 +173,7 @@ if __name__ == "__main__":
         help=(
             "Also download and track the optional batched prefill model "
             "(transformer_prefill.vmfb) for the demos that have one "
-            f"({', '.join(sorted(_PREFILL_DEMOS))}). It is an extra model, so "
+            f"({', '.join(_PREFILL_DEMOS)}). It is an extra model, so "
             "it uses more memory, and its prompt-chunk size is fixed. "
             "Warns and is ignored for the other demos."
         ),
@@ -214,9 +203,6 @@ if __name__ == "__main__":
         sys.exit(0)
 
     for name in demos_to_run:
-        if name not in DEMOS:
-            logger.error("Unknown demo: '%s'. Valid demos: %s", name, ", ".join(DEMOS))
-            sys.exit(1)
         setup_demo(
             name,
             model_version=args.model_version,

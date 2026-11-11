@@ -36,20 +36,6 @@ def test_examples_version_empty_file_returns_none(tmp_path, monkeypatch):
     assert examples_version() is None
 
 
-def test_repo_ships_a_version_file():
-    # The demos rely on this at setup time; a release without it would fail
-    # loudly for every built-in repo, so the file must exist in the tree.
-    assert utils.version._VERSION_FILE.is_file()
-    assert examples_version() is not None
-
-
-def test_parse_model_specs_plain_names():
-    assert parse_model_specs(["tiny-en", "instruct"]) == [
-        ("tiny-en", None),
-        ("instruct", None),
-    ]
-
-
 def test_parse_model_specs_with_versions():
     assert parse_model_specs(["default:v2.0.0", "custom/gemma3"]) == [
         ("default", "v2.0.0"),

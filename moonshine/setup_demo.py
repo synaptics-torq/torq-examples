@@ -2,11 +2,8 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import logging
-import sys
 from pathlib import Path
 from typing import Final
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from utils.download import default_models_dir, download_from_hf, resolve_repo_id
 from utils.model_setup import demo_main, download_models, ensure_demo_models, setup_demo
@@ -51,7 +48,7 @@ def download_moonshine(
     """Download/refresh the given Moonshine models; return ``{name: model_dir}``.
 
     Version selection, ``name:version`` specs and ``no_update`` are handled by
-    :func:`utils.model_setup.download_models`. Unlike :func:`setup_moonshine`,
+    :func:`utils.model_setup.download_models`. Unlike :func:`setup`,
     this does not check demo requirements, so it can be reused by other
     projects that manage their own environment and models dir.
     """
@@ -114,12 +111,17 @@ def ensure_moonshine_models(
     )
 
 
-def setup_moonshine(
+def setup(
     models: list[str] | None = None,
+    *,
     model_version: str | None = None,
     no_update: bool = False,
+    enable_prefill: bool = False,
 ):
-    """Set up the moonshine demo (check requirements, then download/refresh)."""
+    """Set up the moonshine demo (check requirements, then download/refresh).
+
+    ``enable_prefill`` is accepted for a uniform interface and ignored (no
+    batched prefill model)."""
     if models is None:
         models = _DEFAULT_MODELS
     return setup_demo(
@@ -136,7 +138,7 @@ def setup_moonshine(
 
 if __name__ == "__main__":
     demo_main(
-        setup_moonshine,
+        setup,
         description="Download Moonshine model files.",
         default_models=_DEFAULT_MODELS,
         repo_map=MOONSHINE_HF_REPO_MAP,

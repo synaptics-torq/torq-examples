@@ -1,0 +1,8 @@
+{
+  "name": "qwen2_5",
+  "description": "Interactive chat with Qwen2.5-0.5B-Instruct on the Torq NPU.",
+  "task_category": "text_generation",
+  "validation": [
+    {"dataset": "openai/gsm8k", "config": "main", "split": "test", "samples": 20}
+  ]
+}

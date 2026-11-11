@@ -76,20 +76,28 @@ python src/infer.py --instruct-model
 
 Type `exit` or `quit` to stop the chat session. While an answer is being generated, press <kbd>Ctrl</kbd> + <kbd>C</kbd> or <kbd>Ctrl</kbd> + <kbd>D</kbd> to interrupt it and return to the prompt.
 
-When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions (default: 2). It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits.
+When the KV cache fills, the sliding window keeps the system prompt and re-prefills up to `--kv-cache-window N` recent tokens at their new positions (default: 2). It retains fewer history tokens when needed to fit the next prompt or generation step. Re-prefilling adds work at rollover, but keeps the cached keys' position encodings correct. With `--no-kv-cache-window`, generation stops at capacity and a later prompt starts a fresh conversation when it no longer fits. An answer stops after the window has rolled `--max-cache-rolls N` times during it (default: 3), so a model that never emits an end-of-turn token cannot generate forever.
 
 Run `python src/infer.py -h` to see all available inference options.
 
 ## Validation
 
-Gemma 3 includes a validation script for text translation datasets. For example:
+`src/validate.py` runs the model with greedy decoding on 50 PIQA questions ([baber/piqa](https://huggingface.co/datasets/baber/piqa); Gemma 3 270M reports PIQA on its model card): each asks which of two solutions achieves a goal, and the answer passes when it picks the labelled one:
 
 ```sh
 cd gemma3
-python src/validate.py --instruct-model --max-samples 10
+python src/validate.py --instruct-model
 ```
 
-Run `python src/validate.py -h` to see all available validation options.
+The translation modes score OPUS-100 English to Spanish ([Helsinki-NLP/opus-100](https://huggingface.co/datasets/Helsinki-NLP/opus-100)) instead: `--mode bleu` (corpus BLEU-4) or `--mode teacher-forced` (next-token accuracy); `--config es-en` translates the other way. They record the `bleu` or `token_accuracy` metric:
+
+```sh
+python src/validate.py --instruct-model --mode bleu --samples 10
+```
+
+The rows are downloaded from Hugging Face on the first run and cached under `$MODELS/datasets/` (copy that folder to a board without network access). The data is not part of this repository: check the dataset card for its license and terms of use. `--dataset`, `--config`, `--split` and `--samples` select other data (the defaults are the `validation` list in `info.json`).
+
+The script prints each item's result and the overall accuracy; `--metrics-out` records it as the `accuracy` metric next to the performance metrics of `src/infer.py`. There is no pass mark: the score is there so you can weigh accuracy against speed (e.g. between model variants). Run `python src/validate.py -h` to see all available validation options.
 
 ## Build the model
 

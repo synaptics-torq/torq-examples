@@ -8,7 +8,6 @@ split it into utterances, with committed-prefix incremental decode for a
 real-time live preview. See ``runner.py`` for the inference engine.
 """
 
-import argparse
 import logging
 import os
 import queue
@@ -16,9 +15,6 @@ import sys
 import threading
 import time
 from collections import deque
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 import numpy as np
 
@@ -29,16 +25,14 @@ except ImportError:
     print("  pip install tokenizers", file=sys.stderr)
     sys.exit(1)
 
-from runner import MoonshineStaticStreamingModel, find_asset  # noqa: E402 (sibling import)
 from moonshine_streaming.setup_demo import (
     download_moonshine_streaming,
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
-from utils.inference import add_common_inference_args
-from utils.log import configure_logging
-from utils.model_setup import resolve_default_model
-from utils.npu import configure_npu_userspace_frequency
+from moonshine_streaming.src.runner import MoonshineStaticStreamingModel, find_asset
+from utils.runtime import add_common_inference_args
+from utils.tasks.automatic_speech_recognition import infer_main
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -51,7 +45,7 @@ class _HangoverVAD:
     """
     Shared speech/silence endpointing: given a per-chunk score from a
     subclass, tracks speech_start/speech_end transitions with a fixed
-    silence-duration hangover before ending an utterance. 
+    silence-duration hangover before ending an utterance.
     """
     def __init__(self, threshold, silence_duration, sample_rate):
         self.threshold                = threshold
@@ -190,13 +184,8 @@ class _Stats:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main(args: argparse.Namespace):
-
+def make_runner(args, runtime):
     model_dir = args.model_dir
-
-    # Refresh the local copy when the upstream HF revision has moved on, so a
-    # stale model dir is repaired before the existence check below.
-    ensure_moonshine_streaming_models(model_dir, refresh=not args.no_refresh)
 
     if not os.path.isdir(model_dir):
         logger.error("Model directory %s not found.", model_dir)
@@ -211,48 +200,46 @@ def main(args: argparse.Namespace):
             args.commit_agreement, args.commit_delay,
         )
 
-    ok, message = configure_npu_userspace_frequency("max")
-    print(f"[NPU] {message}")
-
-    runtime_flags = [f"--torq_device_allocator={args.tda}"] + (args.runtime_flags or [])
-    device_io = args.device_io or args.tda == "dmabuf"
-
     try:
-        model     = MoonshineStaticStreamingModel(model_dir,
-                                                   runtime_flags=runtime_flags,
-                                                   device_io=device_io)
+        model     = MoonshineStaticStreamingModel(model_dir, runtime=runtime)
         tokenizer = Tokenizer.from_file(find_asset(model.model_dir, "tokenizer.json"))
     except Exception as e:
         logger.error("Error initializing models: %s", e)
         sys.exit(1)
+    return model, tokenizer
 
+
+def transcribe_streaming(model, tokenizer, args, wav, metrics) -> str:
+    """Run the VAD/streaming pipeline over one WAV file and return its final
+    transcript: the finalized utterances, in order, space-joined."""
     try:
         import soundfile as sf
     except ImportError:
         logger.error("soundfile is required. Install it with: pip install soundfile")
         sys.exit(1)
-    if not os.path.isfile(args.wav):
-        logger.error("WAV file %s not found.", args.wav)
+    if not os.path.isfile(wav):
+        logger.error("WAV file %s not found.", wav)
         sys.exit(1)
-    data, input_sample_rate = sf.read(args.wav, dtype="float32")
+    data, input_sample_rate = sf.read(wav, dtype="float32")
     if data.ndim > 1:
         data = data.mean(axis=1)
     wav_audio = data.astype(np.float32)
     logger.info(
         "Transcribing WAV file:  %s (%.1fs @ %d Hz)",
-        args.wav, len(wav_audio) / input_sample_rate, input_sample_rate,
+        wav, len(wav_audio) / input_sample_rate, input_sample_rate,
     )
 
     audio_queue = queue.Queue()
     running     = True
+    transcript  = []
 
     logger.info("VAD backend:      energy (self-calibrating, floor %.4f)", args.vad_threshold)
     vad = EnergyVAD(threshold=args.vad_threshold, silence_duration=args.vad_silence,
-                        report_calibration=args.verbose)
+                            report_calibration=args.verbose)
     terminal = TerminalListener()
     state    = model.create_state()
 
-    stats = _Stats() if args.verbose else None
+    stats = _Stats()
 
     def worker():
         tokens              = []
@@ -270,22 +257,20 @@ def main(args: argparse.Namespace):
         lookback_buffer = deque(maxlen=max(lookback_chunks, 0))
 
         def _encode(chunk):
-            if stats is not None:
-                t0 = time.perf_counter()
+            t0 = time.perf_counter()
             model.process_audio_chunk(state, chunk)
             model.encode(state, is_final=False)
-            if stats is not None:
-                stats.encode_ms += (time.perf_counter() - t0) * 1000
+            stats.encode_ms += (time.perf_counter() - t0) * 1000
 
         def _decode():
-            if stats is not None:
-                t0 = time.perf_counter()
+            t0 = time.perf_counter()
             if args.full_decode:
                 tokens = model.decode(state)
             else:
                 tokens = model.decode_incremental(state, args.commit_delay, args.commit_agreement)
-            if stats is not None:
-                stats.decode_ms    += (time.perf_counter() - t0) * 1000
+            elapsed_ms = (time.perf_counter() - t0) * 1000
+            stats.decode_ms += elapsed_ms
+            metrics.add("latency", int(elapsed_ms * 1e6))
             return tokens
 
         def _finalize(count):
@@ -293,6 +278,7 @@ def main(args: argparse.Namespace):
             full, and lock the finalized line in place."""
             model.encode(state, is_final=True)
             text = tokenizer.decode(_decode(), skip_special_tokens=True)
+            transcript.append(text)
             terminal.draw(f"\033[32m✓\033[0m Utterance #{count}: {text if text else '(empty)'}")
             terminal.complete_line()
 
@@ -379,15 +365,15 @@ def main(args: argparse.Namespace):
             audio_queue.task_done()
 
     def print_verbose_summary():
-        if stats is None:
-            return
         audio_s = len(wav_audio) / input_sample_rate
         work_s  = (stats.encode_ms + stats.decode_ms) / 1000
         rtf     = work_s / audio_s if audio_s else 0.0
-        print(
-            f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
-            file=sys.stderr,
-        )
+        metrics.add("real_time_factor", rtf * 100)
+        if args.verbose:
+            print(
+                f"\n[verbose] RTF: {rtf:.2f}x realtime  ({work_s:.1f}s work / {audio_s:.1f}s audio)",
+                file=sys.stderr,
+            )
 
     def feed_wav_to_queue():
         """Push the WAV file onto audio_queue in fixed-size blocks, then signal
@@ -401,7 +387,7 @@ def main(args: argparse.Namespace):
         while pos < len(full) and running:
             end = min(pos + block, len(full))
             audio_queue.put(full[pos:end])
-            if args.realtime:
+            if getattr(args, "realtime", False):
                 time.sleep((end - pos) / input_sample_rate)
             pos = end
         audio_queue.put(_END_OF_STREAM)
@@ -417,7 +403,7 @@ def main(args: argparse.Namespace):
     sys.stdout.write("\033[?25l")
     sys.stdout.flush()
     try:
-        print(f">>> Transcribing {args.wav} ... <<<\n", file=sys.stderr)
+        print(f">>> Transcribing {wav} ... <<<\n", file=sys.stderr)
         try:
             feed_wav_to_queue()
             worker_thread.join()
@@ -430,17 +416,11 @@ def main(args: argparse.Namespace):
     finally:
         sys.stdout.write("\033[?25h")
         sys.stdout.flush()
-        ok, message = configure_npu_userspace_frequency("min")
-        print(f"[NPU] {message}")
+    return " ".join(text for text in transcript if text)
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(
-        description="Moonshine Static Streaming WAV File Transcription Demo (2-Split VMFB)"
-    )
-    parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
-    parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
-    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (default: the one setup_demo.py downloaded)")
+def pipeline_args(parser) -> None:
+    """The VAD/decode pipeline flags, shared with ``validate.py``."""
     parser.add_argument("--vad-threshold", type=float, default=0.01,           help="VAD trigger threshold: RMS floor for the energy VAD (default: 0.010)")
     parser.add_argument("--vad-silence",   type=float, default=2.5,            help="Silence gap to split utterances in seconds (default: 2.5)")
     parser.add_argument("--vad-lookback",  type=int,   default=None,           help="Pre-speech chunks to replay into the encoder on speech_start, to avoid clipping word onsets (default: model.warmup_chunks; 0 disables)")
@@ -449,25 +429,33 @@ if __name__ == "__main__":
     parser.add_argument("--commit-delay",  type=float, default=3.0,            help="Only commit tokens at least this many seconds of audio behind the live frontier (default: 3.0)")
     parser.add_argument("--full-decode",   action="store_true",               help="Disable incremental decode; re-decode from BOS each time (baseline behaviour)")
     parser.add_argument("--verbose",       action="store_true",               help="Print a real-time factor (RTF) summary on exit")
-    add_common_inference_args(
-        parser,
-        with_threads=False,
-        device_io_default=False,
-        device_io_help="Use device-backed inputs and outputs (enabled automatically with --tda dmabuf)",
+
+
+def add_args(parser) -> None:
+    parser.add_argument("--wav",           type=str,   required=True,          help="WAV file to transcribe")
+    parser.add_argument("--realtime",      action="store_true",               help="Pace the feed to match real-time playback speed (default: feed as fast as possible)")
+    parser.add_argument("-m", "--model-dir", type=str, default=None, metavar="DIR", help="Path to the flat moonshine-streaming-tiny model dir (default: the one setup_demo.py downloaded)")
+    pipeline_args(parser)
+    add_common_inference_args(parser, with_threads=False)
+
+
+def loop(runner, args, metrics) -> None:
+    model, tokenizer = runner
+    transcribe_streaming(model, tokenizer, args, args.wav, metrics)
+
+
+if __name__ == "__main__":
+    infer_main(
+        make_runner,
+        loop,
+        description="Moonshine Static Streaming WAV File Transcription Demo (2-Split VMFB)",
+        demo="moonshine_streaming",
+        local_model=local_moonshine_streaming_model_dir,
+        ensure_models=ensure_moonshine_streaming_models,
+        download=download_moonshine_streaming,
+        add_args=add_args,
+        message=(
+            "no local Moonshine streaming model found; pass -m/--model-dir or run "
+            "`python setup_demos.py moonshine_streaming` from torq-examples root"
+        ),
     )
-    args = parser.parse_args()
-    configure_logging(args.logging)
-    if args.model_dir is None:
-        args.model_dir = str(
-            resolve_default_model(
-                parser,
-                local_moonshine_streaming_model_dir,
-                download=download_moonshine_streaming,
-                no_refresh=args.no_refresh,
-                message=(
-                    "no local Moonshine streaming model found; pass -m/--model-dir or run "
-                    "`python setup_demos.py moonshine_streaming` from torq-examples root"
-                ),
-            )
-        )
-    main(args)

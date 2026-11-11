@@ -115,6 +115,7 @@ def download_from_hf(
     base_dir: str | os.PathLike | None = None,
     *,
     revision: str | None = None,
+    repo_type: str | None = None,
 ) -> Path:
     if base_dir is None:
         base_dir = default_models_dir()
@@ -134,6 +135,7 @@ def download_from_hf(
         filename=filename,
         local_dir=str(base_dir / repo_id),
         revision=revision,
+        repo_type=repo_type,
     )
     logger.debug("Download from HuggingFace completed.")
     return local_file

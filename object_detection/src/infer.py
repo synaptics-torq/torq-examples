@@ -1,31 +1,27 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
-import argparse
 import json
 import os
 import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from object_detection.setup_demo import (
+    VARIANT_MODEL_FILES,
     default_model_path,
     download_object_detection,
     ensure_object_detection_models,
-    VARIANT_MODEL_FILES,
 )
+from utils.runtime import Model, add_common_inference_args
+from utils.tasks.object_detection import infer_main
 from utils.vision import dequantize_out
-from utils.preprocess import preprocess_image
-from utils.runtime import build_runtime_flags, cleanup_npu_after_inference, setup_npu_and_runner
 from utils.object_detection import (
     VARIANTS,
     postprocess,
     render_annotated_image,
 )
 from utils.draw import display_image_gst
-from utils.log import configure_logging
-from utils.model_setup import resolve_default_model
+from utils.preprocess import preprocess_image
+from utils.video import setup_display_and_camera
 
 
 def load_labels(labels_path):
@@ -62,8 +58,7 @@ def maybe_save_and_display(args, results):
         print(f"Failed to save result image: {exc}")
 
 
-def main():
-    parser = argparse.ArgumentParser(description="Run YOLO object detection on an image.")
+def add_args(parser) -> None:
     parser.add_argument(
         "--model", default=None,
         help="Path to the model VMFB (default: the one setup_demo.py downloads for --variant)",
@@ -75,81 +70,76 @@ def main():
         help="Model head variant (default: %(default)s)",
     )
     parser.add_argument("--device", default="torq")
-    parser.add_argument(
-        "--no-refresh",
-        action="store_true",
-        default=False,
-        help="Skip the Hugging Face check for updated models (offline/airgapped runs)",
-    )
-    parser.add_argument(
-        "--tda", type=str, choices=["cpu", "dmabuf"], default="dmabuf",
-        help="Allocator backing Torq device buffers (default: %(default)s)",
-    )
-    parser.add_argument(
-        "--device-io", action="store_true",
-        help="Preallocate inputs and keep outputs as device arrays",
-    )
+    add_common_inference_args(parser)
     parser.add_argument("--save-image", action="store_true", help="If set, output annotated image")
     parser.add_argument("--display", action="store_true", help="Display annotated frame")
-    args = parser.parse_args()
-    configure_logging("INFO")
 
-    if args.model is None:
-        expected = default_model_path(args.variant)
-        args.model = str(
-            resolve_default_model(
-                parser,
-                lambda: expected if expected.exists() else None,
-                download=lambda: download_object_detection([VARIANT_MODEL_FILES[args.variant][0]]),
-                no_refresh=args.no_refresh,
-                message=(
-                    f"default model {expected} not found; pass --model or run "
-                    f"`python setup_demos.py object_detection` from torq-examples root"
-                ),
-            )
-        )
 
-    ensure_object_detection_models(Path(args.model).parent, refresh=not args.no_refresh)
+def local_model(args):
+    expected = default_model_path(args.variant)
+    return expected if expected.exists() else None
 
-    runtime_flags = build_runtime_flags(args.tda)
-    runner = setup_npu_and_runner(args, runtime_flags)
 
+def message(args):
+    return (
+        f"default model {default_model_path(args.variant)} not found; pass --model or run "
+        f"`python setup_demos.py object_detection` from torq-examples root"
+    )
+
+
+def make_runner(args, runtime):
+    setup_display_and_camera(args)
+    model = Model(args.model, runtime)
+    labels = load_labels(args.labels)
+    return model, labels, VARIANTS[args.variant]
+
+
+def loop(runner, args, metrics) -> None:
+    model, labels, variant = runner
+
+    print("\n[1/4] Preprocessing...")
     try:
-        print("\n[1/4] Preprocessing...")
-        try:
-            input_data, pad_info, orig_shape = preprocess_image(args.image)
-        except Exception as exc:
-            print(exc)
-            sys.exit(1)
-        print("\n[2/4] Inference...")
-        try:
-            raw_out = runner.infer(input_data)
-        except Exception as exc:
-            print(f"Inference failed: {exc}")
-            sys.exit(1)
-        print(f"Time: {runner.infer_time_ms:.3f}ms")
+        input_data, pad_info, orig_shape = preprocess_image(args.image)
+    except Exception as exc:
+        print(exc)
+        sys.exit(1)
+    print("\n[2/4] Inference...")
+    try:
+        raw_out = model.run(input_data)[0]
+        print(f"Time: {model.infer_time_ms:.3f}ms")
+        latency_ns = int(model.infer_time_ms * 1e6)
+        metrics.add("latency", latency_ns)
+        metrics.add("frames_per_second", 1e9 / latency_ns)
+    except Exception as exc:
+        print(f"Inference failed: {exc}")
+        sys.exit(1)
 
-        print("\n[3/4] Processing...")
-        if raw_out.shape != (1, 84, 2100):
-            print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 84, 2100). Metadata might be needed.")
+    print("\n[3/4] Processing...")
+    if raw_out.shape != (1, 84, 2100):
+        print(f"Warning: Output shape {raw_out.shape} doesn't match expected (1, 84, 2100). Metadata might be needed.")
 
-        variant = VARIANTS[args.variant]
-        outputs = dequantize_out(raw_out, variant["out_scale"], variant["out_zp"], int8=True)
+    outputs = dequantize_out(raw_out, variant["out_scale"], variant["out_zp"], int8=True)
+    results = postprocess(outputs, orig_shape, pad_info, labels)
 
-        labels = load_labels(args.labels)
-        results = postprocess(outputs, orig_shape, pad_info, labels)
+    print("\n[4/4] Detections:")
+    if not results:
+        print("No objects detected.")
 
-        print("\n[4/4] Detections:")
-        if not results:
-            print("No objects detected.")
+    for label, conf, box in results:
+        print(f"  {label:<15} Conf: {conf:.4f}  Box: {box.astype(int)}")
 
-        for label, conf, box in results:
-            print(f"  {label:<15} Conf: {conf:.4f}  Box: {box.astype(int)}")
-
-        maybe_save_and_display(args, results)
-    finally:
-        cleanup_npu_after_inference()
+    maybe_save_and_display(args, results)
 
 
 if __name__ == "__main__":
-    main()
+    infer_main(
+        make_runner,
+        loop,
+        description="Run YOLO object detection on an image.",
+        demo="object_detection",
+        local_model=local_model,
+        ensure_models=ensure_object_detection_models,
+        download=lambda args: download_object_detection([VARIANT_MODEL_FILES[args.variant][0]]),
+        add_args=add_args,
+        message=message,
+    )

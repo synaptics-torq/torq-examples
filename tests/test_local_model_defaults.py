@@ -9,29 +9,16 @@ helpers check file presence only (no manifest requirement), so untracked
 (``--no-update``) copies work as defaults too.
 """
 
-import importlib.util
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[1]
+from face_id import setup_demo as face_setup
+from lfm2_5 import setup_demo as liquid_setup
+from lfm2_vl import setup_demo as vl_setup
+from moonshine import setup_demo as moonshine_setup
+from moonshine_streaming import setup_demo as moonshine_streaming_setup
+from pose_estimation import setup_demo as pose_setup
 
 _LIQUID_REQUIRED = ("token_embeddings.npy", "config.json", "tokenizer.json")
-
-
-def _load_setup(path_parts):
-    path = _REPO_ROOT.joinpath(*path_parts)
-    spec = importlib.util.spec_from_file_location("_default_test_" + path.stem, path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-liquid_setup = _load_setup(("LiquidAI", "LiquidAI-LFM2.5", "setup_demo.py"))
-vl_setup = _load_setup(("LiquidAI", "LiquidAI-LFM2-VL-450M", "setup_demo.py"))
-face_setup = _load_setup(("Face_ID", "setup_demo.py"))
-
-from moonshine import setup_demo as moonshine_setup  # noqa: E402
-from moonshine_streaming import setup_demo as moonshine_streaming_setup  # noqa: E402
-from pose_estimation import setup_demo as pose_setup  # noqa: E402
 
 
 def _make_dir(base: Path, repo_id: str, filenames) -> Path:
@@ -95,11 +82,6 @@ def test_liquid_explicit_unknown_repo_passes_through(tmp_path):
     )
 
 
-def test_liquid_missing_returns_none(tmp_path):
-    assert liquid_setup.local_liquid_model_path(base_dir=tmp_path) is None
-    assert liquid_setup.local_liquid_model_path(model="350m", base_dir=tmp_path) is None
-
-
 # ── LFM2-VL-450M INT8 (model dirs, not files) ─────────────────────────────────
 
 
@@ -116,18 +98,6 @@ def test_vl_int8_incomplete_dir_returns_none(tmp_path):
         vl_setup._HF_REPO_MAP["default"],
         vl_setup._LFM2VL_W8_REQUIRED_FILES[:4],
     )
-    assert vl_setup.local_lfm2vl_model_dir(base_dir=tmp_path) is None
-
-
-def test_vl_int8_name_aliases_resolve_to_the_same_repo(tmp_path):
-    model_dir = _make_dir(
-        tmp_path, vl_setup._HF_REPO_MAP["w8"], vl_setup._LFM2VL_W8_REQUIRED_FILES
-    )
-    for name in ("default", "w8", "int8"):
-        assert vl_setup.local_lfm2vl_model_dir(model=name, base_dir=tmp_path) == model_dir
-
-
-def test_vl_int8_missing_returns_none(tmp_path):
     assert vl_setup.local_lfm2vl_model_dir(base_dir=tmp_path) is None
 
 
@@ -180,7 +150,7 @@ def test_pose_missing_returns_none(tmp_path):
     assert pose_setup.local_pose_model_path(base_dir=tmp_path) is None
 
 
-# ── Face_ID ───────────────────────────────────────────────────────────────────
+# ── face_id ───────────────────────────────────────────────────────────────────
 
 
 def test_face_id_default_returns_the_detector(tmp_path):

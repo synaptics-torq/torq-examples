@@ -4,13 +4,12 @@
 """First-run model resolution and download regressions."""
 
 import argparse
-import importlib.util
 import logging
-from pathlib import Path
 from unittest import mock
 
 import pytest
 
+from lfm2_5 import setup_demo as liquid_setup
 from utils import model_setup
 from utils.download import DownloadError, read_manifest, write_manifest
 from utils.model_setup import resolve_default_model
@@ -91,10 +90,7 @@ def test_first_run_repair_preserves_manifest_version(tmp_path):
 
 
 def test_liquid_download_updates_prefill_on_existing_copy(tmp_path):
-    path = Path(__file__).resolve().parents[1] / "LiquidAI/LiquidAI-LFM2.5/setup_demo.py"
-    spec = importlib.util.spec_from_file_location("liquid_setup", path)
-    setup = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(setup)
+    setup = liquid_setup
 
     def download(repo_id, filename, *, base_dir, revision=None):
         target = base_dir / repo_id / filename

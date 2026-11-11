@@ -32,7 +32,7 @@ import os
 import ml_dtypes
 import numpy as np
 
-from torq.runtime import VMFBInferenceRunner
+from utils.runtime import Model, RuntimeConfig, load_lut, to_host
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -91,14 +91,6 @@ def find_asset(model_dir: str, filename: str) -> str:
     )
 
 
-def _load_bfloat16_table(path: str) -> np.ndarray:
-    """Load a bf16 NumPy table stored using NumPy's two-byte void dtype."""
-    arr = np.load(path)
-    if arr.dtype == np.dtype("V2"):
-        arr = arr.view(ml_dtypes.bfloat16)
-    return arr
-
-
 # ── VMFB input/output helpers ─────────────────────────────────────────────────
 #
 # A VMFBInferenceRunner exposes its model's inputs positionally (no argument
@@ -106,7 +98,7 @@ def _load_bfloat16_table(path: str) -> np.ndarray:
 # *_INPUT_ORDER name lists so the rest of this module can feed/read VMFBs by
 # name instead of by position.
 
-def _named_inputs_info(runner: VMFBInferenceRunner, input_order: list, vmfb_path: str) -> dict:
+def _named_inputs_info(runner: Model, input_order: list, vmfb_path: str) -> dict:
     """Pair ``runner.inputs_info`` (positional, no names) with the hardcoded
     input order. A length mismatch means the model was re-exported with a
     different arity — fail loudly rather than silently feed tensors into the
@@ -122,16 +114,6 @@ def _named_inputs_info(runner: VMFBInferenceRunner, input_order: list, vmfb_path
             f"runner.py."
         )
     return dict(zip(input_order, info))
-
-
-def _to_host(outputs) -> list:
-    """Copy VMFB outputs to host without changing their model-native dtypes."""
-    result = []
-    for o in outputs:
-        if hasattr(o, "to_host"):
-            o = o.to_host()
-        result.append(np.asarray(o))
-    return result
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -210,26 +192,19 @@ class MoonshineStaticStreamingModel:
     Args:
         model_dir: Flat directory holding the encoder/decoder ``.vmfb`` files,
             configs, npy tables and tokenizer.
-        runtime_flags: Flags forwarded verbatim to the Torq runtime, or ``None``
-            to use the runtime's own defaults.
-        device_io: Convert host NumPy model inputs to device arrays before
-            inference. Required with the dmabuf device allocator.
+        runtime: The session's ``RuntimeConfig`` (device, allocator, device
+            I/O). ``None`` uses the RuntimeConfig defaults (torq, dmabuf,
+            device I/O on).
     """
-    def __init__(self, model_dir: str, runtime_flags: list[str] | None = None,
-                 device_io: bool = False):
+    def __init__(self, model_dir: str, runtime: RuntimeConfig | None = None):
         # Flat layout: VMFBs, configs, npy tables and tokenizer all live in
         # model_dir. Input names are hardcoded (see *_INPUT_ORDER above).
         self.model_dir = model_dir
-        self._device_io = device_io
+        self._runtime = runtime or RuntimeConfig()
 
         def load_runner(name, input_order, device_outputs=False):
             vmfb = os.path.join(model_dir, name + ".vmfb")
-            runner = VMFBInferenceRunner(
-                vmfb,
-                device_uri="torq://",
-                runtime_flags=runtime_flags,
-                device_outputs=device_outputs,
-            )
+            runner = Model(vmfb, self._runtime, device_outputs=device_outputs)
             return runner, _named_inputs_info(runner, input_order, vmfb)
 
         logger.info("Loading VMFB sessions from %s", model_dir)
@@ -270,11 +245,11 @@ class MoonshineStaticStreamingModel:
 
         # The decoder accepts bf16 token embeddings, not token IDs.
         emb_path = find_asset(model_dir, "decoder_token_embeddings.npy")
-        self.token_embeddings = _load_bfloat16_table(emb_path)
+        self.token_embeddings = load_lut(emb_path)
 
         # Position embedding table for host-side lookup before each adapter call
         pos_emb_path = find_asset(model_dir, "adapter_pos_emb.npy")
-        self.pos_emb_weights = _load_bfloat16_table(pos_emb_path)
+        self.pos_emb_weights = load_lut(pos_emb_path)
 
         logger.debug("Static streaming model specifications (2-Split):")
         logger.debug("  - Depth (Layers):        %d", self.depth)
@@ -322,13 +297,7 @@ class MoonshineStaticStreamingModel:
             *state.enc_bufs,
         ]
 
-        if self._device_io:
-            encoder_inputs = [
-                self.fused_encoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
-                for x in encoder_inputs
-            ]
-
-        res = _to_host(self.fused_encoder.infer(encoder_inputs))
+        res = self.fused_encoder.run(*encoder_inputs)
 
         # Unpack outputs:
         # k_cross, v_cross, conv1_buffer_out, conv2_buffer_out, features_buffer_out, *buf_out
@@ -420,19 +389,10 @@ class MoonshineStaticStreamingModel:
         position_ids = current_len
         decoder_inputs.extend((cross_attn_bias, position_ids, current_len))
 
-        if self._device_io:
-            decoder_inputs = [
-                self.decoder.allocate_device_array(x) if isinstance(x, np.ndarray) else x
-                for x in decoder_inputs
-            ]
-
         dec_out = self.decoder.infer(decoder_inputs)
 
         # Only logits cross back to host for argmax.
-        logits = dec_out[0]
-        if hasattr(logits, "to_host"):
-            logits = logits.to_host()
-        logits = np.asarray(logits)
+        logits = np.asarray(to_host(dec_out[0]))
 
         # Self-KV outputs: keep resident (next-step inputs) or write back to host.
         if use_dev:
@@ -442,8 +402,8 @@ class MoonshineStaticStreamingModel:
         else:
             for _i in range(self.depth):
                 ko, vo = dec_out[1 + _i * 2], dec_out[2 + _i * 2]
-                state.k_self[_i] = np.asarray(ko.to_host() if hasattr(ko, "to_host") else ko)
-                state.v_self[_i] = np.asarray(vo.to_host() if hasattr(vo, "to_host") else vo)
+                state.k_self[_i] = np.asarray(to_host(ko))
+                state.v_self[_i] = np.asarray(to_host(vo))
 
         return int(np.argmax(logits[0, 0, :]))
 
