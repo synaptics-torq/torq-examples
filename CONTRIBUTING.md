@@ -66,7 +66,7 @@ The demos are thin scripts over a shared inference core in `utils/`; a demo's `s
 
 **Metrics (`utils/metrics.py`).** `MetricsRun` is a context manager around a demo's inference block: `add(name, value)` records the named measurements (repeated names are averaged) while a sampler collects the CPU load, NPU load and peak memory. At exit it writes the `{"metrics": [...], "measurements": {...}}` JSON shown below to the `--metrics-out` file, even when the block is interrupted.
 
-**Task categories (`utils/tasks/`).** One package per task category (`utils/tasks/<category>/__init__.py`) with the shared `infer_main`/`validate_main` the demo's scripts call: the demo's own flags, default-model resolution and refresh, one NPU-boosted session, the demo's per-input loop, and the category's validation scoring. The image categories share their validation and box-matching plumbing in `utils/tasks/vision.py`.
+**Task categories (`utils/tasks/`).** One module per task category (`utils/tasks/<category>.py`) with the shared `infer_main`/`validate_main` the demo's scripts call: the demo's own flags, default-model resolution and refresh, one NPU-boosted session, the demo's per-input loop, and the category's validation scoring. The image categories share their validation and box-matching plumbing in `utils/tasks/vision.py`.
 
 ## Composition rules
 
@@ -82,7 +82,7 @@ The repository ships no validation data. `src/validate.py` downloads the rows it
 
 - A demo's default datasets and sample counts are the `validation` list in its `info.json`; `--dataset`, `--config`, `--split` and `--samples` select others.
 - Rows come from the Hugging Face dataset viewer API (`fetch_rows`: exactly the requested rows, media saved as files by data type). Datasets the viewer does not serve are read as raw repo files (`fetch_file`). Both cache under `$MODELS/datasets/`, so repeat runs are offline and the folder can be copied to a board without network access.
-- Each task category maps the datasets it supports to loaders (`LOADERS` in `utils/tasks/<category>/`) that turn rows into scoring items, one item per row in row order, starting at the spec's `offset`; a demo-specific dataset (for example one tied to the demo's output format) is a loader passed by the demo's `validate.py`.
+- Each task category maps the datasets it supports to loaders (`LOADERS` in `utils/tasks/<category>.py`) that turn rows into scoring items, one item per row in row order, starting at the spec's `offset`; a demo-specific dataset (for example one tied to the demo's output format) is a loader passed by the demo's `validate.py`.
 - Prefer the dataset the model card reports. Before adding one, check the existing loaders and the other demos' `info.json`: a dataset your demo needs may already be supported, so reusing it is one `info.json` entry.
 - Scoring is against the dataset's own labels; nothing model-generated (goldens) is stored in the repository.
 
@@ -90,10 +90,10 @@ The repository ships no validation data. `src/validate.py` downloads the rows it
 
 To add a new task category:
 
-1. Create the category module `utils/tasks/<category>/__init__.py` (a new package under `utils/tasks/`).
+1. Create the category module `utils/tasks/<category>.py`.
 2. Implement the `infer_main` and `validate_main` functions in it (the shared category plumbing lives in `utils/tasks/__init__.py` and `utils/tasks/vision.py`).
 3. Add a `LOADERS` dict mapping the Hugging Face datasets the category supports to loaders that turn their rows into scoring items (see "Validation data").
-4. Add at least one test in the `tests/tasks/<category>/` folder.
+4. Add at least one test in `tests/tasks/test_<category>.py`.
 
 The tests are run on the host, in an environment where a torq-compiler wheel is installed. They
 run compilation of models in an appropriate environment for each example 
