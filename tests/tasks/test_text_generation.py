@@ -310,3 +310,43 @@ def test_validate_skips_items_that_do_not_fit(tmp_path, capsys):
     assert doc["validation"][0]["rows"] == [2, 3, 4]
     assert doc["measurements"]["accuracy"] == 100.0
     assert code == 0
+
+
+def test_validate_rows_replays_the_recorded_rows(tmp_path, capsys):
+    def too_big(runner):
+        raise ContextOverflow("Developer tool block exceeds --max-inp-len")
+
+    rows = [{"name": f"r{i}", "prompt": "p", "expected": "-", "check": lambda a: True} for i in range(6)]
+    rows[3]["prepare"] = too_big
+    loads = []
+
+    def loader(spec):
+        loads.append((spec["offset"], spec["samples"]))
+        return [dict(r) for r in rows[spec["offset"]:spec["offset"] + spec["samples"]]]
+
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(json.dumps({"validation": [
+        {"dataset": "x/tools", "config": "c", "split": "s", "samples": 4, "rows": [0, 2, 3, 5]},
+    ]}))
+    code, metrics_out, _, _ = _run_validate_main(
+        tmp_path, ["fine"] * 3, argv=["--rows", str(recorded)], loaders={"x/tools": loader},
+    )
+    out = capsys.readouterr().out
+    assert code == 0
+    assert loads == [(0, 1), (2, 2), (5, 1)]  # one load per run of consecutive rows
+    assert "  [SKIP] r3 (Developer tool block exceeds --max-inp-len)" in out
+    assert "r4" not in out  # a replayed run never substitutes rows
+    assert json.loads(metrics_out.read_text())["validation"] == [
+        {"dataset": "x/tools", "config": "c", "split": "s", "samples": 4, "rows": [0, 2, 5]},
+    ]
+
+
+@pytest.mark.parametrize("extra, error", [
+    (["--samples", "3"], "--rows cannot be combined with --dataset, --config, --split or --samples"),
+    ([], "no recorded validation rows"),
+])
+def test_validate_rows_errors(tmp_path, extra, error):
+    recorded = tmp_path / "recorded.json"
+    recorded.write_text(json.dumps({"validation": [{"dataset": "openai/gsm8k"}]}))  # no rows
+    code, _, _, _ = _run_validate_main(tmp_path, [], argv=["--rows", str(recorded), *extra])
+    assert error in code

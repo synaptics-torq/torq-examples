@@ -19,6 +19,7 @@ per-dataset loaders.
 import argparse
 import json
 from collections.abc import Callable
+from itertools import groupby
 from pathlib import Path
 
 from utils.log import configure_logging
@@ -82,7 +83,8 @@ def demo_validation(script: str | Path) -> list[dict]:
 
 
 def add_dataset_args(parser: argparse.ArgumentParser, validation: list[dict]) -> None:
-    """``--dataset``, ``--config``, ``--split`` and ``--samples``, defaulting to *validation*."""
+    """``--dataset``, ``--config``, ``--split`` and ``--samples``, defaulting to
+    *validation*, or ``--rows`` to replay a previous run's rows."""
     group = parser.add_argument_group("validation data (Hugging Face datasets)")
     group.add_argument(
         "--dataset", default=None,
@@ -91,6 +93,11 @@ def add_dataset_args(parser: argparse.ArgumentParser, validation: list[dict]) ->
     group.add_argument("--config", default=None, help="Dataset config (default: the dataset's default in info.json)")
     group.add_argument("--split", default=None, help="Dataset split (default: the dataset's default in info.json)")
     group.add_argument("--samples", type=int, default=None, help="Rows to score per dataset (default: info.json)")
+    group.add_argument(
+        "--rows", metavar="METRICS_JSON", default=None,
+        help="Score exactly the datasets and rows recorded in a previous run's metrics JSON "
+             "(instead of --dataset/--config/--split/--samples; skipped rows are not replaced)",
+    )
 
 
 def load_items(
@@ -106,10 +113,20 @@ def load_items(
     resolved ``{"dataset", "config", "split", "samples"}`` (fewer at the end
     of a split). The datasets as run are those specs plus ``rows``, the
     indices of the rows scored; validate records them in the metrics JSON,
-    so a score says exactly what it was measured on. Each item carries its
-    ``row``, its ``spec`` (dataset as run) and its ``loader``.
+    so a score says exactly what it was measured on. ``--rows`` replays such
+    a list: the same datasets and rows. Each item carries its ``row``, its
+    ``spec`` (dataset as run) and its ``loader`` (None when replaying: the
+    rows are fixed, so a skipped one is not replaced).
     """
-    if args.dataset:
+    if args.rows:
+        if args.dataset or args.config or args.split or args.samples is not None:
+            raise SystemExit("--rows cannot be combined with --dataset, --config, --split or --samples")
+        try:
+            specs = json.loads(Path(args.rows).read_text(encoding="utf-8"))["validation"]
+            recorded = [spec.pop("rows") for spec in specs]
+        except (OSError, ValueError, KeyError, TypeError) as exc:
+            raise SystemExit(f"--rows {args.rows}: no recorded validation rows ({exc!r})") from None
+    elif args.dataset:
         base = next((dict(v) for v in validation if v["dataset"] == args.dataset), {"dataset": args.dataset})
         for key in ("config", "split"):
             if getattr(args, key):
@@ -118,7 +135,7 @@ def load_items(
     else:
         specs = [dict(v) for v in validation]
     items = []
-    for spec in specs:
+    for i, spec in enumerate(specs):
         if args.samples is not None:
             spec["samples"] = args.samples
         spec.setdefault("samples", validation[0]["samples"])
@@ -128,17 +145,23 @@ def load_items(
                 f"No loader for dataset {spec['dataset']!r}; supported: {', '.join(sorted(loaders))}"
             )
         spec["rows"] = []
-        items += _load(loader, spec, 0, spec["samples"])
+        if not args.rows:
+            items += _load(loader, spec, 0, spec["samples"])
+            continue
+        # One load per run of consecutive rows (the viewer API pages ranges).
+        for _, run in groupby(enumerate(recorded[i]), lambda pair: pair[1] - pair[0]):
+            rows = [row for _, row in run]
+            items += _load(loader, spec, rows[0], len(rows), refill=False)
     if not items:
         raise SystemExit("No validation items")
     return items, specs
 
 
-def _load(loader: Callable, spec: dict, offset: int, samples: int) -> list[dict]:
+def _load(loader: Callable, spec: dict, offset: int, samples: int, *, refill: bool = True) -> list[dict]:
     """Rows *offset* to *offset + samples - 1* of *spec* as tagged items."""
     loaded = loader(dict(spec, offset=offset, samples=samples))
     for row, item in enumerate(loaded, offset):
-        item.update(row=row, spec=spec, loader=loader)
+        item.update(row=row, spec=spec, loader=loader if refill else None)
         spec["rows"].append(row)
     return loaded
 
@@ -148,12 +171,13 @@ def skip_item(items: list[dict], item: dict, reason: Exception) -> None:
     does not fit the context). The dataset's next row is appended to
     *items* (the list being scored) in its place, so the item count stays
     the same; at most ``2 * samples`` rows of a dataset are tried, so a
-    model that fits none does not walk the whole split."""
+    model that fits none does not walk the whole split. Replayed rows
+    (``--rows``) are not replaced."""
     spec = item["spec"]
     spec["rows"].remove(item["row"])
     print(f"  [SKIP] {item['name']} ({reason})")
     tried = [it["row"] for it in items if it["spec"] is spec]
-    if len(tried) < 2 * spec["samples"]:
+    if item["loader"] is not None and len(tried) < 2 * spec["samples"]:
         items += _load(item["loader"], spec, max(tried) + 1, 1)
 
 
