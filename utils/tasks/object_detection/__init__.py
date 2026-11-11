@@ -74,7 +74,7 @@ def _coco_files(spec: dict) -> list[dict]:
     for a in ann["annotations"]:
         if not a.get("iscrowd"):
             expected[a["image_id"]].append({"label": names[a["category_id"]], "box": round_box(a["bbox"])})
-    images = sorted(ann["images"], key=lambda image: image["id"])[: spec["samples"]]
+    images = sorted(ann["images"], key=lambda image: image["id"])[spec["offset"]: spec["offset"] + spec["samples"]]
     return [
         {
             "name": image["file_name"],

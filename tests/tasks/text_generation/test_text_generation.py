@@ -14,13 +14,14 @@ from unittest import mock
 
 import pytest
 
-from utils.inference import add_llm_inference_args
+from utils.inference import ContextOverflow, add_llm_inference_args
 from utils.tasks import text_generation as tg
 from utils.tasks.text_generation import corpus_bleu, is_degenerate, llm_kwargs, normalize_translation
 
 
 class _FakeRunner:
-    """A scripted LLM runner: ``run`` returns the next answer in order."""
+    """A scripted LLM runner: ``run`` returns the next answer in order
+    (an exception in the script is raised instead)."""
 
     last_infer_time = 123.4
     time_to_first_token = 10.0
@@ -34,8 +35,11 @@ class _FakeRunner:
         pass
 
     def run(self, prompt, should_stop=None):
+        answer = next(self._answers)
+        if isinstance(answer, Exception):
+            raise answer
         self.prompts.append(prompt)
-        return next(self._answers)
+        return answer
 
 
 # ── llm_kwargs ───────────────────────────────────────────────────────────────
@@ -65,6 +69,7 @@ def test_llm_kwargs_mapping():
         top_k=40,
         max_gen_tokens=64,
         max_cache_rolls=5,
+        truncate_prompts=True,
         lm_head_path="h.vmfb",
         disable_lm_head=False,
         prefill_model_path="p.vmfb",
@@ -164,7 +169,7 @@ def test_last_number():
 
 def _fetch(rows_by_dataset):
     def fetch_rows(dataset, *, config, split, samples, offset=0):
-        return rows_by_dataset[dataset][:samples]
+        return rows_by_dataset[dataset][offset:offset + samples]
     return fetch_rows
 
 
@@ -175,13 +180,13 @@ def test_piqa_mmlu_pro_and_opus100_loaders():
         "Helsinki-NLP/opus-100": [{"translation": {"en": "Hello", "es": "Hola"}}],
     }
     with mock.patch.object(tg, "fetch_rows", _fetch(rows)):
-        (piqa,) = tg.LOADERS["baber/piqa"]({"dataset": "baber/piqa", "config": "default", "split": "validation", "samples": 5})
-        (mmlu,) = tg.LOADERS["TIGER-Lab/MMLU-Pro"]({"dataset": "TIGER-Lab/MMLU-Pro", "config": "default", "split": "test", "samples": 5})
-        (opus,) = tg.LOADERS["Helsinki-NLP/opus-100"]({"dataset": "Helsinki-NLP/opus-100", "config": "es-en", "split": "test", "samples": 5})
+        (piqa,) = tg.LOADERS["baber/piqa"]({"dataset": "baber/piqa", "config": "default", "split": "validation", "samples": 5, "offset": 0})
+        (mmlu,) = tg.LOADERS["TIGER-Lab/MMLU-Pro"]({"dataset": "TIGER-Lab/MMLU-Pro", "config": "default", "split": "test", "samples": 5, "offset": 0})
+        (opus,) = tg.LOADERS["Helsinki-NLP/opus-100"]({"dataset": "Helsinki-NLP/opus-100", "config": "es-en", "split": "test", "samples": 5, "offset": 0})
     assert "1. Rice\n2. Water" in piqa["prompt"] and piqa["expected"] == "1"
     assert piqa["check"]("1") and not piqa["check"]("2")
     assert "A. 3\nB. 4\nC. 5" in mmlu["prompt"] and mmlu["check"]("B") and not mmlu["check"]("D")
-    assert opus == {"src": "Hola", "tgt": "Hello", "tgt_lang": "English"}
+    assert opus == {"name": "Helsinki-NLP/opus-100 #0", "src": "Hola", "tgt": "Hello", "tgt_lang": "English"}
 
 
 # ── validate modes end to end ────────────────────────────────────────────────
@@ -200,6 +205,7 @@ def _run_validate_main(tmp_path, answers, argv=(), rows=None, loaders=None):
 
     def make_runner(args, runtime):
         made["temperature"] = args.temperature
+        made["truncate_prompts"] = args.truncate_prompts
         made["mode"] = args.mode
         return runner
 
@@ -233,6 +239,7 @@ def test_validate_prompts_scores_against_the_labels_and_writes_metrics(tmp_path,
     out = capsys.readouterr().out
     assert code == 0  # no pass mark: the accuracy is reported, never a verdict
     assert made["temperature"] == 0.0  # greedy decoding forced
+    assert made["truncate_prompts"] is False  # a prompt that does not fit is skipped
     assert made["mode"] == "prompts"
     assert runner.prompts[0].startswith("Tom has 2 apples")
     assert "  [PASS] openai/gsm8k #0" in out
@@ -280,19 +287,26 @@ def test_validate_mode_needs_a_matching_dataset(tmp_path, capsys):
     assert "--mode bleu needs a translation dataset" in capsys.readouterr().err
 
 
-def test_validate_prepare_value_error_fails_the_item(tmp_path, capsys):
+def test_validate_skips_items_that_do_not_fit(tmp_path, capsys):
     def too_big(runner):
-        raise ValueError("Developer tool block exceeds --max-inp-len")
+        raise ContextOverflow("Developer tool block exceeds --max-inp-len")
 
-    loaders = {"x/tools": lambda spec: [
-        {"name": "big", "prompt": "p", "expected": "-", "check": lambda a: True, "prepare": too_big},
-        {"name": "ok", "prompt": "p", "expected": "-", "check": lambda a: True},
-    ]}
-    code, _, _, runner = _run_validate_main(
-        tmp_path, ["fine"], argv=["--dataset", "x/tools"], loaders=loaders,
+    rows = [
+        {"name": "tools", "prompt": "p", "expected": "-", "check": lambda a: True, "prepare": too_big},
+        {"name": "long", "prompt": "p", "expected": "-", "check": lambda a: True},
+        *({"name": f"ok{i}", "prompt": "p", "expected": "-", "check": lambda a: True} for i in range(3)),
+    ]
+    loaders = {"x/tools": lambda spec: [dict(r) for r in rows[spec["offset"]:spec["offset"] + spec["samples"]]]}
+    code, metrics_out, _, runner = _run_validate_main(
+        tmp_path, [ContextOverflow("prompt of 300 tokens exceeds the 256-token KV cache"), "fine", "fine", "fine"],
+        argv=["--dataset", "x/tools", "--samples", "3"], loaders=loaders,
     )
     out = capsys.readouterr().out
-    assert "  [FAIL] big (not run: Developer tool block exceeds --max-inp-len)" in out
-    assert "  [PASS] ok" in out
-    assert len(runner.prompts) == 1
+    assert "  [SKIP] tools (Developer tool block exceeds --max-inp-len)" in out
+    assert "  [SKIP] long (prompt of 300 tokens exceeds the 256-token KV cache)" in out
+    assert all(f"  [PASS] ok{i}" in out for i in range(3))  # the next rows replace the skipped ones
+    assert out.rstrip().endswith("accuracy=1.0000")  # skipped items are left out of the score
+    doc = json.loads(metrics_out.read_text())
+    assert doc["validation"][0]["rows"] == [2, 3, 4]
+    assert doc["measurements"]["accuracy"] == 100.0
     assert code == 0

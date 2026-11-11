@@ -162,7 +162,7 @@ def test_metrics_run_writes_on_keyboard_interrupt(tmp_path, monkeypatch):
 
 def test_metrics_run_info_becomes_top_level_keys(tmp_path, monkeypatch):
     out = _metrics_run_env(tmp_path, monkeypatch)
-    datasets = [{"dataset": "org/set", "config": "c", "split": "test", "samples": 20, "items": 20}]
+    datasets = [{"dataset": "org/set", "config": "c", "split": "test", "samples": 20, "rows": list(range(20))}]
 
     with MetricsRun(str(out), info={"validation": datasets}) as run:
         run.add("accuracy", 64.0)

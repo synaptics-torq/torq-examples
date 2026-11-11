@@ -50,7 +50,7 @@ MEDIA = {"/data/dog.jpg": [0.99, 0.01, 0.01], "/data/cat.jpg": [0.01, 0.99, 0.01
 
 
 def _fetch_rows(dataset, *, config, split, samples, offset=0):
-    return ROWS[dataset][:samples]
+    return ROWS[dataset][offset:offset + samples]
 
 
 def _add_args(parser):
@@ -144,6 +144,6 @@ def test_modalities_all_filtered_errors(tmp_path, capsys):
 def test_samples(tmp_path):
     _, metrics_out, made = _run_validate_main(tmp_path, dict(MEDIA), argv=["--samples", "1"])
     assert [name for _, name, _ in made["items"]] == ["dog.jpg", "bark"]
-    assert [(d["dataset"], d["samples"], d["items"]) for d in json.loads(metrics_out.read_text())["validation"]] == [
-        ("nlphuji/flickr30k", 1, 1), ("CLAPv2/Clotho", 1, 1),
+    assert [(d["dataset"], d["samples"], d["rows"]) for d in json.loads(metrics_out.read_text())["validation"]] == [
+        ("nlphuji/flickr30k", 1, [0]), ("CLAPv2/Clotho", 1, [0]),
     ]

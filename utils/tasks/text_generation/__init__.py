@@ -22,13 +22,13 @@ from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
 
-from utils.inference import add_llm_inference_args, print_llm_stats, run_chat_loop
+from utils.inference import ContextOverflow, add_llm_inference_args, print_llm_stats, run_chat_loop
 from utils.log import configure_logging
 from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.datasets import fetch_rows
 from utils.runtime import RuntimeConfig, npu_clock
-from utils.tasks import add_dataset_args, load_items
+from utils.tasks import add_dataset_args, load_items, scored, skip_item
 
 __all__ = [
     "llm_kwargs",
@@ -71,6 +71,7 @@ def llm_kwargs(args) -> dict:
         top_k=getattr(args, "top_k", 64),
         max_gen_tokens=getattr(args, "max_gen_tokens", None),
         max_cache_rolls=getattr(args, "max_cache_rolls", None),
+        truncate_prompts=getattr(args, "truncate_prompts", True),
         lm_head_path=getattr(args, "lm_head", None),
         disable_lm_head=getattr(args, "no_lm_head", False),
         prefill_model_path=getattr(args, "batch_prefill_model", None),
@@ -273,12 +274,13 @@ def last_number(answer: str) -> float | None:
 
 
 def _rows(spec: dict) -> list[dict]:
-    return fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    return fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
 
 
 def _piqa(spec: dict) -> list[dict]:
     items = []
-    for i, row in enumerate(_rows(spec)):
+    for i, row in enumerate(_rows(spec), spec["offset"]):
         expected = str(int(row["label"]) + 1)
         items.append({
             "name": f"{spec['dataset']} #{i}",
@@ -292,7 +294,7 @@ def _piqa(spec: dict) -> list[dict]:
 
 def _gsm8k(spec: dict) -> list[dict]:
     items = []
-    for i, row in enumerate(_rows(spec)):
+    for i, row in enumerate(_rows(spec), spec["offset"]):
         expected = row["answer"].rsplit("####", 1)[-1].strip().replace(",", "")
         items.append({
             "name": f"{spec['dataset']} #{i}",
@@ -323,8 +325,9 @@ _LANGUAGES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German"}
 def _opus100(spec: dict) -> list[dict]:
     src, tgt = spec["config"].split("-")
     return [
-        {"src": row["translation"][src], "tgt": row["translation"][tgt], "tgt_lang": _LANGUAGES.get(tgt, tgt)}
-        for row in _rows(spec)
+        {"name": f"{spec['dataset']} #{i}", "src": row["translation"][src], "tgt": row["translation"][tgt],
+         "tgt_lang": _LANGUAGES.get(tgt, tgt)}
+        for i, row in enumerate(_rows(spec), spec["offset"])
     ]
 
 
@@ -359,26 +362,28 @@ def _answer_stats(runner, metrics: MetricsRun | None) -> str:
 def run_prompts(runner, items: list[dict], *, metrics: MetricsRun | None = None) -> float:
     """Answer each item's prompt; returns the fraction passing ``item["check"]``.
 
-    A degenerate answer (see :func:`is_degenerate`) always fails, and so does
-    an item whose ``prepare(runner)`` raises ``ValueError`` (e.g. its tool
-    declarations do not fit the model's context).
+    A degenerate answer (see :func:`is_degenerate`) always fails. An item
+    that does not fit the model's context (``prepare(runner)`` or the run
+    raises ``ContextOverflow``) is skipped: left out of the score and replaced
+    by the dataset's next row (see :func:`skip_item`).
     """
-    passed = 0
+    passed = skipped = 0
     for item in items:
-        if "prepare" in item:
-            try:
+        try:
+            if "prepare" in item:
                 item["prepare"](runner)
-            except ValueError as exc:
-                print(f"  [FAIL] {item['name']} (not run: {exc})")
-                continue
-        runner.reset()
-        answer = runner.run(item["prompt"])
+            runner.reset()
+            answer = runner.run(item["prompt"])
+        except ContextOverflow as exc:
+            skip_item(items, item, exc)
+            skipped += 1
+            continue
         ok = bool(answer.strip()) and not is_degenerate(answer) and item["check"](answer)
         passed += ok
         print(f"  [{'PASS' if ok else 'FAIL'}] {item['name']} {_answer_stats(runner, metrics)}")
         if not ok:
             print(f"         answer: {answer.strip()[-200:]!r} (expected {item['expected']!r})")
-    return passed / len(items)
+    return passed / scored(items, skipped)
 
 
 def _translation_prompt(item: dict) -> str:
@@ -394,11 +399,19 @@ def run_bleu(runner, items: list[dict], *, metrics: MetricsRun | None = None) ->
     """
     n = len(items)
     hypotheses: list[str] = []
+    references: list[str] = []
     for i, item in enumerate(items):
         runner.reset()
-        hypotheses.append(normalize_translation(runner.run(_translation_prompt(item))))
+        try:
+            answer = runner.run(_translation_prompt(item))
+        except ContextOverflow as exc:
+            skip_item(items, item, exc)
+            continue
+        hypotheses.append(normalize_translation(answer))
+        references.append(item["tgt"])
         print(f"  [{i + 1}/{n}] {_answer_stats(runner, metrics)}")
-    bleu = corpus_bleu(hypotheses, [item["tgt"] for item in items])
+    n = scored(items, len(items) - len(hypotheses))
+    bleu = corpus_bleu(hypotheses, references)
     print(f"Corpus BLEU-4: {bleu:.2f}  (n={n})")
     return bleu / 100
 
@@ -489,6 +502,7 @@ def validate_main(
     args = parser.parse_args()
     configure_logging(args.logging)
     args.temperature = 0.0  # greedy decoding for reproducibility
+    args.truncate_prompts = False  # a truncated item is skipped, not scored
     _resolve_and_ensure(
         parser, args, demo=demo, local_model=local_model,
         ensure_models=ensure_models, download=download,

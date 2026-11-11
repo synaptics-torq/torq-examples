@@ -67,7 +67,7 @@ def _bfcl(spec: dict) -> list[dict]:
     filename = f"BFCL_v3_{spec['config']}.json"
     answers = {a["id"]: a["ground_truth"][0] for a in _json_lines(fetch_file(spec["dataset"], f"possible_answer/{filename}"))}
     items = []
-    for question in _json_lines(fetch_file(spec["dataset"], filename))[: spec["samples"]]:
+    for question in _json_lines(fetch_file(spec["dataset"], filename))[spec["offset"]: spec["offset"] + spec["samples"]]:
         tools = [{"function": dict(f, name=f["name"].replace(".", "_"))} for f in question["function"]]
         expected = {name.replace(".", "_"): args for name, args in answers[question["id"]].items()}
         items.append({

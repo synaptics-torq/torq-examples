@@ -45,7 +45,7 @@ def _fake_fetch_rows(tmp_path: Path, references: list[str]):
 
     def fetch_rows(dataset, *, config, split, samples, offset=0):
         assert (dataset, config, split) == ("openslr/librispeech_asr", "clean", "test")
-        return rows[:samples]
+        return rows[offset:offset + samples]
 
     return fetch_rows
 
@@ -107,7 +107,7 @@ def test_validate_perfect_transcript_records_zero_wer(tmp_path, capsys):
     doc = json.loads(metrics_out.read_text())
     assert doc["measurements"]["word_error_rate"] == 0.0
     # what the score was measured on, for comparing runs
-    assert doc["validation"] == [{"dataset": "openslr/librispeech_asr", "config": "clean", "split": "test", "samples": 10, "items": 1}]
+    assert doc["validation"] == [{"dataset": "openslr/librispeech_asr", "config": "clean", "split": "test", "samples": 10, "rows": [0]}]
     assert doc["measurements"]["latency"] == 123_000.0
     assert doc["measurements"]["real_time_factor"] == 50.0
     assert "cpu_load" in doc["measurements"]

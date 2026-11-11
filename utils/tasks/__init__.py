@@ -26,7 +26,7 @@ from utils.metrics import MetricsRun
 from utils.model_setup import resolve_default_model
 from utils.runtime import RuntimeConfig, npu_clock
 
-__all__ = ["infer_main", "resolve_and_ensure", "demo_validation", "add_dataset_args", "load_items"]
+__all__ = ["infer_main", "resolve_and_ensure", "demo_validation", "add_dataset_args", "load_items", "skip_item", "scored"]
 
 
 def _message(demo: str) -> str:
@@ -101,11 +101,13 @@ def load_items(
     ``--dataset`` replaces the defaults with one dataset (its missing
     ``--config`` / ``--split`` / ``--samples`` come from the matching default,
     if any); ``--samples`` applies to every dataset. *loaders* maps each
-    supported dataset to ``loader(spec) -> list[dict]``, where *spec* is the
-    resolved ``{"dataset", "config", "split", "samples"}``. The datasets as
-    run are those specs plus ``items``, the rows each one gave (fewer than
-    ``samples`` at the end of a split); validate records them in the metrics
-    JSON, so a score says what it was measured on.
+    supported dataset to ``loader(spec) -> list[dict]``: one item per row,
+    in order, for rows ``spec["offset"]`` to ``offset + samples - 1`` of the
+    resolved ``{"dataset", "config", "split", "samples"}`` (fewer at the end
+    of a split). The datasets as run are those specs plus ``rows``, the
+    indices of the rows scored; validate records them in the metrics JSON,
+    so a score says exactly what it was measured on. Each item carries its
+    ``row``, its ``spec`` (dataset as run) and its ``loader``.
     """
     if args.dataset:
         base = next((dict(v) for v in validation if v["dataset"] == args.dataset), {"dataset": args.dataset})
@@ -125,12 +127,41 @@ def load_items(
             raise SystemExit(
                 f"No loader for dataset {spec['dataset']!r}; supported: {', '.join(sorted(loaders))}"
             )
-        loaded = loader(spec)
-        spec["items"] = len(loaded)
-        items += loaded
+        spec["rows"] = []
+        items += _load(loader, spec, 0, spec["samples"])
     if not items:
         raise SystemExit("No validation items")
     return items, specs
+
+
+def _load(loader: Callable, spec: dict, offset: int, samples: int) -> list[dict]:
+    """Rows *offset* to *offset + samples - 1* of *spec* as tagged items."""
+    loaded = loader(dict(spec, offset=offset, samples=samples))
+    for row, item in enumerate(loaded, offset):
+        item.update(row=row, spec=spec, loader=loader)
+        spec["rows"].append(row)
+    return loaded
+
+
+def skip_item(items: list[dict], item: dict, reason: Exception) -> None:
+    """Leave *item* out of the score: it cannot run on this model (e.g. it
+    does not fit the context). The dataset's next row is appended to
+    *items* (the list being scored) in its place, so the item count stays
+    the same; at most ``2 * samples`` rows of a dataset are tried, so a
+    model that fits none does not walk the whole split."""
+    spec = item["spec"]
+    spec["rows"].remove(item["row"])
+    print(f"  [SKIP] {item['name']} ({reason})")
+    tried = [it["row"] for it in items if it["spec"] is spec]
+    if len(tried) < 2 * spec["samples"]:
+        items += _load(item["loader"], spec, max(tried) + 1, 1)
+
+
+def scored(items: list[dict], skipped: int) -> int:
+    """The number of items scored; exits when every item was skipped."""
+    if skipped == len(items):
+        raise SystemExit("No validation item fits the model's context")
+    return len(items) - skipped
 
 
 def infer_main(

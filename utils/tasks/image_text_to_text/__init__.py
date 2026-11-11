@@ -18,18 +18,20 @@ import argparse
 from collections.abc import Callable
 from pathlib import Path
 
+from utils.inference import ContextOverflow
 from utils.log import configure_logging
 from utils.metrics import MetricsRun
 from utils.runtime import RuntimeConfig, npu_clock
 from utils.datasets import fetch_rows
-from utils.tasks import add_dataset_args, infer_main, load_items, resolve_and_ensure
+from utils.tasks import add_dataset_args, infer_main, load_items, resolve_and_ensure, scored, skip_item
 from utils.tasks.text_generation import choice_check
 
 __all__ = ["infer_main", "validate_main", "LOADERS"]
 
 
 def _mmstar(spec: dict) -> list[dict]:
-    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
     return [
         {
             "name": f"{spec['dataset']} #{row['index']}",
@@ -83,14 +85,20 @@ def validate_main(
     with npu_clock():
         runner = make_runner(args, runtime)
         with MetricsRun(args.metrics_out, info={"validation": datasets}) as m:
-            passed = 0
+            passed = skipped = 0
             for item in items:
-                answer = ask(runner, item, args, m)
+                try:
+                    answer = ask(runner, item, args, m)
+                except ContextOverflow as exc:
+                    skip_item(items, item, exc)
+                    skipped += 1
+                    continue
                 ok = item["check"](answer)
                 passed += ok
                 print(f"  [{'PASS' if ok else 'FAIL'}] {item['name']}")
                 if not ok:
                     print(f"         answer: {answer.strip()[:200]!r} (expected {item['expected']!r})")
-            accuracy = passed / len(items)
+            n = scored(items, skipped)
+            accuracy = passed / n
             m.add("accuracy", accuracy * 100)
-    print(f"accuracy={accuracy:.4f} ({passed}/{len(items)} items)")
+    print(f"accuracy={accuracy:.4f} ({passed}/{n} items, {skipped} skipped)")

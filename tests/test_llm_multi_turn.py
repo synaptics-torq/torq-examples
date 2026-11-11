@@ -17,6 +17,7 @@ from gemma3.src.runner import Gemma3Static
 from llm_fakes import CHAR_BASE, CharTokenizer, cached_tokens, make_llm, scripted
 from qwen2_5.src.runner import QwenStatic
 from qwen3.src.runner import Qwen3Static
+from utils.inference import ContextOverflow
 from utils.tasks.text_generation import run_prompts, run_teacher_forced
 
 # Built from pieces, not literals, so the strings match the templates'.
@@ -198,6 +199,20 @@ def test_oversized_prompt_drops_history_and_truncates(tmp_path, monkeypatch, cap
     chars = _chars(prompt)
     assert cached_tokens(llm) == chars[2:7] + [a]
     assert llm._pending_token == stop
+
+
+@pytest.mark.parametrize("max_inp, message", [
+    (None, "prompt of 11 tokens exceeds the 8-token KV cache"),
+    (4, "prompt of 11 tokens exceeds --max-inp-len 4"),
+])
+def test_untruncated_prompt_that_does_not_fit_raises(max_inp, message, tmp_path, monkeypatch):
+    # Validation must not score a cut-off question: it raises instead.
+    llm, _, _ = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=5,
+                       next_fn=scripted([], then=STOP))
+    llm._truncate_prompts = False
+    llm._max_prompt_tokens = max_inp
+    with pytest.raises(ContextOverflow, match=message):
+        llm.run("0123456789")
 
 
 @pytest.mark.parametrize("keep", [6, 8])

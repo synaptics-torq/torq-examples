@@ -72,7 +72,7 @@ def _run(module, tmp_path, rows, predictions, argv=()):
 
     def fetch_rows(dataset, *, config, split, samples, offset=0):
         assert (dataset, config, split) == (VALIDATION[0]["dataset"], VALIDATION[0]["config"], VALIDATION[0]["split"])
-        return rows[:samples]
+        return rows[offset:offset + samples]
 
     with mock.patch.object(module, "fetch_rows", fetch_rows), mock.patch.object(sys, "argv", [
         "validate.py",

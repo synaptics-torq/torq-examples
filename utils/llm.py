@@ -22,7 +22,7 @@ from tokenizers import Tokenizer
 
 from utils.cache import KVCache
 from utils.decoder import Decoder, generate, sample
-from utils.inference import StopCheck
+from utils.inference import ContextOverflow, StopCheck
 from utils.runtime import Model, RuntimeConfig, load_lut
 
 
@@ -260,6 +260,7 @@ class LLM:
         top_k: int = 64,
         max_gen_tokens: int | None = None,
         max_cache_rolls: int | None = None,
+        truncate_prompts: bool = True,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
@@ -273,6 +274,7 @@ class LLM:
         self._max_user_tokens = None
         self._max_gen_tokens = max_gen_tokens
         self._max_cache_rolls = max_cache_rolls
+        self._truncate_prompts = truncate_prompts
         self._rolls = 0  # mid-answer window rolls in the current answer
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
@@ -446,11 +448,18 @@ class LLM:
 
         Shorter prompts pass through unchanged: the static exports bake a
         causal mask into the graph, so padding tokens would be attended over
-        and make the model emit EOS immediately.
+        and make the model emit EOS immediately. Without *truncate_prompts*,
+        a prompt that would be cut (here or to fit the KV cache) raises
+        ``ContextOverflow`` instead.
         """
         limit = self._max_user_tokens if self._max_user_tokens is not None else self._max_prompt_tokens
         if isinstance(limit, int) and len(tokens) > limit:
+            if not self._truncate_prompts:
+                raise ContextOverflow(f"prompt of {len(tokens)} tokens exceeds --max-inp-len {limit}")
             return tokens[:limit]
+        capacity = self._max_seq_len - self._warmup_len
+        if not self._truncate_prompts and len(tokens) > capacity:
+            raise ContextOverflow(f"prompt of {len(tokens)} tokens exceeds the {capacity}-token KV cache")
         return tokens
 
     # ── KV cache bookkeeping ─────────────────────────────────────────────────

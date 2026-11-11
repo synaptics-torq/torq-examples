@@ -51,7 +51,7 @@ def _eval_set_videos(spec: dict) -> list[dict]:
     videos = json.loads((Path(__file__).with_name("media_search_eval.json")).read_text(encoding="utf-8"))["videos"]
     return [
         {"kind": "video", "name": v["file"], "file": fetch_file(spec["dataset"], v["file"]), "query": v["query"]}
-        for v in videos[: spec["samples"]]
+        for v in videos[spec["offset"]: spec["offset"] + spec["samples"]]
     ]
 
 

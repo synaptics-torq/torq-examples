@@ -41,7 +41,8 @@ def cosine(a, b) -> float:
 
 
 def _rows(spec: dict) -> list[dict]:
-    return fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    return fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
 
 
 def _flickr30k(spec: dict) -> list[dict]:

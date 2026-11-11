@@ -10,7 +10,7 @@ from functiongemma.src.function_tools import (
     START_FUNCTION_RESPONSE,
     format_developer_block,
 )
-from utils.inference import StopCheck
+from utils.inference import ContextOverflow, StopCheck
 from utils.llm import GEMMA, LLM
 from utils.runtime import RuntimeConfig
 
@@ -67,9 +67,9 @@ class FunctionGemmaStatic(LLM):
             format_developer_block(self._tools), "developer"
         )
         if isinstance(self._max_prompt_tokens, int) and len(tokens) > self._max_prompt_tokens:
-            raise ValueError("Developer tool block exceeds --max-inp-len")
+            raise ContextOverflow("Developer tool block exceeds --max-inp-len")
         if len(tokens) >= self._max_seq_len:
-            raise ValueError("Developer tool block leaves no room in the KV cache")
+            raise ContextOverflow("Developer tool block leaves no room in the KV cache")
         return tokens
 
     def _build_prompt_tokens(self, user_input: str) -> list[int]:
@@ -92,11 +92,11 @@ class FunctionGemmaStatic(LLM):
         if limit is None:
             limit = self._max_prompt_tokens
         if isinstance(limit, int) and len(tokens) > limit:
-            raise ValueError("FunctionGemma prompt exceeds --max-inp-len")
+            raise ContextOverflow("FunctionGemma prompt exceeds --max-inp-len")
         pending = int(self._pending_token is not None)
         start = self._turn_pos if self._function_response_next else self._warmup_len
         if start + pending + len(tokens) > self._max_seq_len:
-            raise ValueError("FunctionGemma prompt exceeds available KV cache capacity")
+            raise ContextOverflow("FunctionGemma prompt exceeds available KV cache capacity")
         return tokens
 
     def _roll_cache(self, keep: int, should_stop: StopCheck | None) -> None:

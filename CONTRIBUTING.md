@@ -82,7 +82,7 @@ The repository ships no validation data. `src/validate.py` downloads the rows it
 
 - A demo's default datasets and sample counts are the `validation` list in its `info.json`; `--dataset`, `--config`, `--split` and `--samples` select others.
 - Rows come from the Hugging Face dataset viewer API (`fetch_rows`: exactly the requested rows, media saved as files by data type). Datasets the viewer does not serve are read as raw repo files (`fetch_file`). Both cache under `$MODELS/datasets/`, so repeat runs are offline and the folder can be copied to a board without network access.
-- Each task category maps the datasets it supports to loaders (`LOADERS` in `utils/tasks/<category>/`) that turn rows into scoring items; a demo-specific dataset (for example one tied to the demo's output format) is a loader passed by the demo's `validate.py`.
+- Each task category maps the datasets it supports to loaders (`LOADERS` in `utils/tasks/<category>/`) that turn rows into scoring items, one item per row in row order, starting at the spec's `offset`; a demo-specific dataset (for example one tied to the demo's output format) is a loader passed by the demo's `validate.py`.
 - Prefer the dataset the model card reports. Before adding one, check the existing loaders and the other demos' `info.json`: a dataset your demo needs may already be supported, so reusing it is one `info.json` entry.
 - Scoring is against the dataset's own labels; nothing model-generated (goldens) is stored in the repository.
 
@@ -132,4 +132,4 @@ where unit is one of:
 - `percent` (percentage; values are 0-100, so 90 means 90%)
 - `bytes` (memory usage)
 
-A validation run also writes a top-level `validation` list: the datasets the score was measured on, each `{"dataset", "config", "split", "samples", "items"}` (`items` is the number of rows scored, fewer than `samples` at the end of a split). Scores are only comparable between runs with the same list.
+A validation run also writes a top-level `validation` list: the datasets the score was measured on, each `{"dataset", "config", "split", "samples", "rows"}` (`rows` lists the indices of the rows scored: `samples` of them, fewer at the end of a split). An item that does not fit the model's context is skipped, not scored: the runner raises `utils.inference.ContextOverflow` for it (the LLMs, which truncate interactive prompts, raise it during validation instead of scoring a cut-off prompt), and validation prints `[SKIP]`, leaves it out of the score and scores the dataset's next row instead (trying at most twice `samples` rows). Scores are only comparable between runs with the same list.

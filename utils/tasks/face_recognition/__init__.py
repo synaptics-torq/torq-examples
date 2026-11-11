@@ -52,7 +52,8 @@ def _centred_faces(spec: dict) -> list[dict]:
     """Rows of face-centred photos (LFW crops: one person's face in the middle)."""
     import cv2
 
-    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
     items = []
     for row in rows:
         height, width = cv2.imread(row["image"]).shape[:2]

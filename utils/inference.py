@@ -17,6 +17,10 @@ class InferenceInterrupted(Exception):
     """Raised when interactive inference is cancelled by the user."""
 
 
+class ContextOverflow(ValueError):
+    """An input does not fit the model's context (validation skips the item)."""
+
+
 def _raise_if_stopped(should_stop: StopCheck | None) -> None:
     if should_stop is not None and should_stop():
         raise InferenceInterrupted

@@ -467,7 +467,7 @@ def test_bfcl_loader_declares_dotted_names_with_underscores(tmp_path, monkeypatc
         return path
 
     monkeypatch.setattr(validate, "fetch_file", fetch_file)
-    (item,) = validate._bfcl({"dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard", "config": "simple", "samples": 5})
+    (item,) = validate._bfcl({"dataset": "gorilla-llm/Berkeley-Function-Calling-Leaderboard", "config": "simple", "samples": 5, "offset": 0})
     assert item["prompt"] == "Factorial of 5?"
     assert item["check"]("<start_function_call>call:math_factorial{number:5}<end_function_call>")
     runner = mock.Mock()

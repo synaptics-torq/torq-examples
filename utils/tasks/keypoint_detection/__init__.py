@@ -82,9 +82,10 @@ def aggregate(counts: list[tuple[int, int]]) -> float:
 def _coco_pose(spec: dict) -> list[dict]:
     """COCO keypoints rows: ``objects.bbox`` per person and, in the same order,
     ``keypoints`` as flat ``[x, y, visibility] * 17`` (visibility 0: unlabelled)."""
-    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
     items = []
-    for index, row in enumerate(rows):
+    for index, row in enumerate(rows, spec["offset"]):
         persons = []
         for box, person in zip(row["objects"]["bbox"], row["keypoints"]):
             flat = person["keypoints"]

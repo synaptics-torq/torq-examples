@@ -49,7 +49,8 @@ def word_error_rate(hypothesis: str, reference: str) -> float:
 
 
 def _librispeech(spec: dict) -> list[dict]:
-    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"], samples=spec["samples"])
+    rows = fetch_rows(spec["dataset"], config=spec["config"], split=spec["split"],
+                      samples=spec["samples"], offset=spec["offset"])
     return [{"name": row["id"], "audio": Path(row["audio"]), "reference": row["text"]} for row in rows]
 
 

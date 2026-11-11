@@ -31,6 +31,7 @@ from tokenizers import Tokenizer
 
 from utils.cache import KVCache
 from utils.decoder import Decoder, generate, sample
+from utils.inference import ContextOverflow
 from utils.runtime import Model, RuntimeConfig, load_lut
 
 PATCH: Final[int] = 16
@@ -291,7 +292,7 @@ class LFM2VLEngine:
         turn = f"<|image_end|>{question}\nassistant\n"
         tids = self._tokenizer.encode(turn, add_special_tokens=False).ids
         if self._base_pos + len(tids) + self._max_new >= self._max_seq_len:
-            raise ValueError(f"question too long for the KV cache ({self._max_seq_len})")
+            raise ContextOverflow(f"question too long for the KV cache ({self._max_seq_len})")
         self._prefill_tokens = self._base_pos + len(tids)
         # The per-question working copy is staged before the timing window.
         self._cache.restore(self._base_caches)
