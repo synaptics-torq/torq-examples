@@ -78,3 +78,29 @@ def test_fetch_rows_reports_viewer_errors(tmp_path):
             datasets.fetch_rows("org/set", config="c", split="test", samples=1)
 
 
+def test_fetch_rows_refetches_a_corrupt_cached_row(tmp_path):
+    calls = []
+    with mock.patch.dict("os.environ", {"MODELS": str(tmp_path)}), \
+            mock.patch.object(datasets.requests, "get", _fake_viewer(1000, calls)):
+        rows = datasets.fetch_rows("org/set", config="c", split="test", samples=2)
+    (tmp_path / "datasets/org/set/c/test/0.json").write_text("")  # truncated cache row
+    with mock.patch.dict("os.environ", {"MODELS": str(tmp_path)}), \
+            mock.patch.object(datasets.requests, "get", _fake_viewer(1000, calls)):
+        calls.clear()
+        again = datasets.fetch_rows("org/set", config="c", split="test", samples=2)
+    assert again == rows  # the corrupt row came back identical
+    assert ("rows", 0, 1) in [c for c in calls if c[0] == "rows"]  # re-fetched only the missing row
+
+
+def test_fetch_rows_refetches_a_row_whose_media_went_missing(tmp_path):
+    calls = []
+    with mock.patch.dict("os.environ", {"MODELS": str(tmp_path)}), \
+            mock.patch.object(datasets.requests, "get", _fake_viewer(1000, calls)):
+        rows = datasets.fetch_rows("org/set", config="c", split="test", samples=2)
+    (tmp_path / "datasets/org/set/c/test/1_audio.wav").unlink()
+    with mock.patch.dict("os.environ", {"MODELS": str(tmp_path)}), \
+            mock.patch.object(datasets.requests, "get", _fake_viewer(1000, calls)):
+        calls.clear()
+        again = datasets.fetch_rows("org/set", config="c", split="test", samples=2)
+    assert again == rows  # the media file was re-downloaded next to the row
+    assert ("rows", 1, 1) in [c for c in calls if c[0] == "rows"]  # re-fetched only the affected row

@@ -52,11 +52,25 @@ def _localize(value, stem: Path):
     return str(path)
 
 
+def _row_media_present(row: dict, cache: Path) -> bool:
+    """Whether the media files a cached row points at still exist on disk.
+
+    :func:`_localize` saves media next to the row's JSON in *cache*, so string
+    cells naming a path there are media; text cells pass.
+    """
+    return all(
+        Path(value).is_file()
+        for value in row.values()
+        if isinstance(value, str) and Path(value).parent == cache
+    )
+
+
 def fetch_rows(dataset: str, *, config: str, split: str, samples: int, offset: int = 0) -> list[dict]:
     """Rows ``offset`` to ``offset + samples - 1`` of a dataset split (fewer at the end of the split).
 
     Media cells become local file paths. Each row is cached as
-    ``<datasets dir>/<dataset>/<config>/<split>/<row>.json`` next to its media.
+    ``<datasets dir>/<dataset>/<config>/<split>/<row>.json`` next to its media;
+    a cached row that is corrupt or whose media went missing is re-fetched.
     """
     cache = datasets_dir() / dataset / config / split
     rows: dict[int, dict] = {}
@@ -64,7 +78,14 @@ def fetch_rows(dataset: str, *, config: str, split: str, samples: int, offset: i
     for index in range(offset, offset + samples):
         path = cache / f"{index}.json"
         if path.is_file():
-            rows[index] = json.loads(path.read_text(encoding="utf-8"))
+            try:
+                row = json.loads(path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError):
+                row = None  # truncated/corrupt cache row: re-fetch it
+            if row is not None and _row_media_present(row, cache):
+                rows[index] = row
+            else:
+                missing.append(index)
         else:
             missing.append(index)
     if missing:
