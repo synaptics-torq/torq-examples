@@ -259,6 +259,7 @@ class LLM:
         top_p: float = 1.0,
         top_k: int = 64,
         max_gen_tokens: int | None = None,
+        max_cache_rolls: int | None = None,
         lm_head_path: str | os.PathLike | None = None,
         disable_lm_head: bool = False,
         prefill_model_path: str | os.PathLike | None = None,
@@ -271,6 +272,8 @@ class LLM:
         self._max_prompt_tokens = max_prompt_tokens
         self._max_user_tokens = None
         self._max_gen_tokens = max_gen_tokens
+        self._max_cache_rolls = max_cache_rolls
+        self._rolls = 0  # mid-answer window rolls in the current answer
         self._cache_keep_n = cache_keep_n
         self._temperature = temperature
         self._top_p = top_p
@@ -504,6 +507,12 @@ class LLM:
     def _on_cache_full(self, should_stop: StopCheck | None) -> int | None:
         """Roll the window mid-answer; the new position, or None to stop."""
         if self._cache_keep_n is not None:
+            if self._max_cache_rolls is not None and self._rolls >= self._max_cache_rolls:
+                # A greedy model stuck in a loop never emits EOS; without this
+                # bound the window would roll on indefinitely.
+                self._logger.warning("KV window rolled %d times; stopping generation", self._rolls)
+                return None
+            self._rolls += 1
             keep = min(self._cache_keep_n, max(0, self._max_seq_len - self._warmup_len - 1))
             self._roll_cache(keep, should_stop)
             self._logger.debug(
@@ -534,6 +543,7 @@ class LLM:
         self._n_tokens_gen = 0
         self._last_infer_ns = 0
         self._time_to_first_token_ns = 0
+        self._rolls = 0
         tokens = self._apply_prompt_limit(self._build_prompt_tokens(user_input))
         start_ns = time.perf_counter_ns()
         # The last predicted token goes into the cache first.

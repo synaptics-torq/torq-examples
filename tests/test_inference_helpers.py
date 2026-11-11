@@ -36,6 +36,16 @@ def _llm_parser(**kwargs) -> argparse.ArgumentParser:
     return parser
 
 
+@pytest.mark.parametrize("flag, low, too_low", [
+    ("--max-cache-rolls", "0", "-1"),
+])
+def test_llm_args_counts_reject_out_of_range(flag, low, too_low):
+    parser = _llm_parser()
+    parser.parse_args([flag, low])
+    with pytest.raises(SystemExit):
+        parser.parse_args([flag, too_low])
+
+
 def test_llm_args_lm_head_pair_is_mutually_exclusive():
     with pytest.raises(SystemExit):
         _llm_parser().parse_args(["--lm-head", "a.vmfb", "--no-lm-head"])

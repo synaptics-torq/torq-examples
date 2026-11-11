@@ -145,3 +145,4 @@ licensed under the **LFM Open License v1.0**.
 > keeps the system prompt plus the last N tokens and replays them, which
 > rebuilds the conv states too. `--no-kv-cache-window` starts a fresh
 > conversation instead.
+> An answer stops after `--max-cache-rolls N` window rolls (default: 3).

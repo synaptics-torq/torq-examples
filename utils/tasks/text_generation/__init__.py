@@ -70,6 +70,7 @@ def llm_kwargs(args) -> dict:
         top_p=getattr(args, "top_p", 1.0),
         top_k=getattr(args, "top_k", 64),
         max_gen_tokens=getattr(args, "max_gen_tokens", None),
+        max_cache_rolls=getattr(args, "max_cache_rolls", None),
         lm_head_path=getattr(args, "lm_head", None),
         disable_lm_head=getattr(args, "no_lm_head", False),
         prefill_model_path=getattr(args, "batch_prefill_model", None),

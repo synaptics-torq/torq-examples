@@ -54,7 +54,7 @@ def test_llm_kwargs_mapping():
     args = _args(
         max_seq_len=512, max_inp_len=128, max_gen_tokens=64,
         temperature=0.7, top_p=0.9, top_k=40,
-        lm_head="h.vmfb", batch_prefill_model="p.vmfb", kv_cache_window=3,
+        lm_head="h.vmfb", batch_prefill_model="p.vmfb", kv_cache_window=3, max_cache_rolls=5,
     )
     assert llm_kwargs(args) == dict(
         max_seq_len=512,
@@ -64,6 +64,7 @@ def test_llm_kwargs_mapping():
         top_p=0.9,
         top_k=40,
         max_gen_tokens=64,
+        max_cache_rolls=5,
         lm_head_path="h.vmfb",
         disable_lm_head=False,
         prefill_model_path="p.vmfb",

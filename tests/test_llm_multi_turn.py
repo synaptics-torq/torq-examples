@@ -213,6 +213,20 @@ def test_large_window_keeps_generating_on_rollover(keep, tmp_path, monkeypatch, 
     assert "stopping generation" not in caplog.text
 
 
+@pytest.mark.parametrize("rolls", [0, 2])
+def test_mid_answer_rolls_are_bounded(rolls, tmp_path, monkeypatch, caplog):
+    # A model that never emits a stop token stops after max_cache_rolls rolls.
+    x = CHAR_BASE + ord("x")
+    llm, _, _ = _build(Gemma3Static, tmp_path, monkeypatch, instruct=False, seq=8, keep=4,
+                       next_fn=scripted([], then=x))
+    llm._max_cache_rolls = rolls
+    with caplog.at_level(logging.WARNING):
+        answer = llm.run("q")
+    assert f"KV window rolled {rolls} times; stopping generation" in caplog.text
+    assert set(answer) == {"x"}
+    assert llm._cache_tokens == cached_tokens(llm)
+
+
 def test_in_turn_rollover_then_next_turn_preserves_pending(tmp_path, monkeypatch):
     # The cache fills mid-answer; the roll keeps the last window tokens, and
     # the next turn still picks up the pending prediction.

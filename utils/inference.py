@@ -28,6 +28,19 @@ def _raise_if_stopped(should_stop: StopCheck | None) -> None:
 _LLM_MODEL_HELP: str = "Path to VMFB model (default: the one setup_demo.py downloaded)"
 
 
+def _int_at_least(minimum: int) -> Callable[[str], int]:
+    """argparse type: an integer no smaller than *minimum*."""
+    def parse(value: str) -> int:
+        try:
+            number = int(value)
+        except ValueError:
+            raise argparse.ArgumentTypeError(f"invalid int value: {value!r}") from None
+        if number < minimum:
+            raise argparse.ArgumentTypeError(f"must be at least {minimum}, got {number}")
+        return number
+    return parse
+
+
 def add_llm_inference_args(
     parser: argparse.ArgumentParser,
     *,
@@ -135,6 +148,16 @@ def add_llm_inference_args(
             help=(
                 "Disable sliding-window KV cache behavior. "
                 "Once the KV cache reaches its maximum length, no further tokens can be generated."
+            ),
+        )
+        inference_group.add_argument(
+            "--max-cache-rolls",
+            type=_int_at_least(0),
+            default=3,
+            metavar="N",
+            help=(
+                "Stop an answer once the sliding KV window has rolled N times during it; "
+                "bounds a model that never emits EOS (0: never roll mid-answer) (default: %(default)s)"
             ),
         )
     if with_sampling:
