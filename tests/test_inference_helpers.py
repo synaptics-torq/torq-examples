@@ -38,6 +38,10 @@ def _llm_parser(**kwargs) -> argparse.ArgumentParser:
 
 @pytest.mark.parametrize("flag, low, too_low", [
     ("--max-cache-rolls", "0", "-1"),
+    ("--kv-cache-window", "0", "-1"),
+    ("--max-seq-len", "1", "0"),
+    ("--max-inp-len", "1", "0"),
+    ("--max-gen-tokens", "1", "0"),
 ])
 def test_llm_args_counts_reject_out_of_range(flag, low, too_low):
     parser = _llm_parser()

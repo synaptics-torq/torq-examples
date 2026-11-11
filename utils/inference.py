@@ -109,18 +109,18 @@ def add_llm_inference_args(
             ),
         )
     parser.add_argument(
-        "--max-seq-len", type=int, default=None,
+        "--max-seq-len", type=_int_at_least(1), default=None,
         help="Maximum sequence length (prompt + generation); auto-detected from model if omitted",
     )
     if with_max_inp_len:
         parser.add_argument(
-            "--max-inp-len", type=int,
+            "--max-inp-len", type=_int_at_least(1),
             help="Maximum input (prompt) length in tokens; longer prompts are "
                  "truncated, shorter ones pass through unchanged",
         )
     if with_max_gen_tokens:
         parser.add_argument(
-            "--max-gen-tokens", type=int, default=None,
+            "--max-gen-tokens", type=_int_at_least(1), default=None,
             help="Maximum number of generated tokens per answer (default: no limit)",
         )
     if with_instruct:
@@ -136,7 +136,7 @@ def add_llm_inference_args(
     if with_kv_window:
         inference_group.add_argument(
             "--kv-cache-window",
-            type=int,
+            type=_int_at_least(0),
             default=2,
             metavar="N",
             help=(
