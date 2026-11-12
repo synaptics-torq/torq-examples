@@ -7,6 +7,7 @@ from typing import Final
 
 from utils.download import default_models_dir, download_from_hf
 from utils.model_setup import demo_main, setup_demo
+from utils.version import examples_version
 
 logger = logging.getLogger("EmbeddingGemma2.setup")
 
@@ -17,16 +18,12 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
 _DEFAULT_MODELS: Final[list[str]] = ["default"]
 
 # Weight builds on Hugging Face, chosen with --model-version (or `default:<version>`):
-#   q8      branch `q8` (the default): 8-bit weights (int8 block-32, bf16 activations); much
-#           closer to the original model than 4-bit at the same or better NPU speed
-#   main    branch `main` or the version tag (e.g. v2.2.0): 4-bit weights (q4)
+#   (none)  the torq-examples version tag (e.g. v2.3.0), on `main`: 8-bit weights (int8
+#           block-32, bf16 activations), the recommended build
+#   q4      branch `q4`: 4-bit weights
 #   bf16    branch `bf16`: bf16 weights
 # All builds use the same file names and go to the same model directory; switching
 # replaces the files.
-#
-# The build downloaded when no --model-version is given: the 8-bit build on the `q8` branch.
-# Once a release tag itself holds the 8-bit build, set it back to None (the version tag).
-_DEFAULT_MODEL_VERSION: Final[str | None] = "q8"
 
 _REQUIRED_FILES: Final[tuple[str, ...]] = (
     "vision_384x384.vmfb",            # vision encoder, 384x384 -> 64 soft tokens
@@ -45,9 +42,9 @@ _REQUIRED_FILES: Final[tuple[str, ...]] = (
 )
 
 # Example media, the default library of `src/media_search.py index`: CC0 / public-domain photos,
-# sounds and videos with a description each (credits in examples/README.md). They live on the
-# `main` branch, so they are always downloaded from there.
-_EXAMPLES_REVISION: Final[str] = "main"
+# sounds and videos with a description each (credits in examples/README.md). They are tagged with
+# the 8-bit build on `main`, so they come from the torq-examples version tag whichever build
+# --model-version selects.
 _EXAMPLE_FILES: Final[tuple[str, ...]] = tuple(f"examples/{f}" for f in (
     "examples.json", "README.md",
     "cat_tabby.jpg", "cat_meowing.wav", "dog_labrador.jpg", "dog_barking.wav",
@@ -78,8 +75,9 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
     for f in _REQUIRED_FILES:
         download_from_hf(repo_id, f, base_dir=base_dir, revision=revision)
         logger.info("Downloaded %s from %s", f, repo_id)
+    examples_revision = examples_version() or "main"
     for f in _EXAMPLE_FILES:
-        download_from_hf(repo_id, f, base_dir=base_dir, revision=_EXAMPLES_REVISION)
+        download_from_hf(repo_id, f, base_dir=base_dir, revision=examples_revision)
         logger.info("Downloaded %s from %s", f, repo_id)
     return list(_REQUIRED_FILES + _EXAMPLE_FILES)
 
@@ -87,7 +85,6 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
 def setup_embeddinggemma2(models: list[str] | None = None, model_version: str | None = None,
                           no_update: bool = False):
     """Set up the EmbeddingGemma-2 demo (download/refresh the model files)."""
-    model_version = model_version or _DEFAULT_MODEL_VERSION
     return setup_demo(
         _HF_REPO_MAP,
         models or _DEFAULT_MODELS,
