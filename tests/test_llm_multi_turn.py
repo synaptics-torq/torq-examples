@@ -286,3 +286,28 @@ def test_generation_validation_resets_between_samples(monkeypatch):
     validator.gemma3.run.return_value = "b"
     validator.run()
     assert [call[0] for call in validator.gemma3.method_calls] == ["reset", "run", "reset", "run"]
+
+
+def test_managed_cache_wraps_each_cache_copy(monkeypatch):
+    from utils import inference
+
+    copies = []
+    monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "device", property(lambda self: self._device), raising=False)
+    monkeypatch.setattr(inference, "HalCommandBuffer", lambda device: SimpleNamespace(
+        copy=lambda *args: copies.append(args), end=lambda: None,
+    ))
+
+    def array(length, name):
+        return SimpleNamespace(shape=(1, length, 2, 1), dtype="float32",
+                               _buffer_view=SimpleNamespace(get_buffer=lambda: name))
+
+    runner = object.__new__(inference.ManagedSelfAttnCacheRunner)
+    runner._kv_cache = [array(3, "ring"), array(8, "global")]
+    runner._rows_axis = [1, 1]
+    runner._kv_seq_len = 8
+    runner._copies = 0
+    runner._copy_semaphore = SimpleNamespace(wait=lambda value: None)
+    runner._device = SimpleNamespace(queue_execute=lambda *args: None)
+    runner._write_rows([(0, array(3, "r")), (1, array(3, "g"))], 2)
+    assert copies == [("r", "ring", 0, 16, 8), ("r", "ring", 8, 0, 16),
+                      ("g", "global", 0, 16, 24)]
