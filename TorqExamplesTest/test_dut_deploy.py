@@ -2,6 +2,7 @@
 
 test_dut_deploy:        single case deploying the whole stack to the DUT
                         (workspace wipe/rebuild, model push, ko swap, ARM wheel)
+                        after the session preflight and module board lock
 test_dut_infer[<case>]:  per-model-dir inference cases (13 total, matching the
                         per-model-dir setup cases); known-debt demos (no command
                         builder yet) are skipped with an explicit reason
@@ -20,11 +21,13 @@ Requires on the host:
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 import os
 
 import pytest
 
 from TorqExamplesTest.demo_registry import REPO_ROOT, demo_model_cases
+from TorqExamplesTest.dut_power_cycle import ADB_SERIAL
 from TorqExamplesTest.dut_deploy import DEMO_SPECS, DutDeployError, DutDeployRunner
 
 # Per-model-dir (repo) granularity, identical to the setup cases: 13 entries.
@@ -35,7 +38,8 @@ MODEL_CASES = demo_model_cases()
 
 
 @pytest.fixture(scope="module")
-def dut_deploy() -> DutDeployRunner:
+def dut_deploy(dut_ready: None) -> Iterator[DutDeployRunner]:
+    """Lock the target DUT after the shared session power-cycle preflight."""
     missing = [
         name
         for name, value in (
@@ -55,6 +59,11 @@ def dut_deploy() -> DutDeployRunner:
     except DutDeployError as exc:
         pytest.fail(f"DUT not available: {exc}")
     try:
+        if runner.serial != ADB_SERIAL:
+            pytest.fail(
+                f"Locked DUT {runner.serial!r} does not match the Netbooter "
+                f"target {ADB_SERIAL!r}"
+            )
         yield runner
     finally:
         runner.release_board()

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from typing import TextIO
@@ -16,6 +17,11 @@ if str(WORKSPACE_ROOT) not in sys.path:
 
 from TorqExamplesTest.generate_test_summary import generate_summary
 from TorqExamplesTest.report_export import generate_json_report
+from TorqExamplesTest.dut_power_cycle import (
+    ADB_SERIAL,
+    DutPowerCycleError,
+    power_cycle_dut,
+)
 
 
 EXAMPLES_REPO_ROOT = (
@@ -25,6 +31,23 @@ EXAMPLES_REPO_ROOT = (
 )
 LOG_ARTIFACT_SUFFIXES = {".log", ".json", ".xml", ".html"}
 _STATE_ATTRIBUTE = "_torq_examples_plugin_state"
+
+
+@pytest.fixture(scope="session")
+def dut_ready() -> None:
+    """Power-cycle and verify the DUT before either pipeline stage starts."""
+    configured_serial = os.environ.get("TORQ_DUT_SERIAL", "").strip()
+    if configured_serial and configured_serial != ADB_SERIAL:
+        pytest.fail(
+            f"Netbooter is configured for {ADB_SERIAL}, but "
+            f"TORQ_DUT_SERIAL is {configured_serial}"
+        )
+    os.environ["TORQ_DUT_SERIAL"] = ADB_SERIAL
+
+    try:
+        power_cycle_dut()
+    except DutPowerCycleError as exc:
+        pytest.fail(f"Host-side DUT power cycle failed: {exc}")
 
 
 class TeeStream:
@@ -233,7 +256,8 @@ def pytest_collection_modifyitems(config, items):
     Passing the suite directory collects files alphabetically
     (test_dut_deploy.py before test_host_conversion.py), which would
     deploy to the DUT before the host-side model preparation exists.
-    Host preparation must always precede DUT deploy/infer/profile.
+    The shared dut_ready fixture verifies the DUT before host preparation,
+    which must always precede DUT deploy/infer/profile.
     """
     def sort_key(item):
         base = item.name.split("[", 1)[0]

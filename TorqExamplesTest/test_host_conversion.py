@@ -28,7 +28,7 @@ _failed_demos: set[str] = set()
 
 
 @pytest.fixture(scope="session")
-def host_setup() -> HostSetupRunner:
+def host_setup(dut_ready: None) -> HostSetupRunner:
     runner = HostSetupRunner(examples_root=REPO_ROOT, log_dir=REPO_ROOT / "logs")
     if not runner.docker_available():
         pytest.fail("docker is not available on the host; host-side setup cannot run")
