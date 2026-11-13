@@ -168,10 +168,14 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
             for out, cache in zip(self.outputs_info[self._cache_start_idx:], cache_info)
         ]
         self._seq_axis = next((a for a in self._rows_axis if a is not None), 2)
-        self._kv_seq_len = next(
-            (cache.shape[a] for a, cache in zip(self._rows_axis, cache_info) if a is not None), None
+        self._kv_seq_len = max(
+            (cache.shape[a] for a, cache in zip(self._rows_axis, cache_info) if a is not None), default=None
         )
         if self._kv_seq_len is not None:
+            self._rows_axis = [
+                self._seq_axis if axis is None and cache.shape[self._seq_axis] < self._kv_seq_len else axis
+                for axis, cache in zip(self._rows_axis, cache_info)
+            ]
             self._copy_semaphore = self.device.create_semaphore(0)
             self._copies = 0
 
@@ -181,16 +185,22 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         return self._kv_seq_len
 
     def _write_rows(self, rows: list[tuple[int, DeviceArray]], position: int) -> None:
-        """Copy each cache's new rows into it at *position*, in one submission."""
+        """Copy new rows, wrapping caches shorter than the global context capacity."""
         cb = HalCommandBuffer(self.device)
         for i, out in rows:
             cache, axis = self._kv_cache[i], self._rows_axis[i]
             n, length = out.shape[axis], cache.shape[axis]
+            offset = position % length if length < self._kv_seq_len else position
+            if position < 0 or n > length or offset + n > length and length == self._kv_seq_len:
+                raise ValueError("KV cache write exceeds capacity")
+            first = min(n, length - offset)
             inner = int(np.prod(cache.shape[axis + 1:])) * np.dtype(cache.dtype).itemsize
             src, dst = out._buffer_view.get_buffer(), cache._buffer_view.get_buffer()
             # One contiguous block per index of the leading axes (one for a time-major cache).
             for b in range(int(np.prod(cache.shape[:axis]))):
-                cb.copy(src, dst, b * n * inner, (b * length + position) * inner, n * inner)
+                cb.copy(src, dst, b * n * inner, (b * length + offset) * inner, first * inner)
+                if first < n:
+                    cb.copy(src, dst, (b * n + first) * inner, b * length * inner, (n - first) * inner)
         cb.end()
         self._copies += 1
         self.device.queue_execute(
@@ -285,6 +295,10 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         """
         if seq_axis is None:
             seq_axis = self._seq_axis
+        if self._kv_seq_len is not None and any(
+            cache.shape[seq_axis] < self._kv_seq_len for cache in self._kv_cache
+        ):
+            raise ValueError("Ring caches require reset and token replay rather than shifting slots")
         for i in range(self._n_kv):
             host = self._kv_cache[i].to_host()
             seq_len = host.shape[seq_axis]
