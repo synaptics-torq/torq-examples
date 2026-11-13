@@ -362,7 +362,8 @@ def test_max_gen_tokens_none_keeps_old_behaviour():
 # ── ManagedSelfAttnCacheRunner: read-only KV cache rows ───────────────────────
 
 
-def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch):
+@pytest.mark.parametrize("native", [False, True])
+def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch, native):
     import numpy as np
     from types import SimpleNamespace
 
@@ -393,13 +394,14 @@ def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch):
     caches = [info([1, 4, 2, 3]), info([1, 2, 4, 3]), info([1, 5])]
     rows = [info([1, 1, 2, 3]), info([1, 2, 1, 3]), info([1, 5])]
 
-    def fake_infer(self, inputs):
+    def fake_infer(*inputs):
         pos = int(np.asarray(inputs[1]).reshape(-1)[0])
-        return [_Array(np.zeros(1)), *(_Array(np.full(r.shape, pos + 1, np.float32)) for r in rows)]
+        outputs = [list(r.shape) for r in rows]
+        outputs[0][1] = outputs[1][2] = inputs[0].shape[1]
+        return (_Array(np.zeros(1)), *(_Array(np.full(shape, pos + 1, np.float32)) for shape in outputs))
 
     monkeypatch.setattr(inference, "HalCommandBuffer", _CommandBuffer)
     monkeypatch.setattr(inference.VMFBInferenceRunner, "__init__", lambda self, *a, **k: None, raising=False)
-    monkeypatch.setattr(inference.VMFBInferenceRunner, "_infer", fake_infer, raising=False)
     semaphore = SimpleNamespace(wait=lambda value: None)
     monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "inputs_info", [info([1, 1]), info([1, 1]), *caches], raising=False)
     monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "outputs_info", [info([1]), *rows], raising=False)
@@ -409,11 +411,18 @@ def test_managed_cache_runner_writes_new_rows_at_the_step_position(monkeypatch):
     monkeypatch.setattr(inference.ManagedSelfAttnCacheRunner, "allocate_device_array", lambda self, a: _Array(a), raising=False)
 
     runner = inference.ManagedSelfAttnCacheRunner("model.vmfb")
+    runner._invoker = fake_infer
+    runner._bound_module = {"main_2": fake_infer}
     assert runner.kv_seq_len == 4
-    for pos in range(3):
-        runner._infer([np.zeros((1, 1)), np.array([[pos]])])
+    if native:
+        runner.infer([np.zeros((1, 2)), np.array([[0]])], entry="main_2")
+        runner.infer([np.zeros((1, 1)), np.array([[2]])])
+    else:
+        for pos in range(3):
+            runner.infer([np.zeros((1, 1)), np.array([[pos]])])
 
     time_major, head_major, state = (c.a for c in runner._kv_cache)
-    np.testing.assert_array_equal(time_major[0, :, 0, 0], [1, 2, 3, 0])
-    np.testing.assert_array_equal(head_major[0, 1, :, 2], [1, 2, 3, 0])
+    expected = [1, 1, 3, 0] if native else [1, 2, 3, 0]
+    np.testing.assert_array_equal(time_major[0, :, 0, 0], expected)
+    np.testing.assert_array_equal(head_major[0, 1, :, 2], expected)
     np.testing.assert_array_equal(state, np.full((1, 5), 3))

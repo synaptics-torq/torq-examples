@@ -31,6 +31,7 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
     "350m": "Synaptics/LiquidAI-LFM2.5-350M",
     "230m-w8a8": "Synaptics/LiquidAI-LFM2.5-230M-w8a8-torq",
     "350m-w8a8": "Synaptics/LiquidAI-LFM2.5-350M-w8a8-torq",
+    "350m-qad-q4_0": "Synaptics/LiquidAI-LFM2.5-350M-QAD-Q4_0-torq",
 }
 _DEFAULT_MODELS: Final[list[str]] = ["default"]
 # Ordered most-preferred first; the first set fully available in the repo is

@@ -35,6 +35,25 @@ Requires Python 3.
     pip install -r requirements.txt
     ```
 
+    > [!NOTE]
+    > Some minimal board images ship a Python that cannot create a virtual environment
+    > (`No module named venv`) or run pip (`No module named 'colorsys'`, `'pyexpat'`).
+    > On those, use [uv](https://docs.astral.sh/uv/), a single binary that needs neither:
+    >
+    > ```sh
+    > # one-time: get uv (aarch64 Linux build)
+    > wget https://github.com/astral-sh/uv/releases/latest/download/uv-aarch64-unknown-linux-gnu.tar.gz
+    > tar xzf uv-aarch64-unknown-linux-gnu.tar.gz
+    > export PATH="$PWD/uv-aarch64-unknown-linux-gnu:$PATH"
+    >
+    > uv venv .venv --system-site-packages
+    > source .venv/bin/activate
+    > uv pip install -r requirements.txt
+    > ```
+    >
+    > Then write `uv pip install` wherever these instructions say `pip install`
+    > (`--force-reinstall` is `--reinstall` in uv).
+
 2. Additionally, install any demo-specific dependencies:
 
     Enter the demo directory. Install its requirements. Jump back to the repo root.

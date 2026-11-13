@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import time
 from abc import ABC, abstractmethod
 from collections.abc import Iterator, Sized
@@ -81,6 +82,10 @@ def resolve_lm_head_path(
     if discovered is not None and logger is not None:
         logger.info("Auto-discovered LM head '%s'", str(discovered))
     return discovered
+
+
+#: Extra chunk-size exports of a batched prefill model (``main_8``, ...).
+_PREFILL_ENTRY_RE: Final[re.Pattern] = re.compile(r"^main_(\d+)$")
 
 
 def discover_prefill_model_path(model_path: str | os.PathLike) -> Path | None:
@@ -249,6 +254,7 @@ class DecoderOnlyLLMRunner(ABC):
         "_prefill_size",
         "_prefill_emb_buf",
         "_prefill_id_buf",
+        "_prefill_entries",
     )
 
     def __init__(
@@ -368,17 +374,21 @@ class DecoderOnlyLLMRunner(ABC):
         self._prefill_size = None
         self._prefill_emb_buf = None
         self._prefill_id_buf = None
+        self._prefill_entries: dict[int, str | None] = {}
         if prefill_path is not None:
             self._setup_prefill_model(prefill_path, n_threads, runtime_flags, device_io)
+            self._prefill_entries = self._find_prefill_entries()
+            largest = max(self._prefill_entries)
             prefill_token_info = self._prefill_model.inputs_info[0]
             if self._token_embeddings is not None:
                 self._prefill_emb_buf = np.zeros(
-                    (1, self._prefill_size, self._token_embeddings.shape[-1]),
+                    (1, largest, self._token_embeddings.shape[-1]),
                     dtype=np.dtype(prefill_token_info.dtype),
                 )
             else:
                 self._prefill_id_buf = np.zeros(
-                    prefill_token_info.shape, dtype=np.dtype(prefill_token_info.dtype)
+                    (1, largest, *prefill_token_info.shape[2:]),
+                    dtype=np.dtype(prefill_token_info.dtype),
                 )
         else:
             self._logger.debug(
@@ -644,6 +654,7 @@ class DecoderOnlyLLMRunner(ABC):
         *,
         compute_logits: bool = True,
         sample_next: bool = True,
+        entry: str | None = None,
     ) -> int:
         """Run one or more consecutive tokens through *model*.
 
@@ -652,7 +663,9 @@ class DecoderOnlyLLMRunner(ABC):
         expands the single *seq_pos* (the chunk's start position) across the
         whole chunk and returns the final position's sampleable output (its
         hidden state routed through the shared LM head, or logits when the
-        prefill model has the head baked in).
+        prefill model has the head baked in). *entry* names the prefill
+        model's export for the chunk size (``main_8``, ...); ``None`` runs its
+        default function.
         """
         if sample_next and not compute_logits:
             raise ValueError("sample_next=True requires compute_logits=True")
@@ -665,20 +678,23 @@ class DecoderOnlyLLMRunner(ABC):
                 self._id_buf[0, 0] = tokens[0]
                 first = self._id_buf
         else:
+            # Smaller chunk sizes fill a prefix of the largest chunk's buffer.
+            n = len(tokens)
+            buf = self._prefill_emb_buf if self._prefill_emb_buf is not None else self._prefill_id_buf
             if self._prefill_emb_buf is not None:
-                self._prefill_emb_buf[...] = self._token_embeddings[tokens]
-                first = self._prefill_emb_buf
+                buf[:1, :n] = self._token_embeddings[tokens]
             else:
-                self._prefill_id_buf[0, :] = tokens
-                first = self._prefill_id_buf
+                buf[0, :n] = tokens
+            first = buf if n == buf.shape[1] else buf[:1, :n]
 
         self._pos_buf[0, 0] = seq_pos
         step_inputs = [first, self._pos_buf, *self._extra_step_inputs]
 
+        kwargs = {} if entry is None else {"entry": entry}
         if not compute_logits and isinstance(model, SplitLMHeadRunner):
-            results = model.infer(step_inputs, skip_lm_head=True)
+            results = model.infer(step_inputs, skip_lm_head=True, **kwargs)
         else:
-            results = model.infer(step_inputs)
+            results = model.infer(step_inputs, **kwargs)
         self._turn_pos = seq_pos + len(tokens)
         self._cache_tokens[seq_pos:] = tokens
         self._logger.debug("LLM step time: %.3f ms", model.infer_time_ms)
@@ -875,6 +891,48 @@ class DecoderOnlyLLMRunner(ABC):
         )
         return token_id
 
+    def _find_prefill_entries(self) -> dict[int, str | None]:
+        """Chunk sizes the prefill model offers, mapped to the export to call.
+
+        The default function takes the model's fixed chunk size. A prefill
+        model can also export smaller chunk sizes as ``main_<B>`` functions
+        sharing its weights; prompts are then chunked over all of them, so a
+        prompt that does not fill a default chunk still prefills in batches.
+        """
+        entries: dict[int, str | None] = {self._prefill_size: None}
+        body = (
+            self._prefill_model._body
+            if isinstance(self._prefill_model, SplitLMHeadRunner)
+            else self._prefill_model
+        )
+        for name in getattr(body, "function_names", None) or []:
+            match = _PREFILL_ENTRY_RE.match(name)
+            if match:
+                size = int(match.group(1))
+                if 1 < size <= self._max_seq_len and size not in entries:
+                    entries[size] = name
+        if len(entries) > 1:
+            self._logger.info(
+                "Batched prefill chunk sizes: %s",
+                ", ".join(str(size) for size in sorted(entries, reverse=True)),
+            )
+        return entries
+
+    @staticmethod
+    def _plan_prefill_chunks(n_tokens: int, sizes: list[int]) -> list[int]:
+        """Split *n_tokens* greedily into the largest chunk sizes that fit.
+
+        Leftovers smaller than the smallest size become single-token decode
+        steps (size 1).
+        """
+        plan = []
+        remaining = n_tokens
+        while remaining > 0:
+            size = next((s for s in sorted(sizes, reverse=True) if s <= remaining), 1)
+            plan.append(size)
+            remaining -= size
+        return plan
+
     def _prefill(
         self,
         tokens: list[int],
@@ -887,6 +945,34 @@ class DecoderOnlyLLMRunner(ABC):
             # Nothing to feed: return without consuming a cache slot
             return 0, start
         pos = start
+        entries = getattr(self, "_prefill_entries", None) or {}
+        if len(entries) > 1:
+            # Several chunk sizes: chunk greedily; every unit before the last
+            # only extends the KV cache, the last one samples the next token.
+            plan = self._plan_prefill_chunks(len(tokens), list(entries))
+            off = 0
+            tok = 0
+            for i, size in enumerate(plan):
+                _raise_if_stopped(should_stop)
+                chunk = tokens[off:off + size]
+                off += size
+                want_logits = produce_next_token and i == len(plan) - 1
+                if size == 1:
+                    tok = self.llm_step(
+                        chunk[0], pos, compute_logits=want_logits, sample_next=want_logits
+                    )
+                else:
+                    tok = self._llm_tokens_step(
+                        self._prefill_model,
+                        chunk,
+                        pos,
+                        compute_logits=want_logits,
+                        sample_next=want_logits,
+                        entry=entries[size],
+                    )
+                _raise_if_stopped(should_stop)
+                pos += size
+            return tok, pos
         if self._prefill_model is not None and len(tokens) >= self._prefill_size:
             chunk = self._prefill_size
             full_chunks = len(tokens) // chunk

@@ -16,6 +16,11 @@ import numpy.typing as npt
 from torq.runtime import VMFBInferenceRunner
 from iree.runtime import DeviceArray, HalCommandBuffer
 
+try:  # Only present with a real torq.runtime install; unused in the CI stub.
+    from torq.runtime import vmfb as _torq_vmfb
+except ImportError:  # pragma: no cover - exercised only by the CI stub
+    _torq_vmfb = None
+
 from utils.log import add_logging_args
 from utils.terminal import InferenceStopInput
 
@@ -153,6 +158,8 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         **kwargs,
     ) -> None:
         self._device_io = device_io
+        self._bound_module = None
+        self._function_names: list[str] = []
         self._position_idx = position_idx
         super().__init__(model_path, cache_start_idx=cache_start_idx, **kwargs)
 
@@ -203,7 +210,103 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
         """Number of trailing inputs that are managed caches."""
         return self._n_kv
 
-    def _infer(self, inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray]) -> list:
+    @property
+    def function_names(self) -> list[str]:
+        """Exported function names of the loaded module (empty when not loaded)."""
+        return list(self._function_names)
+
+    def _load_invoker(self):
+        """Load the module like the parent, but keep the bound module.
+
+        A native batch prefill family (``main``, ``main_4``, ``main_16``, …)
+        compiles every entry into one image that shares a single weight
+        pool, so the loaded module must outlive the default entry's
+        invoker: the other entries are resolved from it by name without
+        reloading the model.
+        """
+        if _torq_vmfb is None:
+            raise RuntimeError(
+                "torq.runtime is unavailable; the model cannot be loaded. "
+                "Install the torq-runtime wheel for this platform."
+            )
+        iree_rt = _torq_vmfb.iree_rt
+        mmap_mod = _torq_vmfb.mmap_mod
+        get_inputs_and_outputs = _torq_vmfb.get_inputs_and_outputs
+
+        if self._load_method == "mmap":
+            module = iree_rt.load_vm_flatbuffer_file(
+                self._model_path, driver=self._device_uri
+            )
+            vm_module = module.vm_module
+            self._logger.debug("'%s' loaded via mmap", str(self._model_path))
+        else:
+            instance = iree_rt.VmInstance()
+            hal_module = iree_rt.create_hal_module(instance, self._device)
+            f = open(self._model_path, "rb")
+            self._mmap = mmap_mod.mmap(f.fileno(), 0, access=mmap_mod.ACCESS_READ)
+            f.close()
+            self._mmap.madvise(mmap_mod.MADV_WILLNEED)
+            vm_module = iree_rt.VmModule.wrap_buffer(instance, self._mmap)
+            _ctx = iree_rt.SystemContext(vm_modules=[hal_module, vm_module])
+            module = _ctx.modules[vm_module.name]
+            self._logger.debug("'%s' preloaded via mmap + madvise", str(self._model_path))
+
+        self._bound_module = module
+        self._function_names = list(vm_module.function_names)
+        if self._function not in self._function_names:
+            valid_functions = ", ".join(repr(name) for name in self._function_names) or "<none>"
+            raise ValueError(
+                f"Function '{self._function}' not found in '{self._model_path}'. "
+                f"Valid functions: {valid_functions}"
+            )
+        self._invoker = module[self._function]
+        io_info = get_inputs_and_outputs(self._invoker, self._function)
+        if io_info:
+            self._inputs_info, self._outputs_info = io_info
+
+    def _entry_invoker(self, entry: str):
+        """Resolve a named export of the loaded module to an invoker."""
+        if self._bound_module is None:
+            raise RuntimeError(
+                f"Model '{self._model_path}' is not loaded; cannot invoke "
+                f"entry '{entry}'."
+            )
+        try:
+            return self._bound_module[entry]
+        except KeyError as exc:
+            valid = ", ".join(repr(n) for n in self._function_names) or "<none>"
+            raise ValueError(
+                f"Function '{entry}' not found in '{self._model_path}'. "
+                f"Valid functions: {valid}"
+            ) from exc
+
+    def infer(
+        self,
+        inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray],
+        *,
+        entry: str | None = None,
+    ) -> list:
+        """Run one step.
+
+        With ``entry`` set, the step runs through that named export of the
+        loaded module (a native batch prefill entry such as ``main_16``)
+        instead of the default function; the same managed KV caches are
+        used either way.
+        """
+        st = perf_counter_ns()
+        results = self._infer(inputs, entry=entry)
+        self._infer_time_ms = (perf_counter_ns() - st) / 1e6
+        return results
+
+    def _infer(
+        self,
+        inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray],
+        entry: str | None = None,
+    ) -> list:
+        if self._invoker is None:
+            self._load_invoker()
+        invoker = self._invoker if entry is None else self._entry_invoker(entry)
+
         if isinstance(inputs, Mapping):
             user_inputs = list(inputs.values())
         else:
@@ -220,7 +323,8 @@ class ManagedSelfAttnCacheRunner(BaseManagedCacheRunner):
 
         full_inputs = user_inputs + self._kv_cache
 
-        results = super()._infer(full_inputs)
+        results = invoker(*full_inputs)
+        results = list(results) if isinstance(results, tuple) else [results]
 
         # Outputs from cache_start_idx onward are updated KV caches or their new rows.
         rows = []
@@ -627,9 +731,10 @@ class SplitLMHeadRunner:
         inputs: Iterable[npt.NDArray] | Mapping[str, npt.NDArray],
         *,
         skip_lm_head: bool = False,
+        entry: str | None = None,
     ) -> list:
         start = perf_counter_ns()
-        results = self._body.infer(inputs)
+        results = self._body.infer(inputs, entry=entry)
         if skip_lm_head:
             self._infer_time_ms = (perf_counter_ns() - start) / 1e6
             return results
@@ -772,15 +877,18 @@ def add_llm_inference_args(
         prefill_group.add_argument(
             "--batch-prefill-model", type=str, default=None, metavar="PATH",
             help=(
-                "Path to a batched prefill .vmfb that runs complete fixed-size "
-                "prompt chunks. Overrides sibling prefill model auto-discovery. "
-                "Requires a split LM head (--lm-head or sibling lm_head)."
+                "Path to a separate fixed-size batched prefill .vmfb (legacy "
+                "exporter-provided family). A native prefill family compiled "
+                "into --model (main_4, main_16, …) is used automatically when "
+                "present; this flag forces the separate-model path. Requires a "
+                "split LM head (--lm-head or sibling lm_head)."
             ),
         )
         prefill_group.add_argument(
             "--no-batch-prefill-model", action="store_true", default=False,
             help=(
-                "Disable sibling batched prefill model auto-discovery and prefill "
+                "Disable batched prefill entirely (native main_* entries in "
+                "--model and sibling prefill model auto-discovery) and prefill "
                 "the prompt with single-token decode steps only."
             ),
         )

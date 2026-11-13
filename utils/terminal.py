@@ -3,8 +3,24 @@
 
 import os
 import select
-import termios
-import tty
+
+try:
+    import termios
+except ImportError:  # no POSIX terminal control: Ctrl+C/D watching is off
+    termios = None
+
+
+def _set_cbreak(fd: int) -> None:
+    """Put the terminal in cbreak mode: keys arrive one by one, unechoed.
+
+    Same as ``tty.setcbreak``, done with termios directly: some minimal board
+    images ship a Python without the ``tty`` module.
+    """
+    mode = termios.tcgetattr(fd)
+    mode[3] &= ~(termios.ECHO | termios.ICANON)  # lflag
+    mode[6][termios.VMIN] = 1
+    mode[6][termios.VTIME] = 0
+    termios.tcsetattr(fd, termios.TCSAFLUSH, mode)
 
 
 class InferenceStopInput:
@@ -24,11 +40,11 @@ class InferenceStopInput:
             fd = self._stream.fileno()
         except (AttributeError, OSError, ValueError):
             return self
-        if not os.isatty(fd):
+        if termios is None or not os.isatty(fd):
             return self
         try:
             self._old_attrs = termios.tcgetattr(fd)
-            tty.setcbreak(fd)
+            _set_cbreak(fd)
         except termios.error:
             self._old_attrs = None
             return self
