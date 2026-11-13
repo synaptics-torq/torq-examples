@@ -166,7 +166,8 @@ def load_prepare_metadata(profile_dir: Path) -> dict[str, str]:
     return {
         key: str(value)
         for key, value in parsed.items()
-        if key in {"torq_examples_commit", "dut_sdk_version"} and value
+        if key in {"torq_examples_commit", "dut_sdk_version",
+                   "torq_compiler_version", "torq_compiler_role"} and value
     }
 
 
@@ -189,6 +190,126 @@ def load_profile_json(profile_dir: Path) -> list[dict[str, Any]]:
         if isinstance(parsed, list):
             records.extend(record for record in parsed if isinstance(record, dict))
     return records
+
+
+def load_infer_json(profile_dir: Path) -> list[dict[str, Any]]:
+    """Load structured per-model-file inference records ({demo}_infer.json).
+
+    These are authoritative for inference status in the new flow. For debt
+    demos the record is a single repo-level "skipped" marker (vmfb=""); for
+    ASR the whole model dir is one command (vmfb=""); for the rest each vmfb
+    has its own record.
+    """
+    if not profile_dir.exists():
+        return []
+
+    records: list[dict[str, Any]] = []
+    for infer_path in sorted(profile_dir.glob("*_infer.json")):
+        try:
+            parsed = json.loads(infer_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, list):
+            records.extend(record for record in parsed if isinstance(record, dict))
+    return records
+
+
+def _split_case(case_name: str) -> tuple[str, str, str]:
+    """Split demo:repo:vmfb (vmfb may be empty -> demo:repo)."""
+    parts = str(case_name or "").split(":")
+    if len(parts) == 3:
+        return parts[0], parts[1], parts[2]
+    if len(parts) == 2:
+        return parts[0], parts[1], ""
+    if len(parts) == 1 and parts[0]:
+        return parts[0], "", ""
+    return "", "", ""
+
+
+def _build_infer_index(
+    infer_records: list[dict[str, Any]],
+) -> tuple[dict[tuple[str, str, str], str], dict[tuple[str, str], list[tuple[str, str]]]]:
+    """Index inference records by (demo, repo, vmfb) and by (demo, repo)."""
+    by_drv: dict[tuple[str, str, str], str] = {}
+    by_dr: dict[tuple[str, str], list[tuple[str, str]]] = {}
+    for record in infer_records:
+        case_name = str(record.get("case_name") or "")
+        demo, repo, vmfb = _split_case(case_name)
+        if not demo:
+            demo = str(record.get("demo_name") or "")
+        if not repo:
+            repo = str(record.get("repo") or "")
+        if "vmfb" in record:
+            vmfb = str(record.get("vmfb") or "")
+        if not demo or not repo:
+            continue
+        status = str(record.get("status") or "pass")
+        by_drv[(demo, repo, vmfb)] = status
+        by_dr.setdefault((demo, repo), []).append((vmfb, status))
+    return by_drv, by_dr
+
+
+def _infer_status_for(
+    record: dict[str, Any],
+    by_drv: dict[tuple[str, str, str], str],
+    by_dr: dict[tuple[str, str], list[tuple[str, str]]],
+) -> str:
+    """Map a profile record (demo:repo:vmfb) to its inference status.
+
+    Resolution order:
+      1. exact (demo, repo, vmfb) inference record;
+      2. a candidate in the same repo whose vmfb matches;
+      3. a single whole-dir (vmfb="") candidate in the same repo (ASR / debt);
+      4. otherwise "not_run" (e.g. a helper module never inferred standalone).
+    """
+    case_name = str(record.get("case_name") or record.get("demo_name") or "")
+    demo, repo, vmfb = _split_case(case_name)
+    if not demo:
+        return "not_run"
+    status = by_drv.get((demo, repo, vmfb))
+    if status:
+        return status
+    candidates = by_dr.get((demo, repo), [])
+    for cand_vmfb, cand_status in candidates:
+        if cand_vmfb == vmfb:
+            return cand_status
+    if len(candidates) == 1 and candidates[0][0] == "":
+        return candidates[0][1]
+    return "not_run"
+
+
+def _profile_status(record: dict[str, Any]) -> str:
+    """Profile status for one model file; older records have no explicit
+    status, in which case the presence of parsed metrics implies pass."""
+    status = record.get("status")
+    if status:
+        return str(status)
+    metrics = record.get("metrics")
+    return "pass" if isinstance(metrics, dict) and metrics else "fail"
+
+
+_STATUS_LABELS = {
+    "pass": "PASS",
+    "fail": "FAIL",
+    "skipped": "SKIPPED",
+    "missing-metrics": "NO-METRICS",
+    "not_run": "NOT RUN",
+}
+_STATUS_COLORS = {
+    "pass": "#28a745",
+    "fail": "#d73a49",
+    "skipped": "#6c757d",
+    "missing-metrics": "#d73a49",
+    "not_run": "#6c757d",
+}
+
+
+def _status_label(status: str) -> str:
+    return _STATUS_LABELS.get(status, status.upper())
+
+
+def _status_color(status: str) -> str:
+    return _STATUS_COLORS.get(status, "#6c757d")
 
 
 _RUN_METRIC_PATTERNS = (
@@ -277,6 +398,50 @@ def load_run_metrics(profile_dir: Path) -> dict[str, dict[str, str]]:
         if rtfs:
             metrics["RTF"] = f"{_avg(rtfs):.2f}"
         out[case_id] = metrics
+
+    # New flow: per-model-dir infer logs written by dut_deploy.phase_infer
+    # (dut_deploy_infer-<demo>__<repo>.log); keyed by {demo}_{repo} to match
+    # the test_dut_infer[<case_id>] case ids. Legacy per-demo logs
+    # (dut_deploy_infer-<demo>.log) still key by demo name only.
+    for log_path in sorted(profile_dir.glob("dut_deploy_infer-*.log")):
+        stem = log_path.name[len("dut_deploy_infer-") : -len(".log")]
+        if "__" in stem:
+            demo_part, repo_part = stem.split("__", 1)
+            key = f"{demo_part}_{repo_part}"
+        else:
+            key = stem
+        if key in out:
+            continue
+        try:
+            text = log_path.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        ttfts: list[float] = []
+        speeds: list[float] = []
+        rtfs: list[float] = []
+        for line in text.splitlines():
+            m = _RUN_METRIC_PATTERNS[0].search(line)
+            if m:
+                ttfts.append(float(m.group(2)))
+                speeds.append(float(m.group(3)))
+                if m.group(4):
+                    rtfs.append(float(m.group(4)))
+                continue
+            m = _RUN_METRIC_PATTERNS[1].search(line)
+            if m:
+                ttfts.append(float(m.group(1)))
+                speeds.append(float(m.group(4)))
+        if not ttfts:
+            continue
+        n = len(ttfts)
+        suffix = f" (avg of {n})" if n > 1 else ""
+        entry = {
+            "TTFT": f"{_avg(ttfts):.0f} ms{suffix}",
+            "tok/s": f"{_avg(speeds):.1f}{suffix}",
+        }
+        if rtfs:
+            entry["RTF"] = f"{_avg(rtfs):.2f}"
+        out[key] = entry
     return out
 
 
@@ -317,6 +482,14 @@ def merge_profile_records(*record_groups: list[dict[str, Any]]) -> list[dict[str
     return merged
 
 
+def _compiler_header_text(metadata: dict[str, str]) -> str:
+    """The compiler never builds models in the current flow (models are
+    pre-compiled at release time), so the row states that unconditionally.
+    The installed compiler version (if any) is still recorded in the JSON
+    report for machine consumption."""
+    return "n/a in this run - models are pre-compiled (see VERSION / revision columns)"
+
+
 def build_html(
     tests: list[tuple[str, str, float]],
     profile_records: list[dict[str, Any]],
@@ -326,8 +499,13 @@ def build_html(
     runtime_version: str,
     metric_gaps: list[str],
     out_path: Path,
+    infer_index: tuple[
+        dict[tuple[str, str, str], str],
+        dict[tuple[str, str], list[tuple[str, str]]],
+    ] | None = None,
 ) -> None:
-    """Write the single-page report: run info + test results (7 cols) + profile table."""
+    """Write the single-page report: run info + test results + per-model-file
+    inference/profiling table."""
     th_style = "border:1px solid #ccc;padding:8px 10px;text-align:left;background:#f2f2f2"
     td_style = "border:1px solid #ccc;padding:8px 10px;text-align:left"
     table_style = 'border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;margin-bottom:24px"'
@@ -349,7 +527,7 @@ def build_html(
         ),
         (
             "Compiler",
-            "n/a in this run - models are pre-compiled (see VERSION / revision columns)",
+            _compiler_header_text(metadata),
         ),
     )
     info_rows = "".join(
@@ -371,12 +549,20 @@ def build_html(
             "FAIL": "#d73a49",
             "SKIP": "#6c757d",
         }[status]
-        version_record = model_versions.get(_case_id(test_name), {})
+        case_id = _case_id(test_name)
+        version_record = model_versions.get(case_id, {})
+        if not version_record and "[" in test_name:
+            # per-demo case ids (test_dut_infer[gemma3]) have no repo segment;
+            # fall back to the demo's first model repo record.
+            for key, record in model_versions.items():
+                if key.startswith(case_id + "_"):
+                    version_record = record
+                    break
         version = version_record.get("version", "")
         revision = version_record.get("revision", "")
         run_record = (
             run_metrics.get(_case_id(test_name), {})
-            if test_name.startswith("test_run_demo[")
+            if test_name.startswith(("test_run_demo[", "test_dut_infer["))
             else {}
         )
         if run_record.get("note"):
@@ -415,7 +601,11 @@ def build_html(
         )
     )
 
+    by_drv, by_dr = infer_index if infer_index else ({}, {})
+
     profile_rows: list[str] = []
+    infer_counts: dict[str, int] = {}
+    profile_counts: dict[str, int] = {}
     for record in profile_records:
         metrics = record.get("metrics")
         if not isinstance(metrics, dict):
@@ -425,8 +615,18 @@ def build_html(
             or record.get("demo_name")
             or record.get("model_path")
             or ""
-        )
-        cells = [f'<td style="{td_style}">{html.escape(demo_label)}</td>']
+        ).replace(":", ".")
+        infer_status = _infer_status_for(record, by_drv, by_dr)
+        prof_status = _profile_status(record)
+        infer_counts[infer_status] = infer_counts.get(infer_status, 0) + 1
+        profile_counts[prof_status] = profile_counts.get(prof_status, 0) + 1
+        cells = [
+            f'<td style="{td_style}">{html.escape(demo_label)}</td>',
+            f'<td style="{td_style};color:{_status_color(infer_status)};'
+            f'font-weight:bold">{html.escape(_status_label(infer_status))}</td>',
+            f'<td style="{td_style};color:{_status_color(prof_status)};'
+            f'font-weight:bold">{html.escape(_status_label(prof_status))}</td>',
+        ]
         for metric in PROFILE_METRICS:
             cells.append(
                 f'<td style="{td_style}">{html.escape(str(metrics.get(metric, "")))}</td>'
@@ -434,22 +634,38 @@ def build_html(
         profile_rows.append(f"<tr>{''.join(cells)}</tr>")
     if not profile_rows:
         profile_rows.append(
-            f'<tr><td style="{td_style}" colspan="8">No profile data found</td></tr>'
+            f'<tr><td style="{td_style}" colspan="9">No profile data found</td></tr>'
         )
     profile_headers = "".join(
         f'<th style="{th_style}">{html.escape(header)}</th>'
-        for header in ("demo", *PROFILE_METRICS)
+        for header in ("demo:repo:file", "Infer", "Profile", *PROFILE_METRICS)
+    )
+    total_models = len(profile_rows)
+    infer_pass = infer_counts.get("pass", 0)
+    profile_pass = profile_counts.get("pass", 0)
+    model_note = (
+        f'<p style="margin:0 0 8px 0">Per model file ({total_models} total). '
+        f"Infer: {infer_pass} pass / "
+        f"{infer_counts.get('fail', 0)} fail / "
+        f"{infer_counts.get('not_run', 0)} not-run / "
+        f"{infer_counts.get('skipped', 0)} skipped. "
+        f"Profile: {profile_pass} pass / "
+        f"{profile_counts.get('fail', 0)} fail."
+        f" NOT RUN = no standalone inference for that model file (e.g. a helper "
+        f"module such as <code>lm_head.vmfb.trim</code>). SKIPPED = known-debt "
+        f"demo with no command builder yet.</p>"
     )
 
     html_text = (
         "<!DOCTYPE html>\n"
-        "<html><head><meta charset='utf-8'><title>Test + Profile Summary</title></head>"
+        "<html><head><meta charset='utf-8'><title>Test + Profiling Summary</title></head>"
         '<body style="font-family:Arial,sans-serif;margin:24px">'
-        "<h2>Test + Profile Summary</h2>"
+        "<h2>Test + Profiling Summary</h2>"
         f'<table {table_style}><tbody>{info_rows}</tbody></table>'
         "<h3>Test Demo Results</h3>"
         f'<table {table_style}><tbody><tr>{test_header}</tr>{"".join(test_rows)}</tbody></table>'
-        "<h3>Profile Summary</h3>"
+        "<h3>Inference + Profiling (per model file)</h3>"
+        f"{model_note}"
         f'<table {table_style}><tbody><tr>{profile_headers}</tr>{"".join(profile_rows)}</tbody></table>'
         "</body></html>\n"
     )
@@ -464,6 +680,8 @@ def generate_summary(junit_path: Path, profile_dir: Path, out_path: Path) -> Non
     )
     file_profile_records = load_profile_json(profile_dir)
     profile_records = merge_profile_records(junit_profile_records, file_profile_records)
+    infer_records = load_infer_json(profile_dir)
+    infer_index = _build_infer_index(infer_records)
     file_metadata = load_prepare_metadata(profile_dir)
     metadata = {**file_metadata, **junit_metadata}
     file_model_versions = load_model_versions(profile_dir)
@@ -473,7 +691,7 @@ def generate_summary(junit_path: Path, profile_dir: Path, out_path: Path) -> Non
     metric_gaps = load_run_metric_gaps(profile_dir)
     build_html(
         tests, profile_records, metadata, model_versions, run_metrics,
-        runtime_version, metric_gaps, out_path,
+        runtime_version, metric_gaps, out_path, infer_index,
     )
 
 

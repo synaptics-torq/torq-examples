@@ -1,85 +1,83 @@
 # TorqExamplesTest
 
-This package is the host-side execution layer for the TorqExamples demo validation flow.
+Host-driven test suite for the torq-examples demo validation flow.
 
-It will push torq-examples and related test materials to DUT-side. Auto tests are run on DUT side. All logs files, pytest result XML and test result HTML will save on host-side
+## Architecture (reconstruction, branch `newHostMethod`)
 
-The goal is to drive the actual demo execution on a DUT through the existing board/runner abstraction.
+Two stages, all orchestrated from the CI host:
 
-The repository-local pytest plugin is loaded automatically from `conftest.py`.
-The executor prepends `TorqExamplesTest` to `sys.path`, so the bundled
-`TorqExamplesTest/torq` host board utilities are imported as the
-top-level `torq` namespace instead of an unrelated package with the same name
-from site-packages. Both supported layouts are detected automatically:
-`TorqExamplesTest` beside `torq-examples`, or copied inside the
-torq-examples repository.
+1. **Host-side model preparation** (`host_converter.py`) — runs
+   `setup_demos.py` for every demo inside a Docker container
+   (`conversion/Dockerfile`, ubuntu 24.04 base, required because the
+   compiler wheel is `manylinux_2_39` and the CI host may be older).
+   Model artifacts land in `<examples checkout>/models/`.
+2. **DUT deploy + inference + profiling** (`dut_deploy.py`) — wipes and
+   rebuilds the DUT workspace (no stale-file pollution), pushes the models,
+   swaps the NPU kernel module, force-installs the aarch64 runtime wheel,
+   then runs the per-demo inference matrix and the per-demo profiling
+   matrix (repo-root `profile.py --repeat 3`, seven metrics).
 
-## Scope
+The compiler/runtime/ko under test come from a test-build run's artifacts
+(passed via `TORQ_HOST_COMPILER_WHEEL`, `TORQ_DUT_RUNTIME_WHEEL`,
+`TORQ_DUT_KO`) so the tested stack is version-pinned per run.
 
-- resolve the latest demo names from `torq-examples/setup_demos.py`
-- map each demo to its Python inference entrypoint
-- acquire one DUT through Torq board control, retain its lock for the complete pytest session, and reuse it for every stage
-- run each demo through the host-side board/runner execution path
-- profile every generated model on the DUT over ADB and collect CPU, DRAM, NPU, latency, and memory metrics
-- dynamically parse `setup_demos.py` and each demo's `setup_demo.py` to discover selected model aliases and Hugging Face repo IDs, derive DUT model directories, and save them to `logs/setup_model_paths.json`
-- run `setup_demos.py` without `--model-version`, allowing torq-examples to use its release `VERSION` for built-in repositories and the latest HEAD revision for custom repositories
-- after setup, read each model directory's `.manifest.json`, print its Repo ID, version, and revision, and save the results to `logs/setup_model_versions.json` and the JUnit `model_versions` property; custom repositories without a pinned version are reported as `HEAD (untracked)`
-- during prepare, read the actual pushed torq-examples Git commit from the DUT
-	and `SYNA_SDK_REVISION` from DUT `/etc/buildinfo`, then save both as JUnit
-	properties and `logs/prepare_metadata.json` for combined HTML generation
-- parameterize conversion, inference, and profiling as one pytest case per dynamically discovered model repository
-- save conversion, inference, profiling, and failure artifacts separately for every model case using a `demo_repo-id` filename prefix, preventing models from overwriting one another's logs or profiling JSON
-- collect pass/fail results on a per-demo basis
-- avoid adding shell-only assumptions into the execution contract
+## Test entries
 
-## Execution model
+- `test_host_conversion.py` — container environment + per-demo host setup
+- `test_dut_deploy.py` — `test_dut_deploy` (deploy, one case) +
+  `test_dut_infer[demo]` + `test_dut_profile[demo]` (12 demos each;
+  demos without an inference command builder are skipped with a reason,
+  profiling applies to all)
 
-- `demo_registry.py`: resolves the latest demo inventory and entrypoints
-- `demo_executor.py`: performs the real host-side demo execution flow
-- `test_demo_execution.py`: exercises the per-model run and result collection
-- `conftest.py`: repository-local pytest plugin that cleans artifacts, tees the
-	console log, writes reports, and preserves report-generation failure semantics
-- `generate_test_summary.py`: merges JUnit results with structured profiling records
+## Infrastructure
+
+- `demo_registry.py`: AST discovery of demos/models from `setup_demos.py`
+  (never executed; also the authoritative source for app dirs and model
+  repo IDs — `dut_deploy.py` prefers it over its built-in spec table)
+- `conftest.py`: repository-local pytest plugin (artifact cleanup, console
+  tee, JUnit + combined HTML generation, failure semantics)
+- `generate_test_summary.py`: merges JUnit results with structured
+  profiling records into one HTML report
 
 ## Run and report generation
 
-Run the complete suite from the workspace root:
+Run the complete suite from the workspace root (conftest enforces
+host-before-DUT ordering regardless of collection order):
 
-	python -m pytest TorqExamplesTest
+	python3.12 -m pytest TorqExamplesTest
 
-The `pytest.ini` configuration enables stdout streaming and JUnit output for a
-bare pytest invocation. Before tests start, the plugin removes artifacts left
-by the previous run:
-the configured JUnit XML and combined HTML, plus all `.log`, `.json`, `.xml`,
-and `.html` files under `torq-examples/logs`. This prevents stale test or
-profiling data from being included in the new report.
+Standalone debugging without pytest (engine drivers, no DUT needed for
+host stage, no suite layout needed):
 
-The plugin preserves pytest's exit code after report generation. If pytest
-succeeds but combined-report generation fails, the session is changed to a
-failure. Every invocation produces:
+	python3 TorqExamplesTest/host_converter.py <examples_root> [demo ...]
+	TORQ_DUT_RUNTIME_WHEEL=... TORQ_DUT_KO=... \
+	  python3 TorqExamplesTest/dut_deploy.py <examples_root> [demo ...]
+
+Every invocation produces:
 
 - `TEST-TorqExamplesTest.xml`: final pytest JUnit report
-- `test_and_profile_summary.html`: combined test and profiling report
-- `torq-examples/logs/main.log`: complete suite console output, including
-	runner messages plus merged pytest stdout and stderr; output remains visible
-	in the Jenkins console in real time
-
-The output locations can be overridden with `--torq-profile-dir` and
-`--torq-summary-html`. The JUnit location can be overridden with pytest's
-standard `--junitxml` option.
-
-The HTML contains the Torq Examples commit, DUT SDK version,
-per-case PASS/FAIL/SKIP results, each model's VERSION and resolved Hugging Face
-commit revision, and the seven profiling metrics. Model version data is read
-from the JUnit `model_versions` properties with
-`torq-examples/logs/setup_model_versions.json` as a fallback. Profiling data
-is read first from the JUnit `profile_metrics` properties and then supplemented
-from `torq-examples/logs/*_profile.json` when necessary.
+- `test_and_profile_summary.html`: combined test + profiling report
+  (run info, per-case results with model VERSION / HF revision, TTFT /
+  tok/s for LLM demos, seven profiling metrics)
+- `torq-examples/logs/`: per-phase logs and `*_profile.json` records
 
 To regenerate only the HTML from existing artifacts:
 
 	python TorqExamplesTest/generate_test_summary.py --junit TEST-TorqExamplesTest.xml --profile-dir torq-examples/logs --out test_and_profile_summary.html
 
+## Model modes
+
+- `TORQ_MODEL_MODE=release` (default): demos consume pre-compiled models
+  published on HuggingFace (version-anchored per release, e.g. v2.3.0).
+  No compiler is required on the host; only the DUT runtime wheel and
+  kernel module must match the release under test.
+- `TORQ_MODEL_MODE=dev`: build models from source with the PR compiler so
+  a not-yet-released compiler can be validated against examples. Not
+  implemented yet - the suite fails explicitly until it lands.
+
 ## Important boundary
 
-This layer is intentionally not a validation suite for the refactor helper implementation itself. The object under test is the real demo execution flow on the DUT, not the Python utility code used to orchestrate it.
+This layer is intentionally not a validation suite for the helper
+implementation itself. The object under test is the real demo stack
+(compiler × runtime × ko × models × examples code) on the DUT, not the
+Python orchestration used to drive it.

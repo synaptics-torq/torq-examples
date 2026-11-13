@@ -15,6 +15,7 @@ if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
 from TorqExamplesTest.generate_test_summary import generate_summary
+from TorqExamplesTest.report_export import generate_json_report
 
 
 EXAMPLES_REPO_ROOT = (
@@ -204,6 +205,41 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         )
         if exitstatus == pytest.ExitCode.OK:
             session.exitstatus = pytest.ExitCode.TESTS_FAILED
+
+    try:
+        # Machine-readable export (marketing / devzone ingestion). An export
+        # failure warns but does not fail the run.
+        generate_json_report(
+            state.junit_path,
+            state.profile_dir,
+            state.summary_path.parent / "torq_examples_report.json",
+        )
+    except Exception as exc:
+        print(f"Failed to generate JSON report: {exc}", file=sys.stderr)
+
+
+_STAGE_ORDER = {
+    "test_host_setup_environment": 0,
+    "test_demo_setup_on_host": 1,
+    "test_dut_deploy": 2,
+    "test_dut_infer": 3,
+    "test_dut_profile": 4,
+}
+
+
+def pytest_collection_modifyitems(config, items):
+    """Force pipeline ordering regardless of invocation style.
+
+    Passing the suite directory collects files alphabetically
+    (test_dut_deploy.py before test_host_conversion.py), which would
+    deploy to the DUT before the host-side model preparation exists.
+    Host preparation must always precede DUT deploy/infer/profile.
+    """
+    def sort_key(item):
+        base = item.name.split("[", 1)[0]
+        return (_STAGE_ORDER.get(base, 99), item.name)
+
+    items.sort(key=sort_key)
 
 
 @pytest.hookimpl(trylast=True)
