@@ -84,6 +84,14 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
     group.add_argument("--json", action="store_true", help="Print the summary as structured JSON instead of human text")
 
 
+def _add_burn_options(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group("burn image")
+    group.add_argument("--build-version", help="Firmware build version")
+    group.add_argument("--profile", help="Build profile")
+    group.add_argument("--image-url", help="Full URL to firmware image")
+    group.add_argument("--force-flash", action="store_true", help="Force flash regardless")
+
+
 def _cli_overrides(args) -> dict:
     """PipelineConfig keys the user *explicitly* set on the command line.
 
@@ -277,5 +285,15 @@ Delegated command groups (see `{PROG} <group> --help`):
     inspect_sub.add_argument("--function", metavar="NAME", help="Override the resolved entry function name")
     _add_output_options(inspect_sub)
     inspect_sub.set_defaults(handler=commands._cmd_inspect)
+
+    # burn command
+    burn_sub = subparsers.add_parser(
+        "burn",
+        help="Flash SYNA boards using U-Boot TFTP flow",
+        description="Flash firmware images to configured SYNA development boards.",
+        allow_abbrev=False,
+    )
+    _add_burn_options(burn_sub)
+    burn_sub.set_defaults(handler=commands._cmd_burn)
 
     return parser

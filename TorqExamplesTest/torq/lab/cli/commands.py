@@ -286,6 +286,40 @@ def _cmd_inspect(args) -> int:
     return _OK
 
 
+def _cmd_burn(args) -> int:
+    from torq.lab.burn.tool import BurnTool
+
+    logger.info("Starting board flashing workflow")
+
+    # If image_url is provided, build_version and profile are optional
+    image_url = _opt(args, "image_url")
+    build_version = _opt(args, "build_version") if not image_url else None
+    profile = _opt(args, "profile") if not image_url else None
+
+    tool = BurnTool(
+        config=None,  # Only from environment variable CONFIG_PATH
+        build_version=build_version,
+        profile=profile,
+        image_url=image_url,
+        board=None,  # Only from environment variable BOARD
+        section=None,  # Only from environment variable SECTION
+        force_flash=_opt(args, "force_flash", False),
+        output_dir=None,  # Only from environment variable OUTPUT_DIR
+        tftp_root=None,  # Only from environment variable TFTP_ROOT
+    )
+
+    try:
+        exit_code = tool.run()
+        if exit_code == 0:
+            logger.info("Board flashing completed successfully")
+        else:
+            logger.error(f"Board flashing failed with exit code {exit_code}")
+        return exit_code
+    except Exception as exc:
+        logger.error(f"Unexpected error during board flashing: {exc}")
+        return _ERROR
+
+
 def main(argv=None) -> int:
     # Intercept delegated commands (gen_config, quantize, analyze, convert_dtype, convert_static)
     # before building the parser to avoid importing onnxruntime/tensorflow at parse time.
