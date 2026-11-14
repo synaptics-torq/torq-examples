@@ -119,6 +119,23 @@ Run `python src/infer.py -h` to see all available inference options.
 python profile.py models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb -r 5
 ```
 
+### Power profiling - Astra Machina Kit only
+
+On boards with a hwmon power monitor, add `--power` to also measure power and energy per inference:
+
+```sh
+python profile.py models/Synaptics/gemma-3-270-GPTQ-int4-it-torq/transformer.vmfb -r 5 --power
+```
+
+With `--power`, `profile.py`:
+
+1. Measures idle (baseline) power for `--power-baseline-seconds` (default 5 s) before the model is loaded. Keep the system idle during this time.
+2. Runs the normal profile and prints its usual results.
+3. Runs a second pass in which power is recorded only during the timed inferences, excluding model loading and warm-up. The pass runs at least `-r` iterations and for at least `--power-min-seconds` (default 2 s), so fast models still produce enough power samples. A warning is printed if too few samples were taken.
+4. Prints the average, baseline and net power (average minus baseline), and the energy per inference in mJ (net power × inference time), with a per-channel breakdown.
+
+If the power monitor is not found (`--hwmon-path` to override its location), a message is printed and profiling continues without power measurements. `--power-csv FILE` saves the raw samples. See `utils/pwr_meas.py` for the `PowerMonitor`/`PowerSampler` API used.
+
 ## Validation
 
 Some demos include built-in validation scripts. For example, Gemma 3 can be validated on a text translation dataset:
