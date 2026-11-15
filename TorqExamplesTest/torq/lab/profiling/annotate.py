@@ -114,12 +114,15 @@ def _write_perfetto_trace(debug_info: BaseDispatchDebugInfo, perfetto_file: str)
     Writes the annotated profiling data to a Perfetto trace file.
     """
 
-    trace_writer = perfetto.PerfettoTraceWriter(perfetto_file)
+    trace_writer = perfetto.PerfettoTraceWriter(
+        perfetto_file,
+        timestamp_origin_ns=debug_info.start_time_ns or 0,
+    )
     perfetto.log_runtime_profile_data(trace_writer, debug_info)
 
     # Compute Metrics and Render Overview
     metrics_result = perfetto.compute_runtime_metrics(debug_info)
-    perfetto.render_overview_tracks("Host Profile", metrics_result['overall_start'], metrics_result['metrics'], trace_writer)
+    perfetto.render_overview_tracks("Host Profile", metrics_result, trace_writer)
 
     trace_writer.close()
     logger.debug(f"Perfetto trace complete: {perfetto_file}")
@@ -170,21 +173,64 @@ def _write_dispatch_outputs(dispatch_debug_info, output_files):
     return measurements
 
 
-def annotate_host_profile_from_files(debug_info, profile_file, output_files):
+class DebugInfoCache:
+    """
+    Keeps the debug info of a model loaded across calls of annotate_host_profile_from_files, for
+    several profiles of the same model (e.g. repeated runs), so it is loaded only once.
+
+    The cached dispatches are reused by the next call: use the results of a call before the next
+    one with the same cache.
+    """
+
+    def __init__(self):
+        # one DebugInfo per invocation index of a dispatch within a profile, so that two
+        # invocations of the same dispatch in a profile keep independent timing data
+        self._debug_infos = {}
+        self._estimates_frequency = {}
+
+    def get_dispatch(self, debug_info_path, dispatch_name, invocation_index, frequency_mhz):
+        debug_infos = self._debug_infos.setdefault(str(debug_info_path), [])
+        while len(debug_infos) <= invocation_index:
+            debug_infos.append(DebugInfo(debug_info_path))
+        dispatch = debug_infos[invocation_index].get_dispatch(dispatch_name)
+
+        # drop the runtime times of the previous profile
+        dispatch.operation_times_ns = {}
+        if self._estimates_frequency.get(id(dispatch)) != frequency_mhz:
+            dispatch.compile_operation_times_ns = {}
+            dispatch.load_compile_time_estimates(frequency_mhz)
+            self._estimates_frequency[id(dispatch)] = frequency_mhz
+        return dispatch
+
+
+def annotate_host_profile_from_files(debug_info, profile_file, output_files, target_frequency_mhz, measured_frequency_mhz,
+                                     cache: DebugInfoCache | None = None):
     """
     Given a debug-info directory generated with --torq-debug-info and a profiling log produced by the runtime with --torq_profile_host,
     generates annotated profiling data that matches the actions in the profiling log with the corresponding operations in the model,
     and outputs this data to the specified output files (Excel, CSV or Perfetto trace).
+
+    Returns the profile's metrics. With no output file, only the metrics are computed. With a cache, the
+    debug info is loaded once for several profiles of the same model (see DebugInfoCache).
     """
 
     _require_profile_deps()
 
     logger.debug(f"Annotating host profile from {profile_file}")
 
-    invocation_data = parse_profiling_log(profile_file)
+    scale = None
+
+    # Rescale events if the trace was recorded with a frequency different from the target frequency.
+    # This makes sure the trace has timestamps that match what would have been recorded at the target frequency.
+    # Note: this rescales both npu and host operations
+    if measured_frequency_mhz is not None and measured_frequency_mhz != target_frequency_mhz:
+        scale = measured_frequency_mhz / target_frequency_mhz
+
+    invocation_data = parse_profiling_log(profile_file, scale)
     combined_dispatch_debug_info = CombinedDispatchDebugInfo()
     hal_dispatch_debug_info = HalDispatchDebugInfo()
     has_hal_events = False
+    invocation_counts = {}
 
     for invocation in invocation_data:
         if invocation.dispatch_name.startswith("__HAL"):
@@ -192,10 +238,17 @@ def annotate_host_profile_from_files(debug_info, profile_file, output_files):
             hal_dispatch_debug_info.append_runtime_events(invocation.event_data, invocation.dispatch_name)
             continue
 
-        # Use a fresh DebugInfo so each invocation keeps independent timing data.
-        dispatch_debug_info = DebugInfo(debug_info).get_dispatch(invocation.dispatch_name)
-        dispatch_debug_info.load_compile_time_estimates()
+        if cache is None:
+            # Use a fresh DebugInfo so each invocation keeps independent timing data.
+            dispatch_debug_info = DebugInfo(debug_info).get_dispatch(invocation.dispatch_name)
+            dispatch_debug_info.load_compile_time_estimates(target_frequency_mhz)
+        else:
+            invocation_index = invocation_counts.get(invocation.dispatch_name, 0)
+            invocation_counts[invocation.dispatch_name] = invocation_index + 1
+            dispatch_debug_info = cache.get_dispatch(debug_info, invocation.dispatch_name, invocation_index,
+                                                     target_frequency_mhz)
         dispatch_debug_info.load_runtime_events(invocation.event_data)
+
         combined_dispatch_debug_info.add_dispatch(dispatch_debug_info)
 
     if has_hal_events:
@@ -203,6 +256,9 @@ def annotate_host_profile_from_files(debug_info, profile_file, output_files):
 
 
     measurements = _write_dispatch_outputs(combined_dispatch_debug_info, output_files)
+    if not any(str(f).endswith(".pb") for f in output_files):
+        # the metrics are computed with the Perfetto trace; without one, compute them alone
+        measurements.append(perfetto.get_measurements(perfetto.compute_runtime_metrics(combined_dispatch_debug_info)))
 
     if len(measurements) == 1:
         return measurements[0]
@@ -220,7 +276,10 @@ def annotate_host_profile_from_files(debug_info, profile_file, output_files):
 # ---------------------------------------------------------------------------
 
 
-def annotate_run_profile(debug_dir, host_profile_csv, out_dir) -> dict:
+def annotate_run_profile(
+    debug_dir, host_profile_csv, out_dir,
+    measured_frequency_mhz=None, target_frequency_mhz=None
+) -> dict:
     """Annotate a runtime host profile against compile-time debug info.
 
     Writes ``annotated_profile.xlsx`` and ``trace.pb`` into ``out_dir`` and
@@ -232,12 +291,16 @@ def annotate_run_profile(debug_dir, host_profile_csv, out_dir) -> dict:
     annotated = out_dir / "annotated_profile.xlsx"
     trace = out_dir / "trace.pb"
     annotate_host_profile_from_files(
-        str(debug_dir), str(host_profile_csv), [str(annotated), str(trace)]
+        str(debug_dir),
+        str(host_profile_csv),
+        [str(annotated), str(trace)],
+        target_frequency_mhz=target_frequency_mhz,
+        measured_frequency_mhz=measured_frequency_mhz
     )
     return {"annotated": annotated, "trace": trace}
 
 
-def write_compile_trace(debug_dir, out_dir) -> list:
+def write_compile_trace(debug_dir, out_dir, frequency_mhz) -> list:
     """Generate compile-time Perfetto trace(s) into ``out_dir``.
 
     ``convert_to_perfetto`` writes one ``<dispatch>.pb`` per dispatch into a
@@ -248,7 +311,7 @@ def write_compile_trace(debug_dir, out_dir) -> list:
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     staging = out_dir / "_compile_trace"
-    perfetto.convert_to_perfetto(str(debug_dir), str(staging))
+    perfetto.convert_to_perfetto(str(debug_dir), str(staging), frequency_mhz)
     produced = []
     for pb in sorted(staging.glob("*.pb")):
         dest = out_dir / f"{pb.stem}_compile.pb"

@@ -22,6 +22,10 @@ from torq.lab.verification.reference import (  # noqa: F401
     execute_onnx_model_numpy,
     parse_instance_norm_params,
     numpy_instance_norm,
+    numpy_reduce_mean,
+    _parse_conv_params,
+    _parse_const_filter,
+    _numpy_conv,
 )
 
 
@@ -67,15 +71,38 @@ def _parse_uniform_bf16_constant(mlir_model_file):
     return value, shape
 
 
+def _parse_uniform_bf16_constant_onnx(onnx_model_file):
+    """Same, but from the ONNX model (generated MLIR externalizes big constants)."""
+    model = onnx.load(str(onnx_model_file.file_path))
+    constants = {t.name: t for t in model.graph.initializer}
+    for node in model.graph.node:
+        if node.op_type == "Constant":
+            for attr in node.attribute:
+                if attr.name == "value" and attr.type == onnx.AttributeProto.TENSOR:
+                    constants[node.output[0]] = attr.t
+    for node in model.graph.node:
+        if node.op_type != "MatMul" or node.input[1] not in constants:
+            continue
+        t = constants[node.input[1]]
+        if t.data_type != TensorProto.BFLOAT16:
+            continue
+        arr = numpy_helper.to_array(t).reshape(-1)
+        if arr.size and (arr == arr[0]).all():
+            return float(arr[0]), list(t.dims)
+    raise ValueError(f"no uniform bf16 constant in {onnx_model_file.file_path}")
+
+
 @versioned_unhashable_object_fixture
-def numpy_matmul_const_weight_reference_results(input_data, mlir_io_spec, mlir_model_file):
+def numpy_matmul_const_weight_reference_results(request, input_data, mlir_io_spec, mlir_model_file):
     """Compute a uniform-const-weight matmul reference in fp32, round once to bf16.
 
     The model has a single external input (the activation); the weight is a
-    uniform bf16 constant parsed out of the MLIR. Accumulating in fp32 and
-    rounding the output once matches what the NSS matmul kernels do, so this is
-    a genuine numpy golden for the K-split repros (whose bf16 chunk-boundary
-    rounding is what we want to compare, not an llvm-cpu bf16-accumulated one).
+    uniform bf16 constant parsed out of the MLIR (static fixtures) or the ONNX
+    model (generated fixtures, where the constant is externalized). Accumulating
+    in fp32 and rounding the output once matches what the NSS matmul kernels do,
+    so this is a genuine numpy golden for the K-split repros (whose bf16
+    chunk-boundary rounding is what we want to compare, not an llvm-cpu
+    bf16-accumulated one).
     """
     from .iree import get_dtype
 
@@ -84,9 +111,35 @@ def numpy_matmul_const_weight_reference_results(input_data, mlir_io_spec, mlir_m
     assert len(mlir_io_spec.outputs) == 1
 
     output_dtype = get_dtype(mlir_io_spec.outputs[0].fmt)
-    value, shape = _parse_uniform_bf16_constant(mlir_model_file)
+    try:
+        value, shape = _parse_uniform_bf16_constant(mlir_model_file)
+    except ValueError:
+        value, shape = _parse_uniform_bf16_constant_onnx(
+            request.getfixturevalue("onnx_model_file"))
     weight = np.full(shape, value, dtype=np.float32)
     result = np.matmul(data[0].astype(np.float32, copy=False), weight)
+    return [result.astype(output_dtype)]
+
+
+@versioned_unhashable_object_fixture
+def numpy_conv_reference_results(input_data, mlir_io_spec, mlir_model_file):
+    """Reference for linalg.conv_1d/conv_2d computed in numpy with fp32 accumulation.
+
+    Bypasses the llvm-cpu reference, which accumulates the bf16 conv in bf16
+    (order-dependent, and catastrophically wrong when the taps partially cancel),
+    while the NSS conv kernels accumulate in fp32 and round to the output dtype once.
+    """
+    from .iree import get_dtype
+
+    data = input_data.data if hasattr(input_data, "data") else input_data
+    assert len(data) in (1, 2)
+    assert len(mlir_io_spec.outputs) == 1
+    output_dtype = get_dtype(mlir_io_spec.outputs[0].fmt)
+    strides, dilations = _parse_conv_params(mlir_model_file)
+    if len(data) == 2:
+        result = _numpy_conv(data[0], data[1], strides, dilations)
+    else:
+        result = _numpy_conv(data[0], _parse_const_filter(mlir_model_file), strides, dilations)
     return [result.astype(output_dtype)]
 
 
@@ -118,6 +171,41 @@ def numpy_instancenorm_reference_results(input_data, mlir_io_spec, mlir_model_fi
     output_dtype = get_dtype(mlir_io_spec.outputs[0].fmt)
     scale, bias, eps = parse_instance_norm_params(mlir_model_file)
     return [numpy_instance_norm(data[0], scale, bias, eps, output_dtype)]
+
+
+@versioned_unhashable_object_fixture
+def numpy_reducemean_reference_results(input_data, mlir_io_spec, mlir_model_file):
+    """ReduceMean reference computed in numpy with fp32 accumulation.
+
+    Bypasses the llvm-cpu reference, whose bf16-accumulated mean is wildly
+    inaccurate for large spatial reductions (and order-dependent), and for
+    small reductions whose large-amplitude inputs cancel. The TORQ NPU
+    accumulates in fp32, so the numpy reference matches it.
+    """
+    from .iree import get_dtype
+
+    data = input_data.data if hasattr(input_data, 'data') else input_data
+    assert len(data) == 1
+    assert len(mlir_io_spec.outputs) == 1
+    output_dtype = get_dtype(mlir_io_spec.outputs[0].fmt)
+
+    in_shape = np.shape(data[0])
+    out_shape = tuple(mlir_io_spec.outputs[0].shape)
+    if len(out_shape) == len(in_shape) - 1:
+        # keepdims=0: the reduced axis is dropped from the output shape.
+        keepdims = False
+        candidates = [
+            i for i in range(len(in_shape)) if in_shape[:i] + in_shape[i + 1:] == out_shape
+        ]
+    else:
+        # keepdims=1: the reduced axis becomes 1 in the output shape.
+        keepdims = True
+        candidates = [
+            i for i in range(len(in_shape)) if out_shape[i] == 1 and in_shape[i] != 1
+        ]
+    assert len(candidates) == 1, f"cannot infer reduced axis from {in_shape} -> {out_shape}"
+
+    return [numpy_reduce_mean(data[0], candidates[0], keepdims, output_dtype)]
 
 
 @versioned_unhashable_object_fixture
@@ -189,7 +277,7 @@ def bf16_onnx_fp32_reference_results(mlir_model_file, input_data):
     """Reference for a bf16 torch_ops model whose ops the llvm-cpu/torch references
     cannot run (e.g. a full backbone whose bf16 MaxPool trips 'util.initializer'
     legalization on llvm-cpu). Requires a sibling <name>.onnx next to the .mlir: cast
-    it to fp32, run onnxruntime, round back to bf16. Wired in tests/test_torch_ops.py."""
+    it to fp32, run onnxruntime, round back to bf16. Wired in tests/ops/test_torch_ops.py."""
     onnx_path = Path(str(mlir_model_file)).with_suffix(".onnx")
     model = onnx.load(str(onnx_path))
     return _run_ort_fp32(model, input_data)

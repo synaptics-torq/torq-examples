@@ -26,6 +26,7 @@ from .versioned_fixtures import (
     versioned_unhashable_object_fixture,
     versioned_generated_file_fixture,
     VersionedUncachedData,
+    collection_data,
 )
 
 if torch:
@@ -42,7 +43,7 @@ if torch:
 
 # Bump when the cached case shape changes; v2 qualifies case names with the
 # model file stem.
-_TORCH_LAYER_CACHE_VERSION = 2
+_TORCH_LAYER_CACHE_VERSION = 3  # 3: traced cases record the module definition
 
 # Registry for lazy model loaders (used by tests that avoid keeping the model
 # object in every pytest-xdist worker during collection, e.g. torchvision zoo
@@ -816,6 +817,9 @@ class TorchLayerCase(Case):
     """A test case for a layer extracted from a Torch model."""
     layer_name: str
     is_full_model: bool
+    # repr() of the module (its type and constructor arguments, and those of its children),
+    # set for traced cases; see traced_layer_key
+    definition: str = ""
 
 
 def _disable_inplace_ops(model):
@@ -1058,6 +1062,196 @@ def generate_torch_layers_from_model(model, example_inputs, node_groups=None, de
     return cases
 
 
+# ---------------------------------------------------------------------------
+# Full-argument ("traced") layer case generation.
+#
+# The shape-only path above (``generate_torch_layers_from_model``) records
+# just the positional tensor shapes of each module.  Many models -- Hugging
+# Face transformers in particular -- call submodules with keyword arguments
+# and with non-tensor arguments (ints, tuples, lists, ``None``, ...).  The
+# machinery below records the *full* call signature of every named module
+# during one forward pass, so each standalone-invocable module can be
+# exported and executed exactly as the model calls it.
+#
+# This is generic to any ``torch.nn.Module`` -- nothing here is specific to
+# transformers.  The suites that use it: ``tests/models/test_torch_zoo_turbine.py``
+# (torchvision zoo models) and ``tests/models/test_hf_models.py`` (Hugging Face
+# transformers models; the HF-specific Hub loading lives in
+# ``torq.testing.hf_transformers``).
+# ---------------------------------------------------------------------------
+
+
+def _traced_arg_spec(value):
+    """Classify one module argument for standalone re-invocation.
+
+    Tensors are recorded by shape + dtype (the test data is regenerated
+    randomly from the shape at run time); anything else is recorded as a
+    constant, provided it is JSON-serializable (the metadata manifest is a
+    JSON file).  Returns None when the argument cannot be represented.
+    """
+    if isinstance(value, torch.Tensor):
+        return {
+            "kind": "tensor",
+            "shape": list(value.shape),
+            "dtype": str(value.dtype),
+        }
+    try:
+        json.dumps(value)
+    except (TypeError, ValueError):
+        return None
+    return {"kind": "const", "value": value}
+
+
+def _traced_outputs_testable(output):
+    """True when a module output can be exported and compared as tensors.
+
+    A single tensor or a tuple/list of tensors.  Outputs containing
+    ``None`` cannot be imported by the turbine importer; dict / ``ModelOutput``
+    outputs have an order the reference executor cannot reconstruct
+    reliably.
+    """
+    if isinstance(output, torch.Tensor):
+        return True
+    if isinstance(output, (tuple, list)):
+        return all(isinstance(v, torch.Tensor) for v in output)
+    return False
+
+
+def trace_torch_model_calls(model, example_inputs):
+    """Run ``model(*example_inputs)`` once and record per-module call specs.
+
+    Returns a dict mapping module name -> {"args": [spec, ...],
+    "kwargs": {name: spec}, "outputs": [shape, ...]} for every module whose
+    arguments and outputs are re-invocable standalone, or module name -> None
+    when the module cannot be tested in isolation.  Modules that are never
+    executed during the forward pass are absent from the dict.  When a module
+    is called several times the last call wins (same limitation as the
+    shape-only trace in ``generate_torch_layers_from_model``).
+    """
+    if not isinstance(example_inputs, (list, tuple)):
+        example_inputs = (example_inputs,)
+    trace = {}
+    handles = []
+
+    def make_hook(name):
+        def hook(module, args, kwargs, output):
+            arg_specs = [_traced_arg_spec(a) for a in args]
+            kwarg_specs = {k: _traced_arg_spec(v) for k, v in kwargs.items()}
+            if any(s is None for s in arg_specs) or any(
+                s is None for s in kwarg_specs.values()
+            ):
+                trace[name] = None
+                return
+            if not _traced_outputs_testable(output):
+                trace[name] = None
+                return
+            trace[name] = {
+                "args": arg_specs,
+                "kwargs": kwarg_specs,
+                "outputs": _extract_tensor_shapes(output),
+            }
+
+        return hook
+
+    with torch.no_grad():
+        for name, module in model.named_modules():
+            if name:
+                handles.append(
+                    module.register_forward_hook(make_hook(name), with_kwargs=True)
+                )
+        try:
+            _ = model(*example_inputs)
+        finally:
+            for h in handles:
+                h.remove()
+
+    return trace
+
+
+def _has_traced_tensor_input(record):
+    """A standalone case needs at least one tensor argument (positional or
+    keyword); modules with only constant arguments compute a constant and are
+    not worth testing."""
+    if any(s["kind"] == "tensor" for s in record["args"]):
+        return True
+    return any(s["kind"] == "tensor" for s in record["kwargs"].values())
+
+
+def build_traced_torch_cases(model, example_inputs):
+    """Build TorchLayerCase objects for every standalone-invocable module.
+
+    ``model`` should be a wrapper whose forward takes pure tensor inputs and
+    returns tensor(s); its full forward pass is traced and every named
+    submodule (plus the wrapper itself as the ``full_model`` case) becomes a
+    test case.  Unlike ``generate_torch_layers_from_model``, the cases carry
+    the full recorded call signature in ``layer_arg_specs`` / 
+    ``layer_kwarg_specs``, which the turbine export fixture and the torch
+    reference executor replay.
+    """
+    if not isinstance(example_inputs, (list, tuple)):
+        example_inputs = (example_inputs,)
+    model.eval()
+    trace = trace_torch_model_calls(model, example_inputs)
+
+    cases = []
+    for name, module in model.named_modules():
+        if not name:
+            cases.append(TorchLayerCase(
+                name="full_model",
+                data={
+                    "layer_name": "",
+                    "is_full_model": True,
+                    "layer_input_shapes": [tuple(ex.shape) for ex in example_inputs],
+                    "layer_output_shapes": [],
+                },
+                layer_name="",
+                is_full_model=True,
+            ))
+            continue
+
+        record = trace.get(name)
+        if record is None or not _has_traced_tensor_input(record):
+            # Never executed, or not re-invocable standalone (non-JSON
+            # argument, None/dict output, no tensor inputs, ...).
+            continue
+
+        op_type = type(module).__name__
+        case_name = f"{name.replace('.', '_')}_{op_type}"
+        cases.append(TorchLayerCase(
+            name=case_name,
+            data={
+                "layer_name": name,
+                "is_full_model": False,
+                # Positional tensor shapes; None for constant positional args.
+                "layer_input_shapes": [
+                    s["shape"] if s["kind"] == "tensor" else None
+                    for s in record["args"]
+                ],
+                "layer_output_shapes": record["outputs"],
+                # Full re-invocation specs (understood by the turbine export
+                # fixture and the torch reference executor).
+                "layer_arg_specs": record["args"],
+                "layer_kwarg_specs": record["kwargs"],
+            },
+            layer_name=name,
+            is_full_model=False,
+            definition=repr(module),
+        ))
+
+    return cases
+
+
+def traced_layer_key(case):
+    """Key of a traced layer case for torq.testing.cases.drop_duplicate_cases: the module
+    definition and the call signature (shapes and dtypes of the arguments), so two layers with
+    the same definition called on the same shapes are the same test whatever their weights.
+    None (always kept) for a full model or a case without a definition."""
+    if case.is_full_model or not case.definition:
+        return None
+    return json.dumps([case.definition, case.data.get("layer_arg_specs"),
+                       case.data.get("layer_kwarg_specs")], sort_keys=True)
+
+
 def _load_model_from_pt(filepath):
     """Load a model from a .pt/.pth file.
 
@@ -1192,42 +1386,72 @@ def generate_torch_layers_from_file(filepath, example_inputs=None, node_groups=N
 
 def _save_torch_metadata_cache(key_dir: Path, model_version: str, cases, node_groups, dedup):
     """Atomically write lightweight case metadata (no model weights) to disk."""
+    atomic_write_json_manifest(key_dir, _torch_metadata_manifest(model_version, cases, node_groups, dedup))
+
+
+def _torch_metadata_manifest(model_version: str, cases, node_groups, dedup):
+    """The lightweight case metadata (no model weights) of cases, as JSON data."""
     entries = []
     for c in cases:
-        entries.append({
+        entry = {
             "name": c.name,
             "layer_name": c.layer_name,
             "is_full_model": c.is_full_model,
             "layer_input_shapes": c.data.get("layer_input_shapes", []),
             "layer_output_shapes": c.data.get("layer_output_shapes", []),
-        })
-    atomic_write_json_manifest(key_dir, {
+        }
+        # Traced cases carry the full call signature; shape-only cases don't.
+        if c.data.get("layer_arg_specs") is not None:
+            entry["layer_arg_specs"] = c.data["layer_arg_specs"]
+            entry["layer_kwarg_specs"] = c.data.get("layer_kwarg_specs", {})
+        if getattr(c, "definition", ""):
+            entry["definition"] = c.definition
+        entries.append(entry)
+    return {
         "version": _TORCH_LAYER_CACHE_VERSION,
         "model_version": model_version,
         "node_groups": node_groups,
         "dedup": dedup,
         "cases": entries,
-    })
+    }
 
 
 def _load_torch_metadata_cases(manifest: dict, model_loader_key: str):
-    """Build TorchLayerCase objects from a metadata-only manifest."""
+    """Build TorchLayerCase objects from a metadata-only manifest.
+
+    Handles both manifest formats: traced cases (with ``layer_arg_specs`` /
+    ``layer_kwarg_specs``) and older shape-only cases.  In either format a
+    non-full-model case needs at least one tensor input to be testable.
+    """
     cases = []
     for entry in manifest.get("cases", []):
         layer_input_shapes = entry.get("layer_input_shapes", [])
-        if not entry.get("is_full_model", False) and not layer_input_shapes:
+        arg_specs = entry.get("layer_arg_specs")
+        kwarg_specs = entry.get("layer_kwarg_specs") or {}
+        if arg_specs is not None:
+            has_tensor_input = any(s["kind"] == "tensor" for s in arg_specs) or any(
+                s["kind"] == "tensor" for s in kwarg_specs.values()
+            )
+        else:
+            has_tensor_input = any(s is not None for s in layer_input_shapes)
+        if not entry.get("is_full_model", False) and not has_tensor_input:
             continue
+        data = {
+            "layer_name": entry["layer_name"],
+            "model_loader_key": model_loader_key,
+            "is_full_model": entry["is_full_model"],
+            "layer_input_shapes": layer_input_shapes,
+            "layer_output_shapes": entry.get("layer_output_shapes", []),
+        }
+        if arg_specs is not None:
+            data["layer_arg_specs"] = arg_specs
+            data["layer_kwarg_specs"] = kwarg_specs
         cases.append(TorchLayerCase(
             name=entry["name"],
-            data={
-                "layer_name": entry["layer_name"],
-                "model_loader_key": model_loader_key,
-                "is_full_model": entry["is_full_model"],
-                "layer_input_shapes": layer_input_shapes,
-                "layer_output_shapes": entry.get("layer_output_shapes", []),
-            },
+            data=data,
             layer_name=entry["layer_name"],
             is_full_model=entry["is_full_model"],
+            definition=entry.get("definition", ""),
         ))
     return cases
 
@@ -1287,6 +1511,54 @@ def generate_torch_layers_from_model_metadata_cache(
             c.data["model_loader_key"] = model_loader_key
         _save_torch_metadata_cache(key_dir, model_version, cases, node_groups, dedup)
         return cases
+
+
+def generate_traced_torch_model_layers(
+    metafunc,
+    prefix: str,
+    model_version: str,
+    model_loader_key: str,
+    model_fn,
+    example_inputs,
+):
+    """Generate full-argument-traced layer cases for an in-memory model, caching
+    only metadata.
+
+    The metadata of the cases is cached across sessions (see
+    ``torq.testing.versioned_fixtures.collection_data``, versioned by
+    ``model_version`` and the code of the test module of ``metafunc``): the
+    first pytest-xdist worker that needs it fetches it from the shared store,
+    or builds the model and traces one forward pass; the rest read it from the
+    local cache.  The cases record the *full* call signature of each module --
+    tensor args by shape + dtype, non-tensor args as constants, keyword args by
+    name -- so modules called with kwargs or non-tensor arguments can be
+    exported and tested standalone.  Use this for any torch.nn.Module test
+    suite where a single example forward pass defines the model's invocation
+    (see tests/models/test_torch_zoo_turbine.py and
+    tests/models/test_hf_models.py).
+
+    The returned cases reference the model via ``model_loader_key``; fixtures
+    load the actual model lazily and cache it per worker process.
+    """
+    if not isinstance(example_inputs, (list, tuple)):
+        example_inputs = (example_inputs,)
+
+    def compute():
+        print(f"[torch-traced-metadata-cache] MISS {prefix}")
+        model = model_fn()
+        if not isinstance(model, torch.nn.Module):
+            raise ValueError(
+                f"model_fn for {prefix} must return a torch.nn.Module, "
+                f"got {type(model)}"
+            )
+        cases = build_traced_torch_cases(model, example_inputs)
+        for c in cases:
+            c.name = f"{prefix}_{c.name}"
+        return _torch_metadata_manifest(model_version, cases, None, False)
+
+    key = {"prefix": prefix, "model_version": model_version, "format": _TORCH_LAYER_CACHE_VERSION}
+    manifest = collection_data(metafunc, "torch_traced_metadata", key, compute)
+    return _load_torch_metadata_cases(manifest, model_loader_key)
 
 
 @pytest.fixture
@@ -1355,6 +1627,43 @@ def torch_mlir_model_file(request, case_config):
     return request.getfixturevalue("torch_layer_model")
 
 
+def _tie_stable_topk(input, k, dim=None, largest=True, sorted=True):
+    """Deterministic re-implementation of torch.topk for reference execution.
+
+    torch.topk resolves equal values to *arbitrary* indices (the CPU kernel
+    order is not specified), while the compiler's topk decomposition (iterative
+    max.dim) resolves ties to the lowest index.  Both pick the same values, so
+    a full-model comparison would spuriously fail on tied elements.  This
+    version matches the compiler: iterative argmax/argmin selection, ties to
+    the lowest index, output sorted.
+    """
+    if not sorted:
+        raise NotImplementedError("_tie_stable_topk only supports sorted=True")
+    ndim = input.dim()
+    if dim is None:
+        dim = ndim - 1
+    dim = dim % ndim
+    n = input.size(dim)
+    grid = torch.arange(n, device=input.device)
+    grid = grid.reshape([1] * dim + [n] + [1] * (ndim - 1 - dim))
+    running = input
+    values = []
+    indices = []
+    for _ in range(k):
+        if largest:
+            v, i = torch.max(running, dim=dim, keepdim=True)
+            fill = float("-inf")
+        else:
+            v, i = torch.min(running, dim=dim, keepdim=True)
+            fill = float("inf")
+        values.append(v)
+        indices.append(i)
+        running = torch.where(
+            i == grid, torch.full_like(running, fill), running
+        )
+    return torch.cat(values, dim=dim), torch.cat(indices, dim=dim)
+
+
 def _execute_torch_module_direct(case_config, input_data):
     """Run the original PyTorch model or a specific layer directly.
 
@@ -1375,37 +1684,102 @@ def _execute_torch_module_direct(case_config, input_data):
     if submodule is None:
         return None
 
-    # Determine the model's dtype from its parameters.
-    # Layers like ReLU have no parameters, so fall back to the full model.
-    try:
-        model_dtype = next(submodule.parameters()).dtype
-    except StopIteration:
-        model_dtype = next(model.parameters()).dtype
-
-    # Convert numpy input data to torch tensors with matching dtype.
-    # ml_dtypes.bfloat16 is not supported by torch.from_numpy, so
-    # convert via float32 first.
-    def _to_torch(np_arr):
-        if hasattr(np_arr, 'dtype') and str(np_arr.dtype) == 'bfloat16':
-            return torch.tensor(np_arr.astype(np.float32)).to(model_dtype)
-        return torch.from_numpy(np_arr).to(model_dtype)
-
     if isinstance(input_data, (list, tuple)):
-        torch_inputs = [_to_torch(x) for x in input_data]
+        torch_inputs = list(input_data)
     else:
-        torch_inputs = [_to_torch(input_data)]
+        torch_inputs = [input_data]
 
-    # The FX importer lifts model parameters (weights, BN stats) into function
-    # arguments, so mlir_io_spec may report more "inputs" than the actual
-    # submodule takes. Use layer_input_shapes to determine the real input count.
-    # The actual user inputs are the LAST arguments in the MLIR function.
-    layer_input_shapes = case_config.get("layer_input_shapes", [])
-    real_input_count = len([s for s in layer_input_shapes if s is not None])
-    if real_input_count > 0 and len(torch_inputs) > real_input_count:
-        torch_inputs = torch_inputs[-real_input_count:]
+    # Traced-model cases (see ``build_traced_torch_cases``) record the full
+    # call signature of the module: tensor args by shape (data comes from
+    # input_data, in positional-then-kwargs order) and non-tensor args as
+    # recorded constants (e.g. RT-DETR's spatial_shapes_list).  Reconstruct
+    # the exact call.
+    arg_specs = case_config.get("layer_arg_specs")
+    if arg_specs is not None:
+        kwarg_specs = case_config.get("layer_kwarg_specs", {})
 
-    with torch.no_grad():
-        outputs = submodule(*torch_inputs)
+        def _to_torch_spec(np_arr, spec):
+            target_dtype = spec.get("dtype")
+            if target_dtype:
+                target_dtype = getattr(torch, target_dtype.split(".", 1)[-1], None)
+            if hasattr(np_arr, 'dtype') and str(np_arr.dtype) == 'bfloat16':
+                arr = torch.tensor(np_arr.astype(np.float32))
+                return arr.to(target_dtype) if target_dtype else arr
+            tensor = torch.from_numpy(np_arr)
+            # Only cast float inputs; int/bool args keep their own dtype.
+            if target_dtype is not None and tensor.is_floating_point():
+                tensor = tensor.to(target_dtype)
+            return tensor
+
+        args = []
+        kwargs = {}
+        for spec in arg_specs:
+            if spec["kind"] == "tensor":
+                args.append(_to_torch_spec(torch_inputs.pop(0), spec))
+            else:
+                args.append(spec["value"])
+        for name, spec in kwarg_specs.items():
+            if spec["kind"] == "tensor":
+                kwargs[name] = _to_torch_spec(torch_inputs.pop(0), spec)
+            else:
+                kwargs[name] = spec["value"]
+
+        with torch.no_grad():
+            # The compiler lowers topk with ties resolved to the lowest index,
+            # while eager torch.topk is arbitrary on ties; pin the reference
+            # to the deterministic variant so full-model comparisons don't
+            # fail spuriously on tied elements.
+            _orig_topk = torch.topk
+            torch.topk = _tie_stable_topk
+            # The compiler's grid_sample lowering computes in f32 opmath (and
+            # so does PyTorch's CUDA kernel), while the CPU bf16 kernel
+            # computes in bf16; run the reference in f32 opmath so it matches
+            # the compiled model (and the CUDA deployment semantics).
+            _orig_grid_sample = torch.nn.functional.grid_sample
+
+            def _grid_sample_f32_opmath(input, grid, **kwargs):
+                if input.dtype not in (torch.bfloat16, torch.float16):
+                    return _orig_grid_sample(input, grid, **kwargs)
+                return _orig_grid_sample(
+                    input.float(), grid.float(), **kwargs
+                ).to(input.dtype)
+
+            torch.nn.functional.grid_sample = _grid_sample_f32_opmath
+            try:
+                outputs = submodule(*args, **kwargs)
+            finally:
+                torch.topk = _orig_topk
+                torch.nn.functional.grid_sample = _orig_grid_sample
+    else:
+        # Determine the model's dtype from its parameters.
+        # Layers like ReLU have no parameters, so fall back to the full model.
+        try:
+            model_dtype = next(submodule.parameters()).dtype
+        except StopIteration:
+            model_dtype = next(model.parameters()).dtype
+
+        # Convert numpy input data to torch tensors with matching dtype.
+        # ml_dtypes.bfloat16 is not supported by torch.from_numpy, so
+        # convert via float32 first.
+        def _to_torch(np_arr):
+            if hasattr(np_arr, 'dtype') and str(np_arr.dtype) == 'bfloat16':
+                return torch.tensor(np_arr.astype(np.float32)).to(model_dtype)
+            return torch.from_numpy(np_arr).to(model_dtype)
+
+        torch_inputs = [_to_torch(x) for x in torch_inputs]
+
+        # The FX importer lifts model parameters (weights, BN stats) into
+        # function arguments, so mlir_io_spec may report more "inputs" than
+        # the actual submodule takes. Use layer_input_shapes to determine the
+        # real input count. The actual user inputs are the LAST arguments in
+        # the MLIR function.
+        layer_input_shapes = case_config.get("layer_input_shapes", [])
+        real_input_count = len([s for s in layer_input_shapes if s is not None])
+        if real_input_count > 0 and len(torch_inputs) > real_input_count:
+            torch_inputs = torch_inputs[-real_input_count:]
+
+        with torch.no_grad():
+            outputs = submodule(*torch_inputs)
 
     if isinstance(outputs, torch.Tensor):
         outputs = [outputs]

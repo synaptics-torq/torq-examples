@@ -11,7 +11,14 @@ import pickle
 from functools import wraps
 import inspect
 import hashlib
+import importlib.metadata
 import logging
+import subprocess
+import sys
+import os
+from collections import Counter, defaultdict
+
+from .remote_cache import FROM_REMOTE_CACHE_MARKER, RemoteCache
 
 """
 This module provides decorators that allow to create fixtures that cache their results.
@@ -31,13 +38,219 @@ fixture and create a version for it based on its hash or the inputs used to gene
 def pytest_addoption(parser):
     parser.addoption("--recompute-cache", action="store_true", default=False, help="Re-creates all cached artifacts instead of using existing cached values")
     parser.addoption("--debug-cache", action="store_true", default=False, help="Enables debug output for cache operations")
+    parser.addoption("--remote-cache-read", default=os.environ.get("TORQ_REMOTE_CACHE_READ", ""),
+                     help="Comma-separated stores (directories or s3://bucket/prefix) to read cached results from (default: $TORQ_REMOTE_CACHE_READ)")
+    parser.addoption("--remote-cache-write", default=os.environ.get("TORQ_REMOTE_CACHE_WRITE", ""),
+                     help="Store to write the computed results to, and to read first (default: $TORQ_REMOTE_CACHE_WRITE)")
+    parser.addoption("--test-cache-summary", default=None,
+                     help="Markdown file to append the cache use of the session to, per test file and per fixture (e.g. $GITHUB_STEP_SUMMARY)")
 
 logger = logging.getLogger("versioned_fixtures")
 
+# the store of results shared across sessions, if any (see remote_cache)
+_remote = None
+
+
 def pytest_configure(config):
+    global _remote
+
     if config.getoption("--debug-cache"):
         logger.setLevel(logging.DEBUG)
         logger.addHandler(logging.StreamHandler())
+
+    read_urls = [u.strip() for u in config.getoption("--remote-cache-read").split(",") if u.strip()]
+    write_url = config.getoption("--remote-cache-write").strip()
+    if read_urls or write_url:
+        _remote = RemoteCache(read_urls, write_url)
+
+
+def local_only(fun):
+    """
+    Marks a fixture whose results are not shared across sessions (see remote_cache): they are
+    cheap to compute again, and would only make the shared store bigger. Put it under the
+    versioned fixture decorator.
+    """
+    fun.local_only = True
+    return fun
+
+
+def _fetch_remote(request, fun, version, dest, is_dir):
+    """Puts the result of a fixture in dest from the shared store; False if it isn't there."""
+    if _remote is None or getattr(fun, "local_only", False) or request.config.getoption("--recompute-cache"):
+        return False
+    return _remote.fetch(fun.__name__, version, dest, is_dir)
+
+
+def _store_remote(fun, version, src, is_dir):
+    if _remote is not None and not getattr(fun, "local_only", False):
+        _remote.store(fun.__name__, version, src, is_dir)
+
+
+def collection_data(metafunc, name, key, compute):
+    """
+    The data that the test module of metafunc computes to generate its test cases (e.g. the
+    layers of a model), cached like the results of the versioned fixtures: in the local cache
+    and in the shared store, under a version made of key (JSON data), the code of the torq
+    packages, the installed packages and the code of the test module.
+
+    compute() returns the data, which must be JSON data. Under xdist, the first worker to need
+    it computes or fetches it, and the others read it from the local cache.
+    """
+    config = metafunc.config
+    root = Path(config.rootpath)
+    module_path = Path(metafunc.definition.path)
+    salt = [_get_global_salt(root)]
+    if module_path.is_relative_to(root):
+        salt.append(_get_module_salt(root, module_path))
+    version = _hash_data([salt, key])
+    fixture_name = f"collection_{name}"
+
+    cache_dir = config.cache.mkdir("collection_data") / name
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"{version}.json"
+
+    with FileLock(str(cache_dir / f"{version}.lock")):
+        recompute = config.getoption("--recompute-cache")
+        if not recompute and path.exists():
+            return json.loads(path.read_text())
+        if not recompute and _remote is not None and _remote.fetch(fixture_name, version, path, False):
+            logger.debug(f"[collection data fetched] {name} {version}")
+            return json.loads(path.read_text())
+        data = compute()
+        tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+        tmp.write_text(json.dumps(data))
+        os.replace(tmp, path)
+        if _remote is not None:
+            _remote.store(fixture_name, version, path, False)
+        # what is read back, so that the data is the same whether it was computed or not (e.g.
+        # lists instead of tuples)
+        return json.loads(path.read_text())
+
+
+# how the tests got the results of the fixtures, per test file: Counter of (fixture, use), use
+# being "computed", "reused" (from the local cache) or "fetched" (from a store)
+_cache_uses = defaultdict(Counter)
+
+
+def _record_cache_use(request, fun, use, from_store=False):
+    """
+    from_store: the result was fetched from a store, by this test or (for a reused directory) by
+    an earlier one, so its measured times are not reported
+    """
+    # the local_only results are never in a store: they would only lower the hit rates
+    if not getattr(fun, "local_only", False):
+        request.node.user_properties.append(("test_cache_use", (fun.__name__, use, from_store or use == "fetched")))
+
+
+def pytest_runtest_logreport(report):
+    # the teardown report has the properties recorded by all the fixtures of the test
+    if report.when == "teardown":
+        test_file = report.nodeid.split("::")[0]
+        for name, value in report.user_properties:
+            if name == "test_cache_use":
+                _cache_uses[test_file][(value[0], value[1])] += 1
+
+
+def _cache_use_summary():
+    def row(name, uses):
+        total = sum(uses.values())
+        hits = uses["reused"] + uses["fetched"]
+        return (f"| {name} | {total} | {uses['reused']} | {uses['fetched']} | {uses['computed']} | "
+                f"{100 * hits / total:.0f}% |")
+
+    header = ["| {} | Results | Reused | Fetched | Computed | Hit rate |", "|---|---:|---:|---:|---:|---:|"]
+    lines = ["### Test cache", "", header[0].format("Test file"), header[1]]
+    per_fixture = defaultdict(Counter)
+    for test_file, uses in sorted(_cache_uses.items()):
+        per_test_file = Counter()
+        for (fixture, use), count in uses.items():
+            per_test_file[use] += count
+            per_fixture[fixture][use] += count
+        lines.append(row(test_file, per_test_file))
+    lines += ["", header[0].format("Fixture"), header[1]]
+    lines += [row(fixture, uses) for fixture, uses in sorted(per_fixture.items())]
+    return "\n".join(lines) + "\n"
+
+
+def pytest_sessionfinish(session):
+    summary_file = session.config.getoption("--test-cache-summary")
+    # under xdist, only the controller has the reports of all the workers
+    if summary_file and _cache_uses and not hasattr(session.config, "workerinput"):
+        with open(summary_file, "a") as f:
+            f.write(_cache_use_summary())
+
+
+# What the cached results depend on beyond the inputs of the fixtures: the tools that make the
+# models and references, and the code of the tests. It is part of every version, so that a
+# cache shared across sessions is not reused by other code. Set for each test before its
+# fixtures.
+_salt = None
+
+# salt part of the session, computed once per process
+_global_salt = None
+
+# salt part of each test module
+_module_salts = {}
+
+
+def _files_hash(root, files):
+    return _hash_data([(str(Path(f).relative_to(root)), hashlib.sha256(Path(f).read_bytes()).hexdigest())
+                       for f in files])
+
+
+def _gitlink(root, path):
+    """The commit of a submodule in the checkout, without needing the submodule itself."""
+    try:
+        out = subprocess.run(["git", "ls-tree", "HEAD", path], cwd=root, capture_output=True, text=True,
+                             check=True).stdout.split()
+        return out[2] if len(out) > 2 else "none"
+    except (OSError, subprocess.CalledProcessError):
+        return "unknown"
+
+
+def _get_global_salt(root):
+    """
+    The tools the tests use to make models and references (the installed packages but our own
+    wheels, which are versioned by their build time, and the iree and iree-turbine commits, which
+    also cover the LLVM-CPU references and the ONNX import), and the code of the torq packages.
+    """
+    global _global_salt
+    if _global_salt is None:
+        packages = sorted({f"{d.metadata['Name']}=={d.version}" for d in importlib.metadata.distributions()
+                           if d.metadata['Name'] and not d.metadata['Name'].lower().startswith("torq")})
+        _global_salt = _hash_data({
+            "python": sys.version,
+            "packages": packages,
+            "iree": _gitlink(root, "third_party/iree"),
+            "iree-turbine": _gitlink(root, "third_party/iree-turbine"),
+            "torq": _files_hash(root, sorted((root / "python" / "torq").rglob("*.py"))),
+        })
+    return _global_salt
+
+
+def _get_module_salt(root, module_path):
+    """
+    The code of a test module: its file, the helper modules next to it (not test_*.py) and the
+    conftest.py files above it.
+    """
+    if module_path not in _module_salts:
+        folder = module_path.parent
+        files = [module_path] + sorted(p for p in folder.glob("*.py") if not p.name.startswith("test_"))
+        files += [d / "conftest.py" for d in [folder, *folder.parents]
+                  if (d / "conftest.py").exists() and d.is_relative_to(root)]
+        _module_salts[module_path] = _files_hash(root, sorted(set(files)))
+    return _module_salts[module_path]
+
+
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_setup(item):
+    global _salt
+    root = Path(item.config.rootpath)
+    module_path = Path(item.path)
+    if module_path.is_relative_to(root):
+        _salt = _hash_data([_get_global_salt(root), _get_module_salt(root, module_path)])
+    else:
+        _salt = _get_global_salt(root)
 
 
 def _dataclass_dict_deep(obj):
@@ -101,7 +314,37 @@ def _hash_file(request, file_path):
     return file_hash
 
 
-def _get_fixture_params(kwargs):    
+# content hash of each file, by (path, mtime, size), computed once per process
+_content_hashes = {}
+
+
+def content_hash(path) -> str:
+    """
+    Returns the hash of the content of a file, or of the files of a directory and their paths
+    relative to it ("missing" if path does not exist).
+
+    Unlike _hash_file, the hashes are not stored in the pytest cache: this is meant for the outputs
+    of fixtures, which are many and change in each session.
+    """
+    path = Path(path)
+    if path.is_dir():
+        files = sorted(p for p in path.rglob("*") if p.is_file())
+        return _hash_data([(str(p.relative_to(path)), content_hash(p)) for p in files])
+    if not path.exists():
+        return "missing"
+
+    stat = path.stat()
+    key = (str(path), stat.st_mtime_ns, stat.st_size)
+    if key not in _content_hashes:
+        hash_obj = hashlib.sha256()
+        with open(path, 'rb') as f:
+            for data in iter(lambda: f.read(1 << 20), b""):
+                hash_obj.update(data)
+        _content_hashes[key] = hash_obj.hexdigest()
+    return _content_hashes[key]
+
+
+def _get_fixture_params(kwargs):
     input_params_versions = []
 
     kwargs_data = {}
@@ -133,6 +376,9 @@ def _get_fixture_params(kwargs):
         
         logger.debug("[param version] " + name + " -> " + value.version)
         input_params_versions.append(value.version)
+
+    if _salt is not None:
+        input_params_versions.append("salt." + _salt)
 
     return input_params_versions, kwargs_data
 
@@ -378,10 +624,16 @@ def versioned_generated_file_fixture(suffix):
             with FileLock(str(versioned_file.file_path) + ".lock"):
 
                 if not versioned_file.valid(request):
-                    logger.debug("[cache miss] " + fun.__name__ + f" -> {versioned_file.file_path}")
-                    fun(**kwargs_data)
+                    if _fetch_remote(request, fun, versioned_file.version, versioned_file.file_path, False):
+                        _record_cache_use(request, fun, "fetched")
+                    else:
+                        logger.debug("[cache miss] " + fun.__name__ + f" -> {versioned_file.file_path}")
+                        fun(**kwargs_data)
+                        _store_remote(fun, versioned_file.version, versioned_file.file_path, False)
+                        _record_cache_use(request, fun, "computed")
                 else:
                     logger.debug("[cache hit] " + fun.__name__ + f" -> {versioned_file.file_path}")
+                    _record_cache_use(request, fun, "reused")
 
             logger.debug("[generated file version] " + fun.__name__ + f" -> {versioned_file.file_path}")
 
@@ -445,15 +697,26 @@ def versioned_generated_directory_fixture(fun):
         with FileLock(str(versioned_dir.dir_path) + ".lock"):
 
             if not versioned_dir.valid(request):
-                logger.debug("[cache miss] " + fun.__name__ + f" -> {versioned_dir.dir_path}")
+                if _fetch_remote(request, fun, versioned_dir.version, versioned_dir.dir_path, True):
+                    _record_cache_use(request, fun, "fetched")
+                else:
+                    logger.debug("[cache miss] " + fun.__name__ + f" -> {versioned_dir.dir_path}")
 
-                fun(**kwargs_data)
+                    # left by an earlier fetch of the same version (e.g. with --recompute-cache)
+                    (versioned_dir.dir_path / FROM_REMOTE_CACHE_MARKER).unlink(missing_ok=True)
+
+                    fun(**kwargs_data)
+
+                    _store_remote(fun, versioned_dir.version, versioned_dir.dir_path, True)
+                    _record_cache_use(request, fun, "computed")
 
                 # mark the directory as valid
                 with open(versioned_dir.dir_path / "valid", "w") as f:
                     pass
             else:
                 logger.debug("[cache hit] " + fun.__name__ + f" -> {versioned_dir.dir_path}")
+                _record_cache_use(request, fun, "reused",
+                                  from_store=(versioned_dir.dir_path / FROM_REMOTE_CACHE_MARKER).exists())
 
         logger.debug("[generated dir version] " + fun.__name__ + f" -> {versioned_dir.dir_path}")
 
@@ -593,11 +856,17 @@ def versioned_cached_data_fixture(fun):
 
         with FileLock(str(versioned_data.file_path) + ".lock"):
 
-            if not versioned_data.load(request):
+            if versioned_data.load(request):
+                logger.debug("[cache hit] " + fun.__name__ + f" -> {versioned_data.file_path}")
+                _record_cache_use(request, fun, "reused")
+            elif (_fetch_remote(request, fun, versioned_data.version, versioned_data.file_path, False)
+                  and versioned_data.load(request)):
+                _record_cache_use(request, fun, "fetched")
+            else:
                 logger.debug("[cache miss] " + fun.__name__ + f" -> {versioned_data.file_path}")
                 versioned_data.save(fun(**kwargs_data))
-            else:
-                logger.debug("[cache hit] " + fun.__name__ + f" -> {versioned_data.file_path}")
+                _store_remote(fun, versioned_data.version, versioned_data.file_path, False)
+                _record_cache_use(request, fun, "computed")
 
         logger.debug("[data version] " + fun.__name__ + " -> " + versioned_data.version)
 
