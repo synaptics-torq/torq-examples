@@ -4,26 +4,9 @@ import time
 import threading
 
 
-# The parent runner consumes these tokens while streaming child stdout.
 _SUPPRESS_START_MARKER = 'TORQ_HEARTBEAT_SUPPRESS_START'
 _SUPPRESS_END_MARKER = 'TORQ_HEARTBEAT_SUPPRESS_END'
 _CONTROL_ENV_VAR = 'TORQ_HEARTBEAT_CONTROL'
-_HEARTBEAT_INTERVAL_SECONDS = 60
-
-
-class _HeartbeatTimer:
-    def __init__(self, started_at):
-        self._last_heartbeat_at = started_at
-
-    def should_emit(self, now, last_output_at, heartbeat_suppressed):
-        if heartbeat_suppressed:
-            return False
-        if now - last_output_at < _HEARTBEAT_INTERVAL_SECONDS:
-            return False
-        if now - self._last_heartbeat_at < _HEARTBEAT_INTERVAL_SECONDS:
-            return False
-        self._last_heartbeat_at = now
-        return True
 
 
 class Heartbeat:
@@ -93,11 +76,6 @@ class Heartbeat:
             time.sleep(1)
 
 
-def init_heartbeat_time(started_at):
-    """Initialize heartbeat timing state from the runner's start time."""
-    return _HeartbeatTimer(started_at)
-
-
 @contextmanager
 def suppress_heartbeat():
     enabled = os.getenv(_CONTROL_ENV_VAR) == '1'
@@ -108,19 +86,6 @@ def suppress_heartbeat():
     finally:
         if enabled:
             print(_SUPPRESS_END_MARKER, flush=True)
-
-
-def enable_heartbeat_control(environment):
-    environment[_CONTROL_ENV_VAR] = '1'
-
-
-def parse_suppression_marker(marker):
-    """Return whether the marker is recognized and the resulting suppression state."""
-    if marker == _SUPPRESS_START_MARKER:
-        return True, True
-    if marker == _SUPPRESS_END_MARKER:
-        return True, False
-    return False, False
 
 
 def make_heartbeat_callback(logger=None, log_file=None, label='HEARTBEAT'):
@@ -153,18 +118,3 @@ def make_heartbeat_callback(logger=None, log_file=None, label='HEARTBEAT'):
     return callback
 
 
-def make_activity_condition(activity):
-    """Create a condition function for activity-based heartbeat emission.
-    Args:
-        activity: Dict with 'last_output_at' (time.monotonic()) and 'suppressed' (bool)
-    Returns:
-        Function() that checks if heartbeat should emit based on activity
-    """
-    def should_emit():
-        now = time.monotonic()
-        last_output = activity['last_output_at']
-        suppressed = activity.get('suppressed', False)
-        # Only emit if not suppressed and no activity for interval seconds
-        # (Note: the interval check is handled by Heartbeat)
-        return not suppressed
-    return should_emit

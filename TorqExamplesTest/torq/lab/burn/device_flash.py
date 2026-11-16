@@ -25,6 +25,7 @@ Environment:
   downloaded images.
 """
 from html.parser import HTMLParser
+import argparse
 import configparser
 import hashlib
 import json
@@ -34,12 +35,14 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import quote, unquote, urldefrag, urljoin, urlparse
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import zipfile
+import tarfile
 
 from .runner_heartbeat import suppress_heartbeat
 
@@ -103,6 +106,68 @@ def resolve_values(args, required_keys=None, config_keys=None):
         all_missings = ", ".join(missing)
         raise ValueError(f'Missing configuration: {all_missings}')
     return {name: values[name] for name in required_environment_keys}
+
+
+def resolve_sections(config_path, section=None, board=None):
+    """Return requested sections or configured boards with enumerated serial ports.
+
+    Raises:
+      - ValueError: If the config file is missing or defines no sections.
+    """
+    config_path = Path(config_path).expanduser()
+    if not config_path.is_file():
+        raise ValueError(
+            'Configuration file does not exist: {}'.format(config_path.resolve())
+        )
+    sections = list_config_sections(config_path)
+    if not sections:
+        raise ValueError('Configuration file does not contain any sections')
+    if board and board.strip().lower() == 'all':
+        return sections
+    requested_board = board or section
+    if requested_board:
+        return [requested_board]
+
+    config = configparser.ConfigParser()
+    config.optionxform = str
+    config.read(config_path)
+    from serial.tools.list_ports import comports
+
+    active_ports = {os.path.realpath(port.device) for port in comports()}
+    active_sections = []
+    for section_name in sections:
+        serial_port = next(
+            (
+                value
+                for key, value in config.items(section_name)
+                if key.lower() == 'serial_port'
+            ),
+            None,
+        )
+        if serial_port and os.path.realpath(serial_port) in active_ports:
+            active_sections.append(section_name)
+    if active_sections:
+        return active_sections
+    raise ValueError('No active board found in configuration: {}'.format(config_path))
+
+
+def resolve_section_values(args, section, case_name,
+    required_keys=None, config_keys=None):
+    """Resolve environment values for one section, reporting config errors."""
+    section_args = argparse.Namespace(**vars(args))
+    section_args.section = section
+    try:
+        return resolve_values(
+            section_args,
+            required_keys=required_keys,
+            config_keys=config_keys,
+        )
+    except ValueError as error:
+        print(
+            '{} [{}]: {}'.format(case_name, section or '<direct>', error),
+            file=sys.stderr,
+        )
+        return None
 
 
 # --- U-Boot version check ---------------------------------------------------
@@ -171,7 +236,7 @@ def _build_tftppath(build_version=None, profile=None):
 def _resolve_image_target(image_url=None, update_environment=True):
     build_version = profile = None
     if image_url:
-        build_version, profile = _parse_image_url(image_url)
+        build_version, profile = parse_image_url(image_url)
         if update_environment and build_version and profile:
             os.environ['BUILD_VERSION'] = build_version
             os.environ['PROFILE'] = profile
@@ -220,7 +285,7 @@ def _build_image_url(build_version=None, profile=None, image_base_url=None):
     )
 
 
-def _parse_image_url(image_url):
+def parse_image_url(image_url):
     match = re.search(
         r'/(\d{12})/LinuxSDK-Serpens/([^/]+)/',
         unquote(urlparse(image_url).path),
@@ -301,10 +366,10 @@ def _download_url(
         if linked.path.rstrip('/') == urlparse(final_url).path.rstrip('/'):
             continue
         name = Path(unquote(linked.path)).name.lower()
-        if name in ('', '..', 'index.html') or name.endswith(('.log', '.tgz')):
+        if name in ('', '..', 'index.html') or name.endswith('.log'):
             continue
         if filename_prefix and not (
-            name.startswith(filename_prefix.lower()) and name.endswith('.zip')
+            name.startswith(filename_prefix.lower()) and _is_archive_name(name)
         ):
             continue
         _download_url(
@@ -458,23 +523,43 @@ def _download_image(image_url, download_root, archive_prefix=None, retries=3, ti
     return download_root
 
 
+def _is_archive_name(name):
+    lowered = name.lower()
+    return lowered.endswith(('.zip', '.tar.gz', '.tgz'))
+
+
+def _check_archive_members(destination, names):
+    for name in names:
+        member_path = (destination / name).resolve()
+        if os.path.commonpath((str(destination), str(member_path))) != str(destination):
+            raise ValueError('Image archive contains an unsafe path')
+
+
+def _extract_archive(archive, destination):
+    if archive.name.lower().endswith('.zip'):
+        with zipfile.ZipFile(archive) as package:
+            _check_archive_members(destination, [member.filename for member in package.infolist()])
+            package.extractall(destination)
+        return
+    with tarfile.open(archive, 'r:gz') as package:
+        members = package.getmembers()
+        _check_archive_members(destination, [member.name for member in members])
+        if any(member.issym() or member.islnk() for member in members):
+            raise ValueError('Image archive contains a link')
+        package.extractall(destination)
+
+
 def _extract_image_archives(download_root):
     extracted = set()
     for _ in range(5):
         archives = [
-            archive for archive in download_root.rglob('*.zip')
-            if archive not in extracted
+            archive for archive in download_root.rglob('*')
+            if archive.is_file() and _is_archive_name(archive.name) and archive not in extracted
         ]
         if not archives:
             break
         for archive in archives:
-            with zipfile.ZipFile(archive) as package:
-                destination = archive.parent.resolve()
-                for member in package.infolist():
-                    member_path = (destination / member.filename).resolve()
-                    if os.path.commonpath((str(destination), str(member_path))) != str(destination):
-                        raise ValueError('Image archive contains an unsafe path')
-                package.extractall(destination)
+            _extract_archive(archive, archive.parent.resolve())
             extracted.add(archive)
 
 
@@ -539,11 +624,11 @@ def _prepare_image(
                 path for path in download_root.rglob('*')
                 if path.is_file()
                 and path.name.lower().startswith(archive_prefix.lower())
-                and path.suffix.lower() == '.zip'
+                and _is_archive_name(path.name)
             ]
             if len(matching_archives) != 1:
                 raise ValueError(
-                    f'Expected exactly one {archive_prefix}*.zip archive at {image_url}, found {len(matching_archives)}'
+                    f'Expected exactly one {archive_prefix}* archive at {image_url}, found {len(matching_archives)}'
                 )
         _extract_image_archives(download_root)
         emmc_image = _find_emmc_image(download_root)
@@ -563,7 +648,7 @@ def _prepare_image(
         shutil.rmtree(download_root)
     except ValueError:
         raise
-    except (OSError, zipfile.BadZipFile) as error:
+    except (OSError, zipfile.BadZipFile, tarfile.TarError) as error:
         raise ValueError(
             f'Image download or extraction failed: {error}'
         ) from error

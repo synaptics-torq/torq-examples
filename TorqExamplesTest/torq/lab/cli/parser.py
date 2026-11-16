@@ -87,9 +87,10 @@ def _add_output_options(parser: argparse.ArgumentParser) -> None:
 
 def _add_burn_options(parser: argparse.ArgumentParser) -> None:
     group = parser.add_argument_group("burn image")
-    group.add_argument("--build-version", help="Firmware build version")
+    group.add_argument("--astra-version", help="Firmware build version")
     group.add_argument("--profile", help="Build profile")
-    group.add_argument("--image-url", help="Full URL to firmware image")
+    group.add_argument("--image-base-url", help="Base URL of the firmware file server (used with --astra-version and --profile)")
+    group.add_argument("--image-url", help="Full URL of the firmware archive (.zip or .tar.gz)")
     group.add_argument("--force-flash", action="store_true", help="Force flash regardless")
 
 
