@@ -34,7 +34,10 @@ The compiler/runtime/ko under test come from a test-build run's artifacts
 
 ## Test entries
 
-- `test_host_conversion.py` — container environment + per-demo host setup
+- `test_host_conversion.py` — container environment + per-demo host setup.
+  Preparation runs once per demo; every model-repository case independently
+  checks that its model directory exists and is non-empty. A preparation
+  failure is reported without retrying it in later cases for that demo.
 - `test_dut_deploy.py` — `test_dut_deploy` (deploy, one case) +
   `test_dut_infer[demo]` + `test_dut_profile[demo]` (12 demos each;
   demos without an inference command builder are skipped with a reason,
@@ -57,6 +60,12 @@ conftest enforce DUT preflight -> host preparation -> DUT deploy/infer/profile,
 regardless of collection order):
 
 	python3.12 -m pytest TorqExamplesTest
+
+The default test collection includes only the host preparation and DUT
+deployment/inference/profiling modules, not helper unit tests such as
+`test_dut_power_cycle.py`. The shared session preflight performs one DUT
+power-off/power-on sequence before the pipeline starts; later stages and
+teardown do not repeat it.
 
 Standalone debugging without pytest (engine drivers, no DUT needed for
 host stage, no suite layout needed):

@@ -175,7 +175,6 @@ def power_cycle_dut() -> None:
         f"Could not detect ADB device {ADB_SERIAL} within "
         f"{POWER_ON_TOTAL_WAIT_SECONDS}s after power-on; "
         "manual intervention is required to check the environment. "
-        "需要人工介入检查环境。"
     )
     print(f"[dut_power_cycle] {message}", flush=True)
     raise DutPowerCycleError(message)

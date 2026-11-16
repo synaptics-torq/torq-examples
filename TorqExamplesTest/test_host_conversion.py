@@ -1,16 +1,21 @@
-"""Host-side demo setup tests (host-driven reconstruction, step 1).
+"""
+Host-side demo model preparation tests.
 
 Demo model preparation (setup_demos.py: fetch + convert/validate) now runs
 on the CI host inside a container (see host_converter.py) instead of on the
 DUT board. Each case verifies that one demo's model artifacts exist in the
-host checkout, ready to be pushed to the board for inference (step 2).
+host checkout, ready to be pushed to the board for inference.
 
-The legacy DUT-side conversion cases stay in place for this step; they are
-replaced by the push-to-board stage in step 2.
+TorqExamplesTest has two model modes, selected by TORQ_MODEL_MODE:
+    release (default): download and validate models already published on
+        Hugging Face and pinned to a release (e.g. moonshine v2.3.0).
+        No host-side model compilation is required.
+    dev: build models from source using the PR compiler, as specified by
+        IOTMMSQA-18868 ("build all models from their sources").
 
-Requires docker on the host. Compiler wheel selection via environment:
-    TORQ_HOST_COMPILER_WHEEL=/path/torq_compiler-*.whl   (CI: PR-built wheel)
-    TORQ_HOST_COMPILER_VERSION=2.3.0                     (dev: published release)
+Model preparation runs on the CI host inside a Docker container (see
+host_converter.py), producing artifacts for subsequent DUT deployment
+and inference. Docker is required on the host.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from __future__ import annotations
 import pytest
 
 from TorqExamplesTest.demo_registry import REPO_ROOT, demo_model_cases, demo_registry
-from TorqExamplesTest.host_converter import HostSetupRunner
+from TorqExamplesTest.host_converter import HostSetupError, HostSetupRunner
 
 REGISTRY = demo_registry()
 MODEL_CASES = demo_model_cases()
@@ -56,20 +61,44 @@ def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
 
 @pytest.mark.parametrize("model_case", MODEL_CASES, ids=lambda case: case.case_id)
 def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
-    """Prepare one demo's models on the host and validate the artifacts."""
+    """Prepare demo models for TORQ_MODEL_MODE: release downloads or dev builds."""
     demo = model_case.demo_name
+    print(
+        f"\n[host_setup] Starting {model_case.case_id}: "
+        f"mode={host_setup.model_mode}, repo_id={model_case.repo_id}",
+        flush=True,
+    )
     if demo in _converted_demos:
-        print(f"[host_setup] {demo}: artifacts already prepared by an earlier case")
-        return
-    if demo in _failed_demos:
+        print(
+            f"[host_setup] {model_case.case_id}: reusing earlier demo preparation; "
+            "checking this model directory",
+            flush=True,
+        )
+    elif demo in _failed_demos:
         pytest.fail(f"demo '{demo}' host setup already failed in an earlier case "
                     f"(see its log: logs/{demo}_host_setup.log)")
+    else:
+        spec = REGISTRY[demo]
+        try:
+            result = host_setup.setup_demo(demo, spec.app_dir)
+        except HostSetupError:
+            _failed_demos.add(demo)
+            raise
+        if not result.passed:
+            _failed_demos.add(demo)
+        assert result.passed, (
+            f"host setup for demo '{demo}' failed rc={result.returncode}\n"
+            f"stdout tail:\n{result.stdout[-2000:]}\n"
+            f"stderr tail:\n{result.stderr[-2000:]}"
+        )
+        _converted_demos.add(demo)
 
-    spec = REGISTRY[demo]
-    result = host_setup.setup_demo(demo, spec.app_dir, model_case.repo_id)
-    assert result.passed, (
-        f"host setup for demo '{demo}' failed rc={result.returncode}\n"
-        f"stdout tail:\n{result.stdout[-2000:]}\n"
-        f"stderr tail:\n{result.stderr[-2000:]}"
+    model_dir = host_setup.examples_root / "models" / model_case.repo_id
+    assert model_dir.is_dir() and any(model_dir.rglob("*")), (
+        f"[model check] {model_case.case_id}: missing or empty model dir: {model_dir}"
     )
-    _converted_demos.add(demo)
+    print(
+        f"[host_setup] Completed {model_case.case_id}: "
+        f"model directory check passed for {model_dir}",
+        flush=True,
+    )

@@ -483,6 +483,7 @@ def _requirements_file_for_demo(
 
 
 def demo_registry() -> dict[str, DemoSpec]:
+    print(f"[demo_registry] Discovering demos from {SETUP_DEMOS_PATH}", flush=True)
     registry: dict[str, DemoSpec] = {}
     setup_sources = discover_setup_sources()
     for name in repo_demo_names():
@@ -497,6 +498,19 @@ def demo_registry() -> dict[str, DemoSpec]:
             model_dir_patterns=_model_dir_patterns_for_demo(name, setup_sources),
             asset_groups=_asset_groups_for_demo(name, setup_sources),
         )
+        spec = registry[name]
+        repositories = ", ".join(
+            f"{model_name} -> {repo_id}"
+            for model_name, repo_id in spec.setup_model_repositories
+        )
+        print(
+            f"[demo_registry] Registered {name}: app_dir={spec.app_dir!r}, "
+            f"inference_entry={spec.inference_entry!r}, "
+            f"requirements={spec.requirements_file!r}, "
+            f"models=[{repositories}]",
+            flush=True,
+        )
+    print(f"[demo_registry] Registered {len(registry)} demos", flush=True)
     return registry
 
 
@@ -514,4 +528,9 @@ def demo_model_cases(
                 repo_id=repo_id,
                 model_path=f"{models_root}/{repo_id}",
             ))
+    print(
+        f"[demo_registry] Generated {len(cases)} model cases "
+        f"(remote models root: {models_root})",
+        flush=True,
+    )
     return cases
