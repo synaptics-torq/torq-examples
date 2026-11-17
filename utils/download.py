@@ -38,6 +38,7 @@ __all__ = [
     "download_from_url",
     "download_from_hf",
     "get_hf_revision",
+    "list_hf_tags",
     "get_hf_file_info",
     "hf_file_exists",
     "list_hf_files",
@@ -170,6 +171,28 @@ def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
         ) from exc
     except Exception as exc:  # offline, auth failure, transient Hub errors, ...
         logger.debug("Could not resolve revision for %s (%s): %s", repo_id, revision, exc)
+        return None
+
+
+def list_hf_tags(repo_id: str) -> list[str] | None:
+    """Return the tag names of *repo_id*, or ``None`` when they cannot be listed.
+
+    Queries the refs endpoint directly because ``HfApi.list_repo_refs`` takes
+    no timeout; this one uses ``HF_CHECK_TIMEOUT`` like the other Hub checks.
+    """
+    from huggingface_hub import constants
+    from huggingface_hub.utils import build_hf_headers, get_session, hf_raise_for_status
+
+    try:
+        response = get_session().get(
+            f"{constants.ENDPOINT}/api/models/{repo_id}/refs",
+            headers=build_hf_headers(),
+            timeout=HF_CHECK_TIMEOUT,
+        )
+        hf_raise_for_status(response)
+        return [tag["name"] for tag in response.json()["tags"]]
+    except Exception as exc:  # offline, missing repo, auth failure, ...
+        logger.debug("Could not list tags of %s: %s", repo_id, exc)
         return None
 
 

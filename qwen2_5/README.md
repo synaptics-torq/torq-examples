@@ -25,7 +25,7 @@ This downloads the model files to `models/Synaptics/Qwen2.5-0.5B-Instruct-GPTQ-i
 `transformer.vmfb`, `lm_head.vmfb.trim`, `token_embeddings.npy`, `token_id_lut.npy`,
 `config.json` and `tokenizer.json`.
 
-By default the demo downloads the model version matching this repo's `VERSION` file (see the
+By default the demo downloads the newest model version compatible with this repo's `VERSION` file (see the
 [repo README](../README.md) for the versioning scheme). To pin a specific release tag instead, use:
 
 ```sh

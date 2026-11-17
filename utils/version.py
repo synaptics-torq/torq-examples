@@ -7,26 +7,35 @@ The ``VERSION`` file at the repo root records which torq-examples release this
 checkout corresponds to. The version tracks the torq-compiler/runtime release
 the demos are tested against, and the built-in model repos on Hugging Face are
 tagged the same way: a checkout of examples ``2.2.0`` downloads (and maintains)
-the models at tag ``v2.2.0``.
+the models at tag ``v2.2.0`` (or, when the repo has no such tag, the newest
+tag of the same release series, ``v2.2.*``).
+
+Model compatibility is judged on ``major.minor`` only: upstream guarantees
+that patch releases do not break compatibility, so torq-examples ``2.3.1``
+runs models tagged ``v2.3.*``.
 
 The file must be bumped on every release of torq-examples.
 """
 
 import logging
+import re
 from pathlib import Path
 from typing import Final
 
-from utils.download import DownloadError
+from utils.download import DownloadError, list_hf_tags
 
 __all__ = [
+    "compatible_version",
     "examples_version",
     "parse_model_specs",
+    "release_series",
     "resolve_model_version",
 ]
 
 logger = logging.getLogger(__name__)
 
 _VERSION_FILE: Final[Path] = Path(__file__).resolve().parent.parent / "VERSION"
+_VERSION_RE: Final[re.Pattern] = re.compile(r"v?(\d+)\.(\d+)\.(\d+)")
 
 
 def examples_version() -> str | None:
@@ -43,6 +52,36 @@ def examples_version() -> str | None:
     if not raw:
         return None
     return raw if raw.lower().startswith("v") else f"v{raw}"
+
+
+def release_series(version: str | None) -> tuple[str, str] | None:
+    """Return the ``(major, minor)`` of *version* (``v2.3.4`` -> ``("2", "3")``).
+
+    Compatibility is judged on this pair only. ``None`` for versions that do
+    not start with ``X.Y.Z`` (branches like ``q4``, ``None``).
+    """
+    match = _VERSION_RE.match(version) if version else None
+    return match.group(1, 2) if match else None
+
+
+def compatible_version(repo_id: str, version: str) -> str | None:
+    """Return *version* if *repo_id* has that tag, else the newest tag of its series.
+
+    E.g. ``v2.3.4`` resolves to itself when tagged, or to ``v2.3.2`` when that
+    is the newest ``v2.3.*`` tag in the repo. ``None`` when *version* has no
+    series, the tags cannot be listed (Hub unreachable), or no tag of the
+    series exists.
+    """
+    series = release_series(version)
+    tags = list_hf_tags(repo_id) if series else None
+    if tags and version in tags:
+        return version
+    candidates = [
+        (int(m.group(3)), tag)
+        for tag in tags or []
+        if (m := _VERSION_RE.fullmatch(tag)) and m.group(1, 2) == series
+    ]
+    return max(candidates)[1] if candidates else None
 
 
 def parse_model_specs(specs: list[str]) -> list[tuple[str, str | None]]:
@@ -72,7 +111,9 @@ def resolve_model_version(
     """Pick the HF version to download for ``repo_id``.
 
     An explicit ``model_version`` always wins. Otherwise built-in repos track
-    the torq-examples release version (repo-root ``VERSION`` file), and custom
+    the torq-examples release version (repo-root ``VERSION`` file), or the
+    newest tag of its series when the repo lacks that exact tag (see
+    :func:`compatible_version`), and custom
     repos fall back to their latest (HEAD) revision, untracked.
 
     Raises:
@@ -94,4 +135,4 @@ def resolve_model_version(
             f"file at the repo root) for repo {repo_id}; pass --model-version to "
             "select a model version explicitly."
         )
-    return version
+    return compatible_version(repo_id, version) or version

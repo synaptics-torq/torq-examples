@@ -1,9 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+from unittest import mock
+
 import utils.version
 from utils.download import DownloadError
-from utils.version import examples_version, parse_model_specs, resolve_model_version
+from utils.version import (
+    compatible_version,
+    examples_version,
+    parse_model_specs,
+    release_series,
+    resolve_model_version,
+)
 
 
 def test_examples_version_reads_repo_version_file(tmp_path, monkeypatch):
@@ -92,3 +100,38 @@ def test_resolve_model_version_explicit_silences_missing_version_file(tmp_path, 
     builtin = frozenset({"Synaptics/repo"})
 
     assert resolve_model_version("Synaptics/repo", "v2.0.0", builtin_repos=builtin) == "v2.0.0"
+
+
+def test_compatible_version_prefers_exact_tag_then_newest_of_series():
+    tags = ["v2.2.9", "v2.3.0", "v2.3.4", "v2.3.10", "v2.4.0", "v2.3.x", "main-2.3.11"]
+    with mock.patch("utils.version.list_hf_tags", return_value=tags):
+        assert compatible_version("Synaptics/repo", "v2.3.4") == "v2.3.4"
+        # Patch level is ignored both ways: newer and older patches are compatible.
+        assert compatible_version("Synaptics/repo", "v2.3.5") == "v2.3.10"
+        assert compatible_version("Synaptics/repo", "v2.2.0") == "v2.2.9"
+
+
+def test_compatible_version_none_without_a_match():
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.2.0"]):
+        assert compatible_version("Synaptics/repo", "v2.3.0") is None  # no tag of the series
+        assert compatible_version("Synaptics/repo", "q4") is None  # not X.Y.Z
+    with mock.patch("utils.version.list_hf_tags", return_value=None):
+        assert compatible_version("Synaptics/repo", "v2.3.0") is None  # Hub unreachable
+
+
+def test_release_series():
+    assert release_series("v2.3.4") == ("2", "3")
+    assert release_series("2.3.0rc1") == ("2", "3")
+    assert release_series("q4") is None
+    assert release_series(None) is None
+
+
+def test_resolve_model_version_builtin_uses_compatible_tag(tmp_path, monkeypatch):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("2.3.4\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+    builtin = frozenset({"Synaptics/repo"})
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0", "v2.3.1"]):
+        assert resolve_model_version("Synaptics/repo", None, builtin_repos=builtin) == "v2.3.1"
+        # An explicit version is used verbatim.
+        assert resolve_model_version("Synaptics/repo", "v2.3.0", builtin_repos=builtin) == "v2.3.0"

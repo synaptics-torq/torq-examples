@@ -7,7 +7,7 @@ from typing import Final
 
 from utils.download import default_models_dir, download_from_hf
 from utils.model_setup import demo_main, setup_demo
-from utils.version import examples_version
+from utils.version import compatible_version, examples_version
 
 logger = logging.getLogger("EmbeddingGemma2.setup")
 
@@ -18,7 +18,7 @@ _HF_REPO_MAP: Final[dict[str, str]] = {
 _DEFAULT_MODELS: Final[list[str]] = ["default"]
 
 # Weight builds on Hugging Face, chosen with --model-version (or `default:<version>`):
-#   (none)  the torq-examples version tag (e.g. v2.3.0), on `main`: 8-bit weights (int8
+#   (none)  the torq-examples version tag (e.g. v2.3.0, else the newest v2.3.*), on `main`: 8-bit weights (int8
 #           block-32, bf16 activations), the recommended build
 #   q4      branch `q4`: 4-bit weights
 #   bf16    branch `bf16`: bf16 weights
@@ -75,7 +75,8 @@ def _download(repo_id: str, base_dir: Path, *, revision: str | None = None) -> l
     for f in _REQUIRED_FILES:
         download_from_hf(repo_id, f, base_dir=base_dir, revision=revision)
         logger.info("Downloaded %s from %s", f, repo_id)
-    examples_revision = examples_version() or "main"
+    version = examples_version()
+    examples_revision = (compatible_version(repo_id, version) or version) if version else "main"
     for f in _EXAMPLE_FILES:
         download_from_hf(repo_id, f, base_dir=base_dir, revision=examples_revision)
         logger.info("Downloaded %s from %s", f, repo_id)

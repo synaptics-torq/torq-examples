@@ -11,6 +11,8 @@ take effect before any test runs:
 2. ``utils.download.get_hf_file_info`` is stubbed to return ``None`` for
    every test by default, so the manifest-write path never touches the
    network (tests that exercise per-file tracking patch it themselves).
+   ``utils.version.list_hf_tags`` is likewise stubbed to ``None``, so built-in
+   repos resolve to the ``VERSION`` file's tag as-is.
 3. Lightweight stand-ins are installed for the heavy optional dependencies
    (numpy, torq, iree, tokenizers, ml_dtypes) that ``utils.llm``,
    ``utils.inference`` and ``gemma3.src.runner`` import at module load. The
@@ -37,7 +39,10 @@ if str(_REPO_ROOT) not in sys.path:
 @pytest.fixture(autouse=True)
 def _stub_hf_file_info():
     """Keep the suite network-free by default (see module docstring)."""
-    with mock.patch("utils.download.get_hf_file_info", return_value=None):
+    with (
+        mock.patch("utils.download.get_hf_file_info", return_value=None),
+        mock.patch("utils.version.list_hf_tags", return_value=None),
+    ):
         yield
 
 
