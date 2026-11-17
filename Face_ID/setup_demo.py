@@ -113,4 +113,7 @@ def setup_face_id(*, base_dir: str | Path | None = None) -> Path:
 
 
 if __name__ == "__main__":
+    from utils.version import warn_if_runtime_mismatch
+
+    warn_if_runtime_mismatch()
     setup_face_id()

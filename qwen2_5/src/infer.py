@@ -17,11 +17,13 @@ from utils.runtime import (
     cleanup_npu_after_inference,
     setup_npu_for_inference,
 )
+from utils.version import warn_if_runtime_mismatch
 
 
 def main(args: argparse.Namespace):
 
     configure_logging(args.logging)
+    warn_if_runtime_mismatch()
     logging.getLogger("Qwen2.5").info("Starting assistant...")
     ensure_qwen25_models(Path(args.model).parent, refresh=not args.no_refresh)
 

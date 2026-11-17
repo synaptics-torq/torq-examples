@@ -30,7 +30,9 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root, for `utils`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from utils.version import warn_if_runtime_mismatch  # noqa: E402
 import preprocess as pp  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
@@ -263,6 +265,7 @@ def main():
     se.add_argument("--kinds", help="Result kinds to show, from image,audio,video,moment (default: all for a "
                                     "text query, image,moment,video for an image, audio for a sound)")
     args = ap.parse_args()
+    warn_if_runtime_mismatch()
     if args.cmd == "search" and (args.mode == "startup") == bool(args.text or args.image or args.audio):
         se.error("use `search startup` for the interactive prompt, or one of --text/--image/--audio")
     args.model_dir = resolve_model_dir(ap, args.model_dir)

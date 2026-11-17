@@ -10,13 +10,15 @@ tagged the same way: a checkout of examples ``2.2.0`` downloads (and maintains)
 the models at tag ``v2.2.0`` (or, when the repo has no such tag, the newest
 tag of the same release series, ``v2.2.*``).
 
-Model compatibility is judged on ``major.minor`` only: upstream guarantees
-that patch releases do not break compatibility, so torq-examples ``2.3.1``
-runs models tagged ``v2.3.*``.
+The torq-runtime must match ``VERSION`` exactly (pinned in requirements.txt;
+inference warns otherwise). Model compatibility is judged on ``major.minor``
+only: upstream guarantees that patch releases do not break compatibility, so
+torq-runtime ``2.3.1`` with ``VERSION`` ``2.3.1`` runs models tagged ``v2.3.*``.
 
 The file must be bumped on every release of torq-examples.
 """
 
+import importlib.metadata
 import logging
 import re
 from pathlib import Path
@@ -32,6 +34,7 @@ __all__ = [
     "release_series",
     "resolve_model_version",
     "warn_if_model_incompatible",
+    "warn_if_runtime_mismatch",
 ]
 
 logger = logging.getLogger(__name__)
@@ -124,6 +127,24 @@ def warn_if_model_incompatible(repo_id: str, version: str | None) -> None:
             "%s is at model version %s, which is not compatible with torq-examples "
             "%s (only matching major.minor versions are); it may fail to load or run.",
             repo_id, version, current,
+        )
+
+
+def warn_if_runtime_mismatch() -> None:
+    """Warn when the installed torq-runtime is not exactly ``VERSION``.
+
+    Called once at the start of every demo, validation and setup entry point.
+    """
+    current = examples_version()
+    try:
+        runtime = importlib.metadata.version("torq-runtime")
+    except importlib.metadata.PackageNotFoundError:
+        return
+    if current is not None and runtime != current.lstrip("v"):
+        logger.warning(
+            "torq-runtime %s is installed but torq-examples %s requires "
+            "torq-runtime==%s; run `pip install -r requirements.txt`.",
+            runtime, current, current.lstrip("v"),
         )
 
 

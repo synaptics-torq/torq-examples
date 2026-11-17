@@ -42,6 +42,7 @@ from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.runtime import build_runtime_flags
+from utils.version import warn_if_runtime_mismatch
 
 logger = logging.getLogger("Gemma3.validate")
 
@@ -415,6 +416,7 @@ class TeacherForcedValidator(BaseValidator):
 
 
 def main(args: argparse.Namespace) -> None:
+    warn_if_runtime_mismatch()
     gemma3 = Gemma3Static(
         args.model,
         args.max_seq_len,

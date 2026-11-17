@@ -44,6 +44,7 @@ from utils.version import (
     parse_model_specs,
     resolve_model_version,
     warn_if_model_incompatible,
+    warn_if_runtime_mismatch,
 )
 
 __all__ = [
@@ -464,6 +465,7 @@ def demo_main(
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
+    warn_if_runtime_mismatch()
 
     try:
         kwargs: dict[str, object] = {

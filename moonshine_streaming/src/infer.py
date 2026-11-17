@@ -39,6 +39,7 @@ from utils.inference import add_common_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.npu import configure_npu_userspace_frequency
+from utils.version import warn_if_runtime_mismatch
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -191,6 +192,7 @@ class _Stats:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
 
     model_dir = args.model_dir
 

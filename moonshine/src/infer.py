@@ -24,6 +24,7 @@ from utils.inference import add_common_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
+from utils.version import warn_if_runtime_mismatch
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -63,6 +64,7 @@ def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
 
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
     logger = logging.getLogger("Moonshine")
     logger.info("Starting demo...")
 

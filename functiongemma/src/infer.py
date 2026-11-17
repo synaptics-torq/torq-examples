@@ -31,6 +31,7 @@ from utils.runtime import (
     cleanup_npu_after_inference,
     setup_npu_for_inference,
 )
+from utils.version import warn_if_runtime_mismatch
 
 #: Cap on function calls per user turn, against runaway call/response loops.
 _MAX_TOOL_CALLS: Final[int] = 5
@@ -148,6 +149,7 @@ def run_function_loop(runner: FunctionGemmaStatic) -> None:
 
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
 
     logging.getLogger("FunctionGemma").info("Starting assistant...")
     ensure_functiongemma_models(Path(args.model).parent, refresh=not args.no_refresh)

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+from pathlib import Path
 from unittest import mock
 
 import utils.version
@@ -13,6 +14,7 @@ from utils.version import (
     release_series,
     resolve_model_version,
     warn_if_model_incompatible,
+    warn_if_runtime_mismatch,
 )
 
 
@@ -149,6 +151,25 @@ def _set_version(tmp_path, monkeypatch, version):
     version_file = tmp_path / "VERSION"
     version_file.write_text(f"{version}\n")
     monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+
+
+def test_warn_if_runtime_mismatch_requires_exact_version(tmp_path, monkeypatch, caplog):
+    _set_version(tmp_path, monkeypatch, "2.3.1")
+    for runtime, warns in (("2.3.1", False), ("2.3.0", True)):
+        caplog.clear()
+        with mock.patch("utils.version.importlib.metadata.version", return_value=runtime):
+            warn_if_runtime_mismatch()
+        assert ("torq-runtime 2.3.0 is installed" in caplog.text) is warns
+
+
+def test_every_demo_entry_point_checks_the_runtime():
+    # Each demo's inference/validation scripts call the check in main(), so it
+    # runs (and later moves) in the same place for every demo.
+    root = Path(utils.version.__file__).resolve().parents[1]
+    scripts = [*root.glob("*/src/infer*.py"), *root.glob("*/*/src/infer*.py")]
+    assert scripts
+    missing = [str(p.relative_to(root)) for p in scripts if "warn_if_runtime_mismatch()" not in p.read_text()]
+    assert not missing, f"entry points without warn_if_runtime_mismatch(): {missing}"
 
 
 def test_warn_if_model_incompatible_ignores_patch(tmp_path, monkeypatch, caplog):

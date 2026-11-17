@@ -18,6 +18,7 @@ from typing import Final
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import DownloadError
 from utils.log import add_logging_args, configure_logging
+from utils.version import warn_if_runtime_mismatch
 
 PTH_NAME = "torq-examples.pth"
 logger = logging.getLogger("setup")
@@ -192,6 +193,7 @@ if __name__ == "__main__":
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
+    warn_if_runtime_mismatch()
 
     if sys.prefix == sys.base_prefix:
         logger.warning(
