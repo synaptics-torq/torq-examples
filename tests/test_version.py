@@ -8,9 +8,11 @@ from utils.download import DownloadError
 from utils.version import (
     compatible_version,
     examples_version,
+    follow_examples_series,
     parse_model_specs,
     release_series,
     resolve_model_version,
+    warn_if_model_incompatible,
 )
 
 
@@ -124,6 +126,39 @@ def test_release_series():
     assert release_series("2.3.0rc1") == ("2", "3")
     assert release_series("q4") is None
     assert release_series(None) is None
+
+
+def test_follow_examples_series(tmp_path, monkeypatch, caplog):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("3.0.1\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0", "v3.0.0", "v3.0.1"]) as tags:
+        assert follow_examples_series("Synaptics/repo", "v2.3.0") == "v3.0.1"
+        tags.reset_mock()
+        # Same series (any patch) and versions without a series are left alone.
+        assert follow_examples_series("Synaptics/repo", "v3.0.0") == "v3.0.0"
+        assert follow_examples_series("Synaptics/repo", "q4") == "q4"
+        assert follow_examples_series("Synaptics/repo", None) is None
+        tags.assert_not_called()
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0"]):
+        assert follow_examples_series("Synaptics/repo", "v2.3.0") == "v2.3.0"
+    assert "has no compatible model version yet" in caplog.text
+
+
+def _set_version(tmp_path, monkeypatch, version):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text(f"{version}\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+
+
+def test_warn_if_model_incompatible_ignores_patch(tmp_path, monkeypatch, caplog):
+    _set_version(tmp_path, monkeypatch, "2.3.1")
+    warn_if_model_incompatible("Synaptics/repo", "v2.3.0")
+    warn_if_model_incompatible("Synaptics/repo", "v2.3.9")
+    warn_if_model_incompatible("Synaptics/repo", "q4")
+    assert not caplog.records
+    warn_if_model_incompatible("Synaptics/repo", "v2.2.0")
+    assert "model version v2.2.0, which is not compatible" in caplog.text
 
 
 def test_resolve_model_version_builtin_uses_compatible_tag(tmp_path, monkeypatch):

@@ -27,9 +27,11 @@ from utils.download import DownloadError, list_hf_tags
 __all__ = [
     "compatible_version",
     "examples_version",
+    "follow_examples_series",
     "parse_model_specs",
     "release_series",
     "resolve_model_version",
+    "warn_if_model_incompatible",
 ]
 
 logger = logging.getLogger(__name__)
@@ -82,6 +84,47 @@ def compatible_version(repo_id: str, version: str) -> str | None:
         if (m := _VERSION_RE.fullmatch(tag)) and m.group(1, 2) == series
     ]
     return max(candidates)[1] if candidates else None
+
+
+def follow_examples_series(repo_id: str, version: str | None) -> str | None:
+    """Move a default-tracked model *version* to the torq-examples release series.
+
+    Returns *version* unchanged when it already is in the ``VERSION`` file's
+    ``major.minor`` series (or either has no series). Otherwise returns the
+    :func:`compatible_version` of ``VERSION``, or keeps *version* with a
+    warning when no tag of the new series exists upstream yet (or the Hub is
+    unreachable).
+    """
+    current = examples_version()
+    series = release_series(version)
+    if series is None or release_series(current) in (None, series):
+        return version
+    target = compatible_version(repo_id, current)
+    if target is None:
+        logger.warning(
+            "torq-examples is at %s but %s has no compatible model version yet "
+            "(or Hugging Face is unreachable); keeping %s, which may not work "
+            "with this release.",
+            current, repo_id, version,
+        )
+        return version
+    logger.info(
+        "torq-examples moved to %s; updating %s from %s to %s.",
+        current, repo_id, version, target,
+    )
+    return target
+
+
+def warn_if_model_incompatible(repo_id: str, version: str | None) -> None:
+    """Warn when model *version* is not in the ``VERSION`` file's ``major.minor`` series."""
+    current = examples_version()
+    series = release_series(version)
+    if series is not None and series != release_series(current):
+        logger.warning(
+            "%s is at model version %s, which is not compatible with torq-examples "
+            "%s (only matching major.minor versions are); it may fail to load or run.",
+            repo_id, version, current,
+        )
 
 
 def parse_model_specs(specs: list[str]) -> list[tuple[str, str | None]]:

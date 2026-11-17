@@ -262,11 +262,14 @@ def write_manifest(
     version: str | None = None,
     revision: str | None = None,
     file_info: dict[str, dict] | None = None,
+    pinned: bool = False,
 ) -> Path:
     """Write a manifest after a successful model setup.
 
     ``version`` records the version tag the copy tracks (``None`` =
-    unversioned, i.e. the repo's latest at download time); ``revision`` records
+    unversioned, i.e. the repo's latest at download time); ``pinned`` records
+    that the version was requested explicitly, so it is never moved to a new
+    torq-examples release series; ``revision`` records
     the upstream commit the files were downloaded from, so later runs can
     detect when the local copy is out of date. ``file_info`` (optional) records
     per-file ``{size, sha256}`` from the Hub metadata so a later refresh can
@@ -277,6 +280,7 @@ def write_manifest(
     manifest = {
         "repo_id": repo_id,
         "version": version,
+        "pinned": pinned,
         "revision": revision,
         "files": sorted(files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -481,6 +485,7 @@ def ensure_model(
     revision: str | None,
     download: Callable[[], list[str]],
     record: bool = True,
+    pinned: bool = False,
 ) -> ModelStatus:
     """Refresh ``model_dir`` to track ``version`` when it is stale or incomplete.
 
@@ -508,7 +513,9 @@ def ensure_model(
         )
         if status is ModelStatus.UP_TO_DATE and version is not None:
             manifest = read_manifest(model_dir)
-            if manifest is not None and manifest.get("version") != version:
+            if manifest is not None and (
+                manifest.get("version") != version or manifest.get("pinned", False) != pinned
+            ):
                 # Content is identical (same commit) but the user asked to
                 # track a different version name; adopt it so future refreshes
                 # follow the version the user last requested, without
@@ -520,6 +527,7 @@ def ensure_model(
                     version=version,
                     revision=manifest.get("revision") or revision,
                     file_info=manifest.get("file_info"),
+                    pinned=pinned,
                 )
     else:
         status = ModelStatus.UP_TO_DATE if files_present else ModelStatus.INCOMPLETE
@@ -547,6 +555,7 @@ def ensure_model(
             file_info=get_hf_file_info(
                 repo_id, revision=revision, filenames=set(files)
             ),
+            pinned=pinned,
         )
     else:
         logger.info(
