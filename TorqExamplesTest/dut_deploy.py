@@ -16,8 +16,7 @@ board and runs the per-demo inference matrix:
 
 The DUT workspace is wiped and rebuilt on every run: stale files on the
 board (old models, old venv state, old sources) would pollute the test
-results. Debug escape hatch: TORQ_DUT_SKIP_PREPARE=1 keeps the existing
-workspace (local fast iteration only).
+results.
 
 Inference commands are ported 1:1 from the legacy DUT-driven builder
 (demo_executor._build_demo_run_commands), with file discovery moved from
@@ -34,11 +33,10 @@ Environment variables:
                              (standalone fallback without torq.utils.boards)
     TORQ_DUT_REMOTE_ROOT     repo root on the DUT (default: /home/torq-examples)
     TORQ_DUT_RUNTIME_WHEEL   host path to the aarch64 torq-runtime wheel (required)
-    TORQ_DUT_KO              host path to syna_npu.ko (required)
-    TORQ_DUT_SKIP_PREPARE    "1" = keep existing DUT workspace (debug only)
-    TORQ_DUT_SKIP_DEPLOY     "1" = skip all deploy phases (connectivity only),
-                             run the inference matrix on the current DUT state
-                             (debug iteration on infer commands)
+    TORQ_DUT_RUNTIME_WHEEL_SHA256  SHA-256 of the source runtime wheel
+    TORQ_DUT_KO              host path to syna_npu.ko, or "on_board_default"
+    TORQ_ASTRA_SL_RELEASE_SHA256   SHA-256 of the source astra-release.tar.gz
+    TORQ_DUT_KO_SHA256       SHA-256 of the source syna_npu.ko
 """
 
 from __future__ import annotations
@@ -167,14 +165,7 @@ DEMO_SPECS: dict[str, dict] = {
     "EmbeddingGemma-2": {
         "app_dir": "EmbeddingGemma-2",
         "model_dirs": ["Synaptics/Google-EmbeddingGemma-2"],
-        # Known platform limitation on SL2619: the full text session keeps
-        # text_body_s128 + text_body_s512 resident and text_body_s512 fails to
-        # map (xram_write out of bounds) at warmup. All 7 vmfbs profile OK in
-        # isolation, so the model runs; only the combined infer session is
-        # blocked. The "embed" builder is retained -- flip builder back to
-        # "embed" once the runner seq_lens/XRAM budget is fixed for this board.
-        "builder": None,
-        "debt": "full text session blocked on SL2619 (text_body_s512 XRAM OOB at warmup); all 7 vmfbs profile OK in isolation",
+        "builder": "embed",
         "expect": None,
     },
 }
@@ -182,6 +173,9 @@ DEMO_SPECS: dict[str, dict] = {
 
 class DutDeployError(RuntimeError):
     pass
+
+
+ON_BOARD_DEFAULT_KO = "on_board_default"
 
 
 @dataclass
@@ -443,14 +437,6 @@ class DutDeployRunner:
             result.stderr += "\n[dut_deploy] DUT is not aarch64 - check TORQ_DUT_SERIAL"
         return result
 
-    def _workspace_present(self) -> bool:
-        probe = self._shell(
-            f"test -f {shlex.quote(self.remote_root + '/setup_demos.py')} && "
-            f"test -x {shlex.quote(self.remote_root + '/.venv/bin/python')} && "
-            "echo WORKSPACE_PRESENT"
-        )
-        return probe.passed and "WORKSPACE_PRESENT" in probe.stdout
-
     def _push_source_and_bootstrap_venv(self, info: str) -> PhaseResult:
         tar_cmd = (
             f"tar -cf - -C {shlex.quote(str(self.examples_root))} "
@@ -593,9 +579,33 @@ class DutDeployRunner:
         # prepare_metadata.json (consumed by the report header + JSON export)
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
+            runtime_wheel_sha256 = os.getenv(
+                "TORQ_DUT_RUNTIME_WHEEL_SHA256", ""
+            ).strip()
+            astra_release_sha256 = os.getenv(
+                "TORQ_ASTRA_SL_RELEASE_SHA256", ""
+            ).strip()
+            ko_sha256 = os.getenv("TORQ_DUT_KO_SHA256", "").strip()
+            if self.ko == ON_BOARD_DEFAULT_KO:
+                astra_release_status = "missing_or_expired"
+                ko_source = ON_BOARD_DEFAULT_KO
+            elif astra_release_sha256:
+                astra_release_status = "downloaded"
+                ko_source = "astra-sl-release"
+            else:
+                astra_release_status = "not_recorded"
+                ko_source = "astra-sl-release" if self.ko else "not_recorded"
             (self.log_dir / "prepare_metadata.json").write_text(
                 json.dumps(
-                    {"torq_examples_commit": commit, "dut_sdk_version": sdk},
+                    {
+                        "torq_examples_commit": commit,
+                        "dut_sdk_version": sdk,
+                        "torq_runtime_wheel_sha256": runtime_wheel_sha256,
+                        "astra_sl_release_sha256": astra_release_sha256,
+                        "astra_sl_release_status": astra_release_status,
+                        "dut_ko_sha256": ko_sha256,
+                        "dut_ko_source": ko_source,
+                    },
                     indent=2,
                 ),
                 encoding="utf-8",
@@ -606,19 +616,6 @@ class DutDeployRunner:
 
     def phase_prepare_workspace(self) -> PhaseResult:
         """Wipe and rebuild the DUT workspace (fresh state, no pollution)."""
-        if os.getenv("TORQ_DUT_SKIP_PREPARE", "") == "1":
-            if self._workspace_present():
-                info = (
-                    f"[dut_deploy] TORQ_DUT_SKIP_PREPARE=1 - keeping existing "
-                    f"workspace at {self.remote_root} (debug mode)\n"
-                )
-                print(info)
-                return PhaseResult("prepare-workspace", 0, info)
-            raise DutDeployError(
-                "TORQ_DUT_SKIP_PREPARE=1 but the DUT workspace is incomplete; "
-                "rerun without it to rebuild"
-            )
-
         info = (
             f"[dut_deploy] rebuild DUT workspace (stale files wiped):\n"
             f"    wipe   : rm -rf {self.remote_root}\n"
@@ -691,6 +688,22 @@ class DutDeployRunner:
         return result
 
     def phase_ko_swap(self) -> PhaseResult:
+        if self.ko == ON_BOARD_DEFAULT_KO:
+            info = (
+                "[dut_deploy] using the kernel module already loaded on the DUT; "
+                "no module replacement requested\n"
+            )
+            print(info)
+            result = self._shell("grep -qE '^syna_npu[[:space:]]' /proc/modules")
+            result.phase = "keep-on-board-ko"
+            result.stdout = info + result.stdout
+            if not result.passed:
+                result.stderr = (
+                    "on-board syna_npu module is not loaded; cannot use "
+                    "on_board_default\n" + result.stderr
+                )
+            return result
+
         remote_ko = f"{self.remote_root}/syna_npu.ko"
         info = (
             f"[dut_deploy] kernel module swap:\n"
@@ -1337,9 +1350,6 @@ def _standalone_main(argv: list[str]) -> int:
         ("ko-swap", runner.phase_ko_swap),
         ("wheel-install", runner.phase_wheel_install),
     )
-    if os.getenv("TORQ_DUT_SKIP_DEPLOY", "") == "1":
-        deploy_phases = deploy_phases[:1]
-        print("   (TORQ_DUT_SKIP_DEPLOY=1: running infer on current DUT state)")
     try:
         for name, fn in deploy_phases:
             try:

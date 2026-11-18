@@ -167,7 +167,9 @@ def load_prepare_metadata(profile_dir: Path) -> dict[str, str]:
         key: str(value)
         for key, value in parsed.items()
         if key in {"torq_examples_commit", "dut_sdk_version",
-                   "torq_compiler_version", "torq_compiler_role"} and value
+                   "torq_runtime_wheel_sha256", "astra_sl_release_sha256",
+                   "astra_sl_release_status", "dut_ko_sha256",
+                   "dut_ko_source"} and value
     }
 
 
@@ -482,14 +484,6 @@ def merge_profile_records(*record_groups: list[dict[str, Any]]) -> list[dict[str
     return merged
 
 
-def _compiler_header_text(metadata: dict[str, str]) -> str:
-    """The compiler never builds models in the current flow (models are
-    pre-compiled at release time), so the row states that unconditionally.
-    The installed compiler version (if any) is still recorded in the JSON
-    report for machine consumption."""
-    return "n/a in this run - models are pre-compiled (see VERSION / revision columns)"
-
-
 def build_html(
     tests: list[tuple[str, str, float]],
     profile_records: list[dict[str, Any]],
@@ -526,8 +520,24 @@ def build_html(
             runtime_version,
         ),
         (
-            "Compiler",
-            _compiler_header_text(metadata),
+            "Torq Runtime Wheel SHA-256",
+            metadata.get("torq_runtime_wheel_sha256") or "not recorded",
+        ),
+        (
+            "Astra SL Release Status",
+            metadata.get("astra_sl_release_status") or "not recorded",
+        ),
+        (
+            "Astra SL Release SHA-256",
+            metadata.get("astra_sl_release_sha256") or "not available",
+        ),
+        (
+            "DUT Kernel Module Source",
+            metadata.get("dut_ko_source") or "not recorded",
+        ),
+        (
+            "DUT Kernel Module SHA-256",
+            metadata.get("dut_ko_sha256") or "not available",
         ),
     )
     info_rows = "".join(

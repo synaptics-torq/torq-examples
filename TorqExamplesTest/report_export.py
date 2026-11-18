@@ -6,11 +6,16 @@ The suite scatters structured results across the logs directory
 document. `generate_json_report` joins them into one JSON file:
 
     {
-      "report_version": 1,
+      "report_version": 2,
       "generated_at": "...",
       "torq_examples_commit": "...",
       "dut_sdk_version": "...",
       "torq_runtime_version": "...",
+      "torq_runtime_wheel_sha256": "...",
+      "astra_sl_release_sha256": "...",
+      "astra_sl_release_status": "...",
+      "dut_ko_sha256": "...",
+      "dut_ko_source": "...",
       "target_serial": "...",
       "summary": { per-demo + per-model-file inference/profile status counts },
       "models": [ per profile case: version anchors + inference/profile status
@@ -214,13 +219,18 @@ def generate_json_report(
         )
 
     report = {
-        "report_version": 1,
+        "report_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "torq_examples_commit": metadata.get("torq_examples_commit", ""),
         "dut_sdk_version": metadata.get("dut_sdk_version", ""),
-        "torq_compiler_version": metadata.get("torq_compiler_version", ""),
-        "torq_compiler_role": metadata.get("torq_compiler_role", ""),
         "torq_runtime_version": runtime_version,
+        "torq_runtime_wheel_sha256": metadata.get(
+            "torq_runtime_wheel_sha256", ""
+        ),
+        "astra_sl_release_sha256": metadata.get("astra_sl_release_sha256", ""),
+        "astra_sl_release_status": metadata.get("astra_sl_release_status", ""),
+        "dut_ko_sha256": metadata.get("dut_ko_sha256", ""),
+        "dut_ko_source": metadata.get("dut_ko_source", ""),
         "target_serial": target_serial,
         "summary": {
             "demos": len(demos),

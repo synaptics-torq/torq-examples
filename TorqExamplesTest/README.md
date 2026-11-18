@@ -15,33 +15,41 @@ Preflight and two stages, all orchestrated from the CI host:
    unit tests do not trigger it. The fixed Netbooter sequence is in
    `dut_power_cycle.py`.
 1. **Host-side model preparation** (`host_converter.py`) — runs
-   `setup_demos.py` for every demo inside a Docker container
-   (`conversion/Dockerfile`, ubuntu 24.04 base, required because the
-   compiler wheel is `manylinux_2_39` and the CI host may be older).
+   `setup_demos.py` (or per-model `setup_demo.py` for multi-model demos) inside a Docker container
+   (`conversion/Dockerfile`, ubuntu 24.04 base) to provide an isolated,
+   consistent Python environment for model downloads and validation.
    Model artifacts land in `<examples checkout>/models/`.
 2. **DUT deploy + inference + profiling** (`test_dut_deploy.py` and
    `dut_deploy.py`) — after the shared preflight and host preparation,
    the module fixture locks `sl2619npu01` without another power cycle.
    It then wipes and rebuilds the DUT workspace (no stale-file pollution), pushes the
-   models, swaps the NPU kernel module, force-installs the aarch64 runtime
-   wheel, and runs the per-demo inference and profiling matrices (repo-root
+   models, installs the aarch64 runtime wheel, and either swaps the NPU
+   kernel module or keeps the already-loaded board module when no KO artifact
+   was supplied.
+   It then runs the per-demo inference and profiling matrices (repo-root
    `profile.py --repeat 3`, seven metrics). The fixed Netbooter sequence is
    in `dut_power_cycle.py`.
 
-The compiler/runtime/ko under test come from a test-build run's artifacts
-(passed via `TORQ_HOST_COMPILER_WHEEL`, `TORQ_DUT_RUNTIME_WHEEL`,
-`TORQ_DUT_KO`) so the tested stack is version-pinned per run.
+The runtime wheel and optional KO under test come from a test-build run's
+artifacts (`TORQ_DUT_RUNTIME_WHEEL`, `TORQ_DUT_KO`). Their SHA-256 fingerprints
+are recorded in `prepare_metadata.json`, the HTML/JSON reports, and the
+workflow artifact metadata.
 
 ## Test entries
 
 - `test_host_conversion.py` — container environment + per-demo host setup.
-  Preparation runs once per demo; every model-repository case independently
-  checks that its model directory exists and is non-empty. A preparation
-  failure is reported without retrying it in later cases for that demo.
+  Multi-model demos prepare each model repository independently using the
+  demo's `setup_demo.py` CLI and save separate
+  `<demo>_<model>_host_setup.log` files. One model's failure does not block
+  preparation of another model in the same demo. Single-model demos keep
+  using `setup_demos.py`. Each case checks that its model directory exists
+  and is non-empty; setup errors are printed immediately.
 - `test_dut_deploy.py` — `test_dut_deploy` (deploy, one case) +
   `test_dut_infer[demo]` + `test_dut_profile[demo]` (12 demos each;
   demos without an inference command builder are skipped with a reason,
   profiling applies to all)
+- EmbeddingGemma-2 inference runs the text-query session by default. Runtime
+  errors (including XRAM allocation failures) are reported as failures, not skips.
 
 ## Infrastructure
 
@@ -70,7 +78,8 @@ teardown do not repeat it.
 Standalone debugging without pytest (engine drivers, no DUT needed for
 host stage, no suite layout needed):
 
-	python3 TorqExamplesTest/host_converter.py <examples_root> [demo ...]
+	TORQ_MODEL_MODE=dev TORQ_MODEL_VERSION=v2.3.0 \
+	  python3 TorqExamplesTest/host_converter.py <examples_root> [demo ...]
 	TORQ_DUT_RUNTIME_WHEEL=... TORQ_DUT_KO=... \
 	  python3 TorqExamplesTest/dut_deploy.py <examples_root> [demo ...]
 
@@ -99,8 +108,8 @@ reports: uploads read only this run's result directory.
 
 The workflow clears inherited artifact/version paths, Python path overrides,
 pytest options/extra plugins, and disables third-party pytest plugin autoload.
-It resets container reuse/keep and DUT skip flags, rebuilds the host image
-from the checked-out Dockerfile, and pins the DUT serial/workspace.
+It rebuilds the host image from the checked-out Dockerfile and pins the DUT
+serial/workspace.
 Proxy/CA/HF credentials, board/INI configuration, and the shared TFTP
 firmware cache are preserved. Inherited `IMAGE_LOCAL` overrides are cleared
 so firmware selection uses the configured TFTP root and target build/profile.
@@ -119,10 +128,8 @@ No global Docker/cache pruning or deletion of other runs is performed.
   The workflow verifies the public tag and release, downloads
   `astra-release.tar.gz` and the matching CPython 3.12 aarch64 runtime wheel,
   and extracts `lib/syna_npu.ko`. It sets `TORQ_MODEL_MODE=release`,
-  `TORQ_HOST_COMPILER_VERSION` without the leading `v`,
-  `TORQ_HOST_COMPILER_WHEEL` to an empty string, and the absolute DUT artifact
-  paths for subsequent steps. Missing tags, releases, or artifacts fail the
-  workflow before pytest starts.
+  and exports the absolute DUT artifact paths for subsequent steps. Missing
+  tags, releases, or artifacts fail the workflow before pytest starts.
   Before checking out/preparing the examples, the workflow maps the release
   tag to its major/minor public compiler branch (`v2.3.0` -> `v2.3`) and reads
   `scripts/astra_build_version.txt` from that branch (not from the host
@@ -139,15 +146,16 @@ No global Docker/cache pruning or deletion of other runs is performed.
   serialize firmware preparation and the subsequent example tests.
 - `TORQ_MODEL_MODE=release` (default): demos consume pre-compiled models
   published on HuggingFace (version-anchored per release, e.g. v2.3.0).
-  No compiler is required on the host; only the DUT runtime wheel and
-  kernel module must match the release under test.
-- `TORQ_MODEL_MODE=dev`: build models from source with the PR compiler so
-  a not-yet-released compiler can be validated against examples. Not
-  implemented yet - the suite fails explicitly until it lands.
+  No compiler is installed; only the DUT runtime wheel and kernel module
+  are under test.
+- `TORQ_MODEL_MODE=dev`: also downloads pre-compiled models from HuggingFace,
+  pinned by `TORQ_MODEL_VERSION` (the DEV workflow uses `v2.3.0`). No compiler
+  wheel or model compilation is required. The runtime wheel and optional
+  `astra-sl-release` KO are identified in the reports by SHA-256.
 
 ## Important boundary
 
 This layer is intentionally not a validation suite for the helper
 implementation itself. The object under test is the real demo stack
-(compiler × runtime × ko × models × examples code) on the DUT, not the
-Python orchestration used to drive it.
+(runtime × ko × models × examples code) on the DUT, not the Python
+orchestration used to drive it.

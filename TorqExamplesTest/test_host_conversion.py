@@ -8,10 +8,9 @@ host checkout, ready to be pushed to the board for inference.
 
 TorqExamplesTest has two model modes, selected by TORQ_MODEL_MODE:
     release (default): download and validate models already published on
-        Hugging Face and pinned to a release (e.g. moonshine v2.3.0).
-        No host-side model compilation is required.
-    dev: build models from source using the PR compiler, as specified by
-        IOTMMSQA-18868 ("build all models from their sources").
+        Hugging Face using the normal release version resolution.
+    dev: download pre-compiled models from Hugging Face pinned by
+        TORQ_MODEL_VERSION. No compiler or model compilation is involved.
 
 Model preparation runs on the CI host inside a Docker container (see
 host_converter.py), producing artifacts for subsequent DUT deployment
@@ -28,10 +27,6 @@ from TorqExamplesTest.host_converter import HostSetupError, HostSetupRunner
 REGISTRY = demo_registry()
 MODEL_CASES = demo_model_cases()
 
-_converted_demos: set[str] = set()
-_failed_demos: set[str] = set()
-
-
 @pytest.fixture(scope="session")
 def host_setup(dut_ready: None) -> HostSetupRunner:
     runner = HostSetupRunner(examples_root=REPO_ROOT, log_dir=REPO_ROOT / "logs")
@@ -46,13 +41,11 @@ def host_setup(dut_ready: None) -> HostSetupRunner:
 
 
 def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
-    """Host environment ready: venv + requirements (release) or container
-    venv + verified compiler (dev)."""
+    """Host environment is ready without installing a compiler in either mode."""
     result = host_setup.setup_environment()
     if host_setup.model_mode == "dev":
-        assert "torq.compiler import OK" in result.stdout, (
-            "compiler wheel did not import inside the container "
-            "(check glibc/GLIBCXX compatibility of the base image)"
+        assert "compiler: not installed (dev mode: HF model download)" in result.stdout, (
+            "dev model downloads must not depend on a compiler installation"
         )
     else:
         assert "compiler: not installed (release mode)" in result.stdout
@@ -61,37 +54,32 @@ def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
 
 @pytest.mark.parametrize("model_case", MODEL_CASES, ids=lambda case: case.case_id)
 def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
-    """Prepare demo models for TORQ_MODEL_MODE: release downloads or dev builds."""
+    """Prepare release models, pinning DEV downloads to TORQ_MODEL_VERSION."""
     demo = model_case.demo_name
     print(
         f"\n[host_setup] Starting {model_case.case_id}: "
         f"mode={host_setup.model_mode}, repo_id={model_case.repo_id}",
         flush=True,
     )
-    if demo in _converted_demos:
-        print(
-            f"[host_setup] {model_case.case_id}: reusing earlier demo preparation; "
-            "checking this model directory",
-            flush=True,
-        )
-    elif demo in _failed_demos:
-        pytest.fail(f"demo '{demo}' host setup already failed in an earlier case "
-                    f"(see its log: logs/{demo}_host_setup.log)")
-    else:
-        spec = REGISTRY[demo]
-        try:
+    spec = REGISTRY[demo]
+    try:
+        if len(spec.setup_model_repositories) > 1:
+            result = host_setup.setup_demo(
+                demo, spec.app_dir, model_name=model_case.model_name
+            )
+        else:
             result = host_setup.setup_demo(demo, spec.app_dir)
-        except HostSetupError:
-            _failed_demos.add(demo)
-            raise
-        if not result.passed:
-            _failed_demos.add(demo)
-        assert result.passed, (
-            f"host setup for demo '{demo}' failed rc={result.returncode}\n"
+    except HostSetupError as exc:
+        print(f"[host_setup] FAILED {model_case.case_id}: {exc}", flush=True)
+        raise
+    if not result.passed:
+        message = (
+            f"host setup for model '{model_case.case_id}' failed rc={result.returncode}\n"
             f"stdout tail:\n{result.stdout[-2000:]}\n"
             f"stderr tail:\n{result.stderr[-2000:]}"
         )
-        _converted_demos.add(demo)
+        print(f"[host_setup] FAILED {model_case.case_id}: {message}", flush=True)
+        raise AssertionError(message)
 
     model_dir = host_setup.examples_root / "models" / model_case.repo_id
     assert model_dir.is_dir() and any(model_dir.rglob("*")), (
