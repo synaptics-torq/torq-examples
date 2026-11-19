@@ -145,11 +145,14 @@ No global Docker/cache pruning or deletion of other runs is performed.
   The two workflows share concurrency group `syna-uboot-burn-astra-sh` to
   serialize firmware preparation and the subsequent example tests.
 - `TORQ_MODEL_MODE=release` (default): demos consume pre-compiled models
-  published on HuggingFace (version-anchored per release, e.g. v2.3.0).
+  published on HuggingFace, version-anchored to the checked-out torq-examples
+  `VERSION` file (e.g. 2.3.0 -> v2.3.0). Setting `TORQ_MODEL_VERSION` pins an
+  explicit release instead (the daily release workflow passes the `rel` tag).
   No compiler is installed; only the DUT runtime wheel and kernel module
   are under test.
 - `TORQ_MODEL_MODE=dev`: also downloads pre-compiled models from HuggingFace,
-  pinned by `TORQ_MODEL_VERSION` (the DEV workflow uses `v2.3.0`). No compiler
+  pinned by `TORQ_MODEL_VERSION` (required; the DEV workflow takes it from the
+  `models_version` input or the torq-examples `VERSION` file). No compiler
   wheel or model compilation is required. The runtime wheel and optional
   `astra-sl-release` KO are identified in the reports by SHA-256.
 

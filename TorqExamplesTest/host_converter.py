@@ -169,7 +169,8 @@ class HostSetupRunner:
         Runs in the container (both modes).
 
         Both modes download pre-compiled models and do not install a compiler.
-        Dev mode's fixed model version is applied by setup_demo().
+        A pinned model version (TORQ_MODEL_VERSION) is applied by setup_demo()
+        in both modes.
         """
         compiler_message = (
             "compiler: not installed (dev mode: HF model download)"
@@ -230,7 +231,7 @@ class HostSetupRunner:
                 demo_req = f"pip install --no-cache-dir -r {shlex.quote(app_dir + '/requirements.txt')}"
         model_version_arg = (
             f" --model-version {shlex.quote(self.model_version)}"
-            if self.model_mode == "dev"
+            if self.model_version
             else ""
         )
         setup_command = f"python setup_demos.py {shlex.quote(demo)}{model_version_arg}"

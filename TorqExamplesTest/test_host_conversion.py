@@ -54,7 +54,7 @@ def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
 
 @pytest.mark.parametrize("model_case", MODEL_CASES, ids=lambda case: case.case_id)
 def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
-    """Prepare release models, pinning DEV downloads to TORQ_MODEL_VERSION."""
+    """Prepare models, pinning downloads to TORQ_MODEL_VERSION when set."""
     demo = model_case.demo_name
     print(
         f"\n[host_setup] Starting {model_case.case_id}: "
