@@ -26,12 +26,14 @@ from utils.model_setup import (
 logger = logging.getLogger("Gemma3.setup")
 
 GEMMA3_HF_REPO_MAP: Final[dict[str, str]] = {
-    "default": "Synaptics/gemma-3-270m-torq",
+    "base": "Synaptics/gemma-3-270m-torq",
     "instruct": "Synaptics/gemma-3-270m-it-torq",
     "instruct-int4-gptq": "Synaptics/gemma-3-270-GPTQ-int4-it-torq",
 }
 #: The model the demo sets up and runs by default.
 DEFAULT_MODEL: Final[str] = "instruct-int4-gptq"
+#: Whether :data:`DEFAULT_MODEL` needs instruct (chat template) mode.
+DEFAULT_MODEL_IS_INSTRUCT: Final[bool] = DEFAULT_MODEL.startswith("instruct")
 _DEFAULT_MODELS: Final[list[str]] = [DEFAULT_MODEL]
 _GEMMA3_MODEL_FILENAMES: Final[tuple[tuple[str, ...], ...]] = (
     ("transformer.vmfb", "lm_head.vmfb.trim"),

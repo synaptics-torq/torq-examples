@@ -36,7 +36,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from gemma3.setup_demo import download_gemma3, local_gemma3_model_path
+from gemma3.setup_demo import DEFAULT_MODEL_IS_INSTRUCT, download_gemma3, local_gemma3_model_path
 from runner import Gemma3Static
 from utils.inference import add_llm_inference_args
 from utils.log import configure_logging
@@ -517,4 +517,7 @@ if __name__ == "__main__":
                 ),
             )
         )
+        # An instruct model run without its chat template never emits
+        # <end_of_turn> and loops until the generation limit.
+        args.instruct_model = args.instruct_model or DEFAULT_MODEL_IS_INSTRUCT
     main(args)

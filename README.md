@@ -83,7 +83,7 @@ This repo's version is recorded in the `VERSION` file at the root and tracks the
 - Re-running setup without a version moves every model back to the `VERSION` tag. When `VERSION` moves to a new `major.minor` series (e.g. after pulling torq-examples `3.0.0`), models that were not pinned also follow it on the next demo run, without re-running setup; if a model repo has no tag of the new series yet, the model is kept on its old version with a warning.
 - `--model-version vX.Y.Z` (per-demo `setup_demo.py` or `setup_demos.py`) pins a specific model version. A pinned version is kept in sync with its own tag but never upgraded, not even by a `VERSION` series change, until you re-run setup without `--model-version`.
 - Setup and the demos warn when a pinned model's version is not in the same `major.minor` series as `VERSION`, since it may fail to load or run.
-- `name:version` in a model argument pins a single model, e.g. `python setup_demo.py default:v2.0.0 custom/gemma3`.
+- `name:version` in a model argument pins a single model, e.g. `python setup_demo.py instruct:v2.0.0 custom/gemma3`.
 - Custom (non-Synaptics) repos have no default version: `python setup_demo.py custom/gemma3` downloads the repo's latest (HEAD) revision, untracked.
 - `--no-update` downloads without writing a `.manifest.json`; the model is then excluded from the tracking system entirely (no checks, no refreshes), at your own risk.
 
