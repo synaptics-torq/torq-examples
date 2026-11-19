@@ -368,10 +368,13 @@ def check_model_status(
     local_revision = manifest.get("revision") if manifest else None
 
     if version is not None and revision is not None and local_revision != revision:
-        logger.info(
-            "Local model files for %s no longer match version %s; re-downloading.",
-            repo_id, version,
-        )
+        if manifest is None:
+            logger.info("Downloading %s version %s.", repo_id, version)
+        else:
+            logger.info(
+                "Local model files for %s no longer match version %s; re-downloading.",
+                repo_id, version,
+            )
         return ModelStatus.STALE
     if not files_present:
         return ModelStatus.INCOMPLETE
