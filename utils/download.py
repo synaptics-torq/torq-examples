@@ -45,6 +45,7 @@ __all__ = [
     "write_manifest",
     "verify_manifest",
     "read_manifest",
+    "remove_damaged_files",
     "ModelStatus",
     "check_model_status",
     "clear_model_dir",
@@ -311,6 +312,27 @@ def verify_manifest(model_dir: Path) -> bool:
         return False
     model_dir = Path(model_dir)
     return all((model_dir / filename).exists() for filename in files)
+
+
+def remove_damaged_files(model_dir: Path) -> list[str]:
+    """Delete tracked files whose size differs from the manifest's ``file_info``.
+
+    A truncated or otherwise damaged file still "exists", so completeness
+    checks would keep it forever; removing it makes the next refresh fetch it
+    again. Returns the removed file names.
+    """
+    manifest = read_manifest(model_dir) or {}
+    removed = []
+    for filename, info in (manifest.get("file_info") or {}).items():
+        path = Path(model_dir) / filename
+        if info.get("size") is not None and path.is_file() and path.stat().st_size != info["size"]:
+            logger.warning(
+                "%s is %d bytes but should be %d; re-downloading it.",
+                path, path.stat().st_size, info["size"],
+            )
+            path.unlink()
+            removed.append(filename)
+    return removed
 
 
 def read_manifest(model_dir: Path) -> dict | None:

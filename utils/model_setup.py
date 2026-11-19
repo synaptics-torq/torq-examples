@@ -35,6 +35,7 @@ from utils.download import (
     get_hf_file_info,
     get_hf_revision,
     read_manifest,
+    remove_damaged_files,
     resolve_repo_id,
     verify_manifest,
     write_manifest,
@@ -107,6 +108,7 @@ def refresh_model(
     model_dir = Path(model_dir)
     previously_tracked: set[str] | None = None
     if record:
+        remove_damaged_files(model_dir)
         if tracked_files_present is None:
             present = verify_manifest(model_dir) and files_present(model_dir)
         else:

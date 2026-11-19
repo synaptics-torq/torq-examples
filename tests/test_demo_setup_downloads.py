@@ -1710,3 +1710,25 @@ def test_inference_flags_corrupt_manifest_for_repair(tmp_path, caplog):
 
     rev.assert_not_called()
     assert "Run `python setup_demos.py moonshine` to repair them." in caplog.text
+
+
+def test_inference_redownloads_truncated_file(tmp_path, caplog):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION)
+    files = list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
+    write_manifest(
+        model_dir, repo_id, files, version=_EXAMPLES_VERSION, revision=_REVISION,
+        file_info={f: {"size": len("old"), "sha256": None} for f in files},
+    )
+    (model_dir / files[0]).write_text("o")  # e.g. a copy cut short by a full disk
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(moonshine_setup, "download_from_hf", side_effect=_fake_download(tmp_path)) as download,
+        caplog.at_level(logging.WARNING),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    assert download.called
+    assert (model_dir / files[0]).read_text() == f"{files[0]}@{_EXAMPLES_VERSION}"
+    assert "is 1 bytes but should be 3" in caplog.text
