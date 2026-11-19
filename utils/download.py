@@ -288,7 +288,14 @@ def write_manifest(
     if file_info:
         manifest["file_info"] = {name: file_info[name] for name in sorted(file_info) if name in set(files)}
     manifest_path = model_dir / _MANIFEST_FILENAME
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp_path = manifest_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    # Flush the model files to disk before the manifest claims them, and swap
+    # the manifest in atomically: after a power loss, freshly written files
+    # can otherwise come back empty next to a manifest that looks complete.
+    os.sync()
+    os.replace(tmp_path, manifest_path)
+    os.sync()
     logger.debug("Wrote manifest to %s", manifest_path)
     return manifest_path
 

@@ -26,6 +26,7 @@ from typing import Final
 
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import (
+    _MANIFEST_FILENAME,
     DownloadError,
     ModelStatus,
     base_dir_for,
@@ -257,10 +258,17 @@ def ensure_demo_models(
             warn_if_model_incompatible(manifest.get("repo_id"), manifest.get("version"))
         return
     if manifest is None:
-        logger.info(
-            "No manifest in %s; the model is untracked, so skipping the freshness check.",
-            model_dir,
-        )
+        if (model_dir / _MANIFEST_FILENAME).exists():
+            logger.warning(
+                "The manifest in %s is unreadable, so the model files may be "
+                "incomplete. Run `python setup_demos.py %s` to repair them.",
+                model_dir, demo_name,
+            )
+        else:
+            logger.info(
+                "No manifest in %s; the model is untracked, so skipping the freshness check.",
+                model_dir,
+            )
         return
     repo_id = manifest.get("repo_id")
     if not repo_id:

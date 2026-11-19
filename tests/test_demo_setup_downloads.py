@@ -1694,3 +1694,19 @@ def test_inference_moves_unpinned_model_to_new_version_series(tmp_path):
 
     rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
     assert _manifest(model_dir)["version"] == _EXAMPLES_VERSION
+
+
+def test_inference_flags_corrupt_manifest_for_repair(tmp_path, caplog):
+    # e.g. a power loss while setup was writing it: the files cannot be trusted.
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION)
+    (model_dir / ".manifest.json").write_text("")
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+        caplog.at_level(logging.WARNING),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    rev.assert_not_called()
+    assert "Run `python setup_demos.py moonshine` to repair them." in caplog.text
