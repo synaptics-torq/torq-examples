@@ -17,7 +17,9 @@ Configuration (environment variables):
 
 The examples checkout is mounted at /examples (writable) so model
 artifacts land in <checkout>/models/<org>/<repo-id>/, exactly mirroring
-the legacy DUT layout that the push-to-board step expects.
+the legacy DUT layout that the push-to-board step expects. The container
+runs with the invoking host user's UID/GID so checkout files remain writable
+by the CI runner.
 """
 
 from __future__ import annotations
@@ -81,10 +83,21 @@ class HostSetupRunner:
     def docker_available(self) -> bool:
         return self._docker("version", check=False).returncode == 0
 
+    @staticmethod
+    def _host_identity() -> tuple[int, int]:
+        if not hasattr(os, "getuid") or not hasattr(os, "getgid"):
+            raise HostSetupError("Host model preparation requires a POSIX host UID/GID")
+        return os.getuid(), os.getgid()
+
     def ensure_image(self) -> None:
         context = Path(__file__).resolve().parent / "conversion"
+        uid, gid = self._host_identity()
         print(f"[host_setup] building image {self.image} from {context}")
-        self._docker("build", "-f", str(context / "Dockerfile"), "-t", self.image, str(context))
+        self._docker(
+            "build", "-f", str(context / "Dockerfile"), "-t", self.image,
+            "--build-arg", f"HOST_UID={uid}", "--build-arg", f"HOST_GID={gid}",
+            str(context),
+        )
 
     @staticmethod
     def _host_dns_servers() -> list[str]:
@@ -105,8 +118,10 @@ class HostSetupRunner:
     def start(self) -> None:
         if self._started:
             return
+        uid, gid = self._host_identity()
         args = [
             "run", "-d", "--name", self.container, "--net=host",
+            "--user", f"{uid}:{gid}",
             "-v", f"{self.examples_root}:/examples",
         ]
         # Mirror host DNS: the docker daemon may impose its own nameserver
@@ -143,7 +158,8 @@ class HostSetupRunner:
             self._started = False
 
     def _exec(self, script: str) -> SetupResult:
-        proc = self._docker("exec", self.container, "bash", "-lc", script, check=False)
+        # A login shell can replace HOME with a base-image user's home for this UID.
+        proc = self._docker("exec", self.container, "bash", "-c", script, check=False)
         return SetupResult(proc.returncode, proc.stdout, proc.stderr)
 
     # -------------------------------------------------------- environment
@@ -163,19 +179,19 @@ class HostSetupRunner:
         script = f"""
             set -euo pipefail
             if [ -f /host_ca/system.crt ]; then
-                cat /host_ca/system.crt /host_ca/custom/* 2>/dev/null > /opt/cabundle.pem                     || cp /host_ca/system.crt /opt/cabundle.pem
-                printf 'export REQUESTS_CA_BUNDLE=/opt/cabundle.pem\\nexport SSL_CERT_FILE=/opt/cabundle.pem\\nexport CURL_CA_BUNDLE=/opt/cabundle.pem\\n' > /opt/torq-ca.env
-                echo "host CAs merged into /opt/cabundle.pem"
+                cat /host_ca/system.crt /host_ca/custom/* 2>/dev/null > /work/cabundle.pem                     || cp /host_ca/system.crt /work/cabundle.pem
+                printf 'export REQUESTS_CA_BUNDLE=/work/cabundle.pem\\nexport SSL_CERT_FILE=/work/cabundle.pem\\nexport CURL_CA_BUNDLE=/work/cabundle.pem\\n' > /work/torq-ca.env
+                echo "host CAs merged into /work/cabundle.pem"
             fi
-            python3.12 -m venv /opt/venv
-            . /opt/venv/bin/activate
-            [ -f /opt/torq-ca.env ] && . /opt/torq-ca.env || true
+            python3.12 -m venv /work/venv
+            . /work/venv/bin/activate
+            [ -f /work/torq-ca.env ] && . /work/torq-ca.env || true
             echo '{compiler_message}'
             cd /examples
             pip install --no-cache-dir -r requirements.txt
             pip install --no-cache-dir -q hf_xet || echo 'hf_xet unavailable, using regular HTTP downloads'
-            if [ -f /opt/cabundle.pem ]; then
-                python3.12 -c 'import ssl, urllib.request; print("HF TLS check:", urllib.request.urlopen("https://huggingface.co", timeout=20, context=ssl.create_default_context(cafile="/opt/cabundle.pem")).status)'                     || echo 'WARNING: HF TLS check failed with merged CAs'
+            if [ -f /work/cabundle.pem ]; then
+                python3.12 -c 'import ssl, urllib.request; print("HF TLS check:", urllib.request.urlopen("https://huggingface.co", timeout=20, context=ssl.create_default_context(cafile="/work/cabundle.pem")).status)'                     || echo 'WARNING: HF TLS check failed with merged CAs'
             fi
             echo 'host environment ready'
         """
@@ -230,8 +246,8 @@ class HostSetupRunner:
             log_stem = f"{demo}_{Path(model_name).name}_host_setup"
         script = f"""
             set -uo pipefail
-            . /opt/venv/bin/activate
-            [ -f /opt/torq-ca.env ] && . /opt/torq-ca.env
+            . /work/venv/bin/activate
+            [ -f /work/torq-ca.env ] && . /work/torq-ca.env
             cd /examples
             {demo_req}
             {setup_command}
@@ -247,8 +263,8 @@ class HostSetupRunner:
                       f"installing {req} and retrying")
                 retry_script = f"""
                     set -uo pipefail
-                    . /opt/venv/bin/activate
-                    [ -f /opt/torq-ca.env ] && . /opt/torq-ca.env
+                    . /work/venv/bin/activate
+                    [ -f /work/torq-ca.env ] && . /work/torq-ca.env
                     pip install --no-cache-dir -r {shlex.quote(req)}
                     cd /examples
                     {setup_command}

@@ -20,4 +20,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libstdc++6 ca-certificates git \
     && rm -rf /var/lib/apt/lists/*
 
+ARG HOST_UID=1000
+ARG HOST_GID=1000
+
+RUN mkdir -p /work && chown "${HOST_UID}:${HOST_GID}" /work
+
+ENV HOME=/work
+USER ${HOST_UID}:${HOST_GID}
 WORKDIR /work
