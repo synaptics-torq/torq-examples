@@ -202,7 +202,7 @@ if __name__ == "__main__":
         )
 
     try:
-        check_requirements("requirements.txt")
+        check_requirements(os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt"))
     except MissingRequirementsError as e:
         logger.error("%s", e)
         sys.exit(1)
