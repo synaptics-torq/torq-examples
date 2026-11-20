@@ -19,7 +19,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root, for `utils`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from utils.version import warn_if_runtime_mismatch  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
 
@@ -48,6 +50,7 @@ def main():
     args = ap.parse_args()
     args.model_dir = resolve_model_dir(ap, args.model_dir)
     logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="%(message)s")
+    warn_if_runtime_mismatch()
 
     modalities = {"text"} | ({"image"} if args.images else set()) | ({"video"} if args.videos else set()) \
         | ({"audio"} if args.audios else set())

@@ -37,6 +37,8 @@ The infer script entry point must use the `utils.tasks.[task_category].infer_mai
 
 The validate script entry point must use the `utils.tasks.[task_category].validate_main` function.
 
+Every inference and validation script must call `utils.version.warn_if_runtime_mismatch()` at the start of its `main()`, right after logging is configured, so users are warned when the installed `torq-runtime` does not match the repo's `VERSION`. Setup entry points get this through `utils.model_setup.demo_main`.
+
 The info file must be a valid JSON file and should include at least the following fields:
 
 - `name`: the name of the example

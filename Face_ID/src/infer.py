@@ -18,6 +18,7 @@ from Face_ID.setup_demo import download_face_detector, local_face_id_model_path
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.runtime import build_runtime_flags, cleanup_npu_after_inference
+from utils.version import warn_if_runtime_mismatch
 
 MODEL_WIDTH = 1280
 MODEL_HEIGHT = 704
@@ -97,6 +98,7 @@ def main() -> None:
     parser.add_argument("--confidence-threshold", type=float, default=0.6)
     args = parser.parse_args()
     configure_logging("INFO")
+    warn_if_runtime_mismatch()
     if args.model is None:
         args.model = str(
             resolve_default_model(

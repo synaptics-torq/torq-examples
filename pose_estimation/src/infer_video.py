@@ -26,6 +26,7 @@ from utils.pose_estimation import (
 )
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
+from utils.version import warn_if_runtime_mismatch
 
 
 def make_process_fn(runner):
@@ -49,6 +50,7 @@ def main():
     )
     args = parser.parse_args()
     configure_logging("INFO")
+    warn_if_runtime_mismatch()
 
     if args.model is None:
         args.model = str(

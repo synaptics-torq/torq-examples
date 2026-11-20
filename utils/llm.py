@@ -1076,13 +1076,15 @@ class DecoderOnlyLLMRunner(ABC):
             yield prev_text
             yield_ns += time.perf_counter_ns() - yield_start_ns
 
+            # Without an explicit limit, one answer may fill the KV cache once:
+            # with a cache window, a model that never emits EOS (e.g. a
+            # repetition loop) would otherwise generate forever.
+            max_gen = self._max_gen_tokens if self._max_gen_tokens is not None else self._max_seq_len
             gen = [next_tok]
             while not self._should_stop(next_tok, gen):
                 _raise_if_stopped(should_stop)
-                if self._max_gen_tokens is not None and len(gen) >= self._max_gen_tokens:
-                    self._logger.info(
-                        "Max generation tokens reached (%d)", self._max_gen_tokens
-                    )
+                if len(gen) >= max_gen:
+                    self._logger.info("Max generation tokens reached (%d)", max_gen)
                     break
                 if pos >= self._max_seq_len:
                     if self._cache_keep_n is not None:

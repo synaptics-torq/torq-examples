@@ -1,9 +1,21 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
+from pathlib import Path
+from unittest import mock
+
 import utils.version
 from utils.download import DownloadError
-from utils.version import examples_version, parse_model_specs, resolve_model_version
+from utils.version import (
+    compatible_version,
+    examples_version,
+    follow_examples_series,
+    parse_model_specs,
+    release_series,
+    resolve_model_version,
+    warn_if_model_incompatible,
+    warn_if_runtime_mismatch,
+)
 
 
 def test_examples_version_reads_repo_version_file(tmp_path, monkeypatch):
@@ -92,3 +104,90 @@ def test_resolve_model_version_explicit_silences_missing_version_file(tmp_path, 
     builtin = frozenset({"Synaptics/repo"})
 
     assert resolve_model_version("Synaptics/repo", "v2.0.0", builtin_repos=builtin) == "v2.0.0"
+
+
+def test_compatible_version_prefers_exact_tag_then_newest_of_series():
+    tags = ["v2.2.9", "v2.3.0", "v2.3.4", "v2.3.10", "v2.4.0", "v2.3.x", "main-2.3.11"]
+    with mock.patch("utils.version.list_hf_tags", return_value=tags):
+        assert compatible_version("Synaptics/repo", "v2.3.4") == "v2.3.4"
+        # Patch level is ignored both ways: newer and older patches are compatible.
+        assert compatible_version("Synaptics/repo", "v2.3.5") == "v2.3.10"
+        assert compatible_version("Synaptics/repo", "v2.2.0") == "v2.2.9"
+
+
+def test_compatible_version_none_without_a_match():
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.2.0"]):
+        assert compatible_version("Synaptics/repo", "v2.3.0") is None  # no tag of the series
+        assert compatible_version("Synaptics/repo", "q4") is None  # not X.Y.Z
+    with mock.patch("utils.version.list_hf_tags", return_value=None):
+        assert compatible_version("Synaptics/repo", "v2.3.0") is None  # Hub unreachable
+
+
+def test_release_series():
+    assert release_series("v2.3.4") == ("2", "3")
+    assert release_series("2.3.0rc1") == ("2", "3")
+    assert release_series("q4") is None
+    assert release_series(None) is None
+
+
+def test_follow_examples_series(tmp_path, monkeypatch, caplog):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("3.0.1\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0", "v3.0.0", "v3.0.1"]) as tags:
+        assert follow_examples_series("Synaptics/repo", "v2.3.0") == "v3.0.1"
+        tags.reset_mock()
+        # Same series (any patch) and versions without a series are left alone.
+        assert follow_examples_series("Synaptics/repo", "v3.0.0") == "v3.0.0"
+        assert follow_examples_series("Synaptics/repo", "q4") == "q4"
+        assert follow_examples_series("Synaptics/repo", None) is None
+        tags.assert_not_called()
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0"]):
+        assert follow_examples_series("Synaptics/repo", "v2.3.0") == "v2.3.0"
+    assert "has no compatible model version yet" in caplog.text
+
+
+def _set_version(tmp_path, monkeypatch, version):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text(f"{version}\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+
+
+def test_warn_if_runtime_mismatch_requires_exact_version(tmp_path, monkeypatch, caplog):
+    _set_version(tmp_path, monkeypatch, "2.3.1")
+    for runtime, warns in (("2.3.1", False), ("2.3.0", True)):
+        caplog.clear()
+        with mock.patch("utils.version.importlib.metadata.version", return_value=runtime):
+            warn_if_runtime_mismatch()
+        assert ("torq-runtime 2.3.0 is installed" in caplog.text) is warns
+
+
+def test_every_demo_entry_point_checks_the_runtime():
+    # Each demo's inference/validation scripts call the check in main(), so it
+    # runs (and later moves) in the same place for every demo.
+    root = Path(utils.version.__file__).resolve().parents[1]
+    scripts = [*root.glob("*/src/infer*.py"), *root.glob("*/*/src/infer*.py")]
+    assert scripts
+    missing = [str(p.relative_to(root)) for p in scripts if "warn_if_runtime_mismatch()" not in p.read_text()]
+    assert not missing, f"entry points without warn_if_runtime_mismatch(): {missing}"
+
+
+def test_warn_if_model_incompatible_ignores_patch(tmp_path, monkeypatch, caplog):
+    _set_version(tmp_path, monkeypatch, "2.3.1")
+    warn_if_model_incompatible("Synaptics/repo", "v2.3.0")
+    warn_if_model_incompatible("Synaptics/repo", "v2.3.9")
+    warn_if_model_incompatible("Synaptics/repo", "q4")
+    assert not caplog.records
+    warn_if_model_incompatible("Synaptics/repo", "v2.2.0")
+    assert "model version v2.2.0, which is not compatible" in caplog.text
+
+
+def test_resolve_model_version_builtin_uses_compatible_tag(tmp_path, monkeypatch):
+    version_file = tmp_path / "VERSION"
+    version_file.write_text("2.3.4\n")
+    monkeypatch.setattr(utils.version, "_VERSION_FILE", version_file)
+    builtin = frozenset({"Synaptics/repo"})
+    with mock.patch("utils.version.list_hf_tags", return_value=["v2.3.0", "v2.3.1"]):
+        assert resolve_model_version("Synaptics/repo", None, builtin_repos=builtin) == "v2.3.1"
+        # An explicit version is used verbatim.
+        assert resolve_model_version("Synaptics/repo", "v2.3.0", builtin_repos=builtin) == "v2.3.0"

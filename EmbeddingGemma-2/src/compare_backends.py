@@ -26,7 +26,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root, for `utils`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+from utils.version import warn_if_runtime_mismatch  # noqa: E402
 import preprocess as pp  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
@@ -277,6 +279,7 @@ def main():
     rp.add_argument("--eval", default=str(EVAL))
     rp.add_argument("-o", "--output", default="report.md")
     args = ap.parse_args()
+    warn_if_runtime_mismatch()
     if args.cmd == "run":
         args.model_dir = resolve_model_dir(ap, args.model_dir)
     cmd_run(args) if args.cmd == "run" else cmd_report(args)

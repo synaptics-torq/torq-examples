@@ -17,6 +17,7 @@ from utils.runtime import (
     cleanup_npu_after_inference,
     setup_npu_for_inference,
 )
+from utils.version import warn_if_runtime_mismatch
 
 # The model-refresh helper lives one level up (the demo dir's setup_demo.py). The demo
 # dir name has a hyphen, so it is not importable as a package; add it to the path and
@@ -35,6 +36,7 @@ except Exception:
 
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
 
     logging.getLogger("Liquid").info("Starting assistant...")
     if ensure_liquid_models is not None:

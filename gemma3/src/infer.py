@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from runner import Gemma3Static
 from gemma3.setup_demo import (
+    DEFAULT_MODEL_IS_INSTRUCT,
     download_gemma3,
     ensure_gemma3_models,
     local_gemma3_model_path,
@@ -22,9 +23,11 @@ from utils.runtime import (
     cleanup_npu_after_inference,
     setup_npu_for_inference,
 )
+from utils.version import warn_if_runtime_mismatch
 
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
 
     logging.getLogger("Gemma3").info("Starting assistant...")
     ensure_gemma3_models(Path(args.model).parent, refresh=not args.no_refresh)
@@ -78,4 +81,7 @@ if __name__ == "__main__":
                 ),
             )
         )
+        # An instruct model run without its chat template never emits
+        # <end_of_turn> and loops until the generation limit.
+        args.instruct_model = args.instruct_model or DEFAULT_MODEL_IS_INSTRUCT
     main(args)

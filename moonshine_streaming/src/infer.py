@@ -35,10 +35,12 @@ from moonshine_streaming.setup_demo import (
     ensure_moonshine_streaming_models,
     local_moonshine_streaming_model_dir,
 )
+from utils.audio import resample
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.npu import configure_npu_userspace_frequency
+from utils.version import warn_if_runtime_mismatch
 
 logger = logging.getLogger("moonshine_streaming")
 
@@ -170,15 +172,6 @@ class TerminalListener:
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
-def resample(audio, orig_sr, target_sr=16000):
-    if orig_sr == target_sr:
-        return audio
-    duration           = len(audio) / orig_sr
-    num_target_samples = int(duration * target_sr)
-    indices            = np.linspace(0, len(audio) - 1, num_target_samples)
-    return np.interp(indices, np.arange(len(audio)), audio).astype(np.float32)
-
-
 # ── Verbose stats ────────────────────────────────────────────────────────────
 
 class _Stats:
@@ -191,6 +184,7 @@ class _Stats:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
 
     model_dir = args.model_dir
 

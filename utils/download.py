@@ -38,12 +38,14 @@ __all__ = [
     "download_from_url",
     "download_from_hf",
     "get_hf_revision",
+    "list_hf_tags",
     "get_hf_file_info",
     "hf_file_exists",
     "list_hf_files",
     "write_manifest",
     "verify_manifest",
     "read_manifest",
+    "remove_damaged_files",
     "ModelStatus",
     "check_model_status",
     "clear_model_dir",
@@ -173,6 +175,28 @@ def get_hf_revision(repo_id: str, *, revision: str | None = None) -> str | None:
         return None
 
 
+def list_hf_tags(repo_id: str) -> list[str] | None:
+    """Return the tag names of *repo_id*, or ``None`` when they cannot be listed.
+
+    Queries the refs endpoint directly because ``HfApi.list_repo_refs`` takes
+    no timeout; this one uses ``HF_CHECK_TIMEOUT`` like the other Hub checks.
+    """
+    from huggingface_hub import constants
+    from huggingface_hub.utils import build_hf_headers, get_session, hf_raise_for_status
+
+    try:
+        response = get_session().get(
+            f"{constants.ENDPOINT}/api/models/{repo_id}/refs",
+            headers=build_hf_headers(),
+            timeout=HF_CHECK_TIMEOUT,
+        )
+        hf_raise_for_status(response)
+        return [tag["name"] for tag in response.json()["tags"]]
+    except Exception as exc:  # offline, missing repo, auth failure, ...
+        logger.debug("Could not list tags of %s: %s", repo_id, exc)
+        return None
+
+
 def get_hf_file_info(
     repo_id: str,
     *,
@@ -239,11 +263,14 @@ def write_manifest(
     version: str | None = None,
     revision: str | None = None,
     file_info: dict[str, dict] | None = None,
+    pinned: bool = False,
 ) -> Path:
     """Write a manifest after a successful model setup.
 
     ``version`` records the version tag the copy tracks (``None`` =
-    unversioned, i.e. the repo's latest at download time); ``revision`` records
+    unversioned, i.e. the repo's latest at download time); ``pinned`` records
+    that the version was requested explicitly, so it is never moved to a new
+    torq-examples release series; ``revision`` records
     the upstream commit the files were downloaded from, so later runs can
     detect when the local copy is out of date. ``file_info`` (optional) records
     per-file ``{size, sha256}`` from the Hub metadata so a later refresh can
@@ -254,6 +281,7 @@ def write_manifest(
     manifest = {
         "repo_id": repo_id,
         "version": version,
+        "pinned": pinned,
         "revision": revision,
         "files": sorted(files),
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -261,7 +289,14 @@ def write_manifest(
     if file_info:
         manifest["file_info"] = {name: file_info[name] for name in sorted(file_info) if name in set(files)}
     manifest_path = model_dir / _MANIFEST_FILENAME
-    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    tmp_path = manifest_path.with_suffix(".tmp")
+    tmp_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    # Flush the model files to disk before the manifest claims them, and swap
+    # the manifest in atomically: after a power loss, freshly written files
+    # can otherwise come back empty next to a manifest that looks complete.
+    os.sync()
+    os.replace(tmp_path, manifest_path)
+    os.sync()
     logger.debug("Wrote manifest to %s", manifest_path)
     return manifest_path
 
@@ -277,6 +312,27 @@ def verify_manifest(model_dir: Path) -> bool:
         return False
     model_dir = Path(model_dir)
     return all((model_dir / filename).exists() for filename in files)
+
+
+def remove_damaged_files(model_dir: Path) -> list[str]:
+    """Delete tracked files whose size differs from the manifest's ``file_info``.
+
+    A truncated or otherwise damaged file still "exists", so completeness
+    checks would keep it forever; removing it makes the next refresh fetch it
+    again. Returns the removed file names.
+    """
+    manifest = read_manifest(model_dir) or {}
+    removed = []
+    for filename, info in (manifest.get("file_info") or {}).items():
+        path = Path(model_dir) / filename
+        if info.get("size") is not None and path.is_file() and path.stat().st_size != info["size"]:
+            logger.warning(
+                "%s is %d bytes but should be %d; re-downloading it.",
+                path, path.stat().st_size, info["size"],
+            )
+            path.unlink()
+            removed.append(filename)
+    return removed
 
 
 def read_manifest(model_dir: Path) -> dict | None:
@@ -334,10 +390,13 @@ def check_model_status(
     local_revision = manifest.get("revision") if manifest else None
 
     if version is not None and revision is not None and local_revision != revision:
-        logger.info(
-            "Local model files for %s no longer match version %s; re-downloading.",
-            repo_id, version,
-        )
+        if manifest is None:
+            logger.info("Downloading %s version %s.", repo_id, version)
+        else:
+            logger.info(
+                "Local model files for %s no longer match version %s; re-downloading.",
+                repo_id, version,
+            )
         return ModelStatus.STALE
     if not files_present:
         return ModelStatus.INCOMPLETE
@@ -458,6 +517,7 @@ def ensure_model(
     revision: str | None,
     download: Callable[[], list[str]],
     record: bool = True,
+    pinned: bool = False,
 ) -> ModelStatus:
     """Refresh ``model_dir`` to track ``version`` when it is stale or incomplete.
 
@@ -485,7 +545,9 @@ def ensure_model(
         )
         if status is ModelStatus.UP_TO_DATE and version is not None:
             manifest = read_manifest(model_dir)
-            if manifest is not None and manifest.get("version") != version:
+            if manifest is not None and (
+                manifest.get("version") != version or manifest.get("pinned", False) != pinned
+            ):
                 # Content is identical (same commit) but the user asked to
                 # track a different version name; adopt it so future refreshes
                 # follow the version the user last requested, without
@@ -497,6 +559,7 @@ def ensure_model(
                     version=version,
                     revision=manifest.get("revision") or revision,
                     file_info=manifest.get("file_info"),
+                    pinned=pinned,
                 )
     else:
         status = ModelStatus.UP_TO_DATE if files_present else ModelStatus.INCOMPLETE
@@ -524,6 +587,7 @@ def ensure_model(
             file_info=get_hf_file_info(
                 repo_id, revision=revision, filenames=set(files)
             ),
+            pinned=pinned,
         )
     else:
         logger.info(

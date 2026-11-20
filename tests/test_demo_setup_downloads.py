@@ -53,7 +53,7 @@ def _manifest(model_dir: Path) -> dict:
     return json.loads((model_dir / ".manifest.json").read_text())
 
 
-def _make_moonshine_copy(base_dir, repo_id, revision, *, version=_EXAMPLES_VERSION):
+def _make_moonshine_copy(base_dir, repo_id, revision, *, version=_EXAMPLES_VERSION, pinned=False):
     model_dir = base_dir / repo_id
     for filename in moonshine_setup._MOONSHINE_REQUIRED_FILES:
         path = model_dir / filename
@@ -65,6 +65,7 @@ def _make_moonshine_copy(base_dir, repo_id, revision, *, version=_EXAMPLES_VERSI
         list(moonshine_setup._MOONSHINE_REQUIRED_FILES),
         version=version,
         revision=revision,
+        pinned=pinned,
     )
     return model_dir
 
@@ -492,7 +493,7 @@ def test_inference_tracks_manifest_version_not_latest(tmp_path):
     """
     base_dir = tmp_path
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-    model_dir = _make_moonshine_copy(base_dir, repo_id, _REVISION, version=_PINS)
+    model_dir = _make_moonshine_copy(base_dir, repo_id, _REVISION, version=_PINS, pinned=True)
 
     with (
         mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
@@ -508,7 +509,7 @@ def test_inference_tracks_manifest_version_not_latest(tmp_path):
 def test_inference_pinned_tag_move_refreshes_at_pinned_version(tmp_path):
     base_dir = tmp_path
     repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
-    model_dir = _make_moonshine_copy(base_dir, repo_id, "old-sha", version=_PINS)
+    model_dir = _make_moonshine_copy(base_dir, repo_id, "old-sha", version=_PINS, pinned=True)
 
     with (
         mock.patch.object(model_setup, "get_hf_revision", return_value="new-sha") as rev,
@@ -1594,3 +1595,140 @@ def test_setup_demos_pose_forwards_version_flags():
     with mock.patch.object(pose_setup, "setup_pose_estimation") as pose_mock:
         setup_demos.setup_demo("pose_estimation")
     pose_mock.assert_called_once_with(model_version=None, no_update=False)
+
+
+# ── VERSION series changes ─────────────────────────────────────────────────────
+
+
+def _previous_series(version: str) -> str:
+    major, minor, _ = version.lstrip("v").split(".")
+    return f"v{major}.{int(minor) - 1}.0" if int(minor) else f"v{int(major) - 1}.0.0"
+
+
+_OLD_SERIES = _previous_series(_EXAMPLES_VERSION)
+
+
+def test_setup_moves_unpinned_model_to_new_version_series(tmp_path):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, "old-sha", version=_OLD_SERIES)
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=tmp_path),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch("utils.version.list_hf_tags", return_value=[_OLD_SERIES, _EXAMPLES_VERSION]),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(moonshine_setup, "download_from_hf", side_effect=_fake_download(tmp_path)),
+    ):
+        moonshine_setup.setup_moonshine(["tiny-en"])
+
+    rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
+    manifest = _manifest(model_dir)
+    assert manifest["version"] == _EXAMPLES_VERSION
+    assert manifest["pinned"] is False
+
+
+def test_setup_records_pin_and_rerun_without_version_resets_it(tmp_path):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = tmp_path / repo_id
+
+    with (
+        mock.patch.object(model_setup, "default_models_dir", return_value=tmp_path),
+        mock.patch.object(model_setup, "check_requirements"),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(moonshine_setup, "download_from_hf", side_effect=_fake_download(tmp_path)),
+    ):
+        moonshine_setup.setup_moonshine(["tiny-en"], model_version=_PINS)
+        assert _manifest(model_dir)["pinned"] is True
+        moonshine_setup.setup_moonshine(["tiny-en"])
+
+    assert _manifest(model_dir)["version"] == _EXAMPLES_VERSION
+    assert _manifest(model_dir)["pinned"] is False
+
+
+def test_inference_keeps_model_with_warning_when_new_series_not_published(tmp_path, caplog):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION, version=_OLD_SERIES)
+
+    with (
+        mock.patch("utils.version.list_hf_tags", return_value=[_OLD_SERIES]),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(moonshine_setup, "download_from_hf") as download,
+        caplog.at_level(logging.WARNING),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    rev.assert_called_once_with(repo_id, revision=_OLD_SERIES)
+    download.assert_not_called()
+    assert _manifest(model_dir)["version"] == _OLD_SERIES
+    assert "has no compatible model version yet" in caplog.text
+
+
+def test_inference_never_moves_pinned_model(tmp_path, caplog):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION, version=_OLD_SERIES, pinned=True)
+
+    with (
+        mock.patch("utils.version.list_hf_tags", return_value=[_OLD_SERIES, _EXAMPLES_VERSION]) as tags,
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(moonshine_setup, "download_from_hf") as download,
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    tags.assert_not_called()
+    rev.assert_called_once_with(repo_id, revision=_OLD_SERIES)
+    download.assert_not_called()
+    assert _manifest(model_dir) == {**_manifest(model_dir), "version": _OLD_SERIES, "pinned": True}
+    assert "which is not compatible with torq-examples" in caplog.text
+
+
+def test_inference_moves_unpinned_model_to_new_version_series(tmp_path):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, "old-sha", version=_OLD_SERIES)
+
+    with (
+        mock.patch("utils.version.list_hf_tags", return_value=[_OLD_SERIES, _EXAMPLES_VERSION]),
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION) as rev,
+        mock.patch.object(moonshine_setup, "download_from_hf", side_effect=_fake_download(tmp_path)),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    rev.assert_called_once_with(repo_id, revision=_EXAMPLES_VERSION)
+    assert _manifest(model_dir)["version"] == _EXAMPLES_VERSION
+
+
+def test_inference_flags_corrupt_manifest_for_repair(tmp_path, caplog):
+    # e.g. a power loss while setup was writing it: the files cannot be trusted.
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION)
+    (model_dir / ".manifest.json").write_text("")
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision") as rev,
+        caplog.at_level(logging.WARNING),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    rev.assert_not_called()
+    assert "Run `python setup_demos.py moonshine` to repair them." in caplog.text
+
+
+def test_inference_redownloads_truncated_file(tmp_path, caplog):
+    repo_id = moonshine_setup.MOONSHINE_HF_REPO_MAP["tiny-en"]
+    model_dir = _make_moonshine_copy(tmp_path, repo_id, _REVISION)
+    files = list(moonshine_setup._MOONSHINE_REQUIRED_FILES)
+    write_manifest(
+        model_dir, repo_id, files, version=_EXAMPLES_VERSION, revision=_REVISION,
+        file_info={f: {"size": len("old"), "sha256": None} for f in files},
+    )
+    (model_dir / files[0]).write_text("o")  # e.g. a copy cut short by a full disk
+
+    with (
+        mock.patch.object(model_setup, "get_hf_revision", return_value=_REVISION),
+        mock.patch.object(moonshine_setup, "download_from_hf", side_effect=_fake_download(tmp_path)) as download,
+        caplog.at_level(logging.WARNING),
+    ):
+        moonshine_setup.ensure_moonshine_models(model_dir)
+
+    assert download.called
+    assert (model_dir / files[0]).read_text() == f"{files[0]}@{_EXAMPLES_VERSION}"
+    assert "is 1 bytes but should be 3" in caplog.text

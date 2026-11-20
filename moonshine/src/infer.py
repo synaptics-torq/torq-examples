@@ -20,10 +20,12 @@ from moonshine.setup_demo import (
     ensure_moonshine_models,
     local_moonshine_model_dir,
 )
+from utils.audio import resample
 from utils.inference import add_common_inference_args
 from utils.log import configure_logging
 from utils.model_setup import resolve_default_model
 from utils.runtime import cleanup_npu_after_inference, setup_npu_for_inference
+from utils.version import warn_if_runtime_mismatch
 
 GREEN = "\033[32m"
 RESET = "\033[0m"
@@ -40,8 +42,12 @@ def _transcribe(
     tokenizer: Tokenizer,
 ) -> TranscriptionResult:
     data, sample_rate = sf.read(wav, dtype="float32")
-    runner.input_freq = sample_rate
-    audio_duration_ms = data.shape[0] / sample_rate * 1000 if sample_rate > 0 else 0
+    if data.ndim > 1:
+        data = data.mean(axis=1)
+    # The model expects mono audio at its own rate; feeding e.g. 48 kHz
+    # samples unconverted yields an empty transcription.
+    data = resample(data, sample_rate, runner.input_freq)
+    audio_duration_ms = len(data) / runner.input_freq * 1000
     audio = data.astype(np.float32)[np.newaxis, :]
     tokens = runner.run(audio)
     text = tokenizer.decode_batch(tokens.tolist(), skip_special_tokens=True)[0]
@@ -63,6 +69,7 @@ def _print_result(result: TranscriptionResult, runner: MoonshineRunner) -> None:
 
 
 def main(args: argparse.Namespace):
+    warn_if_runtime_mismatch()
     logger = logging.getLogger("Moonshine")
     logger.info("Starting demo...")
 

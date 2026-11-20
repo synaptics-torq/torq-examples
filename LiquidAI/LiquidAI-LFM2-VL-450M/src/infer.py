@@ -35,6 +35,7 @@ except Exception:
 from utils.log import add_logging_args, configure_logging  # noqa: E402
 from utils.model_setup import resolve_default_model  # noqa: E402
 from utils.terminal import InferenceStopInput  # noqa: E402
+from utils.version import warn_if_runtime_mismatch  # noqa: E402
 
 YELLOW = "\033[33m"
 RESET = "\033[0m"
@@ -78,6 +79,7 @@ def _ask_once(vl: LFM2VL, question: str, debug: bool) -> None:
 
 
 def main(args: argparse.Namespace) -> None:
+    warn_if_runtime_mismatch()
     logging.getLogger("LFM2VL").info("Loading models...")
     debug = args.logging.upper() == "DEBUG"
 

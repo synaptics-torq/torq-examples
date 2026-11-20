@@ -221,6 +221,15 @@ def test_large_window_frees_space_on_every_rollover(instruct, keep):
     assert runner._turn_pos <= 8
 
 
+def test_generation_without_eos_stops_at_max_seq_len_by_default():
+    # A repetition loop never emits EOS; the cache window must not let it run forever.
+    runner = _runner(capacity=8)
+    runner._cache_keep_n = 3
+    runner._eos_token_id = runner._end_of_turn_id = 98
+    runner._eos_token_ids = [98]
+    assert len(runner.run("next").split()) == 8
+
+
 def test_oversized_prompt_takes_priority_over_history():
     runner = _runner(cap=1, capacity=8)
     runner._cache_keep_n = 5

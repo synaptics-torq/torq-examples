@@ -160,6 +160,7 @@ if __name__ == "__main__":
     import argparse
     import sys
     from utils.log import add_logging_args, configure_logging
+    from utils.version import warn_if_runtime_mismatch
 
     available = ", ".join(f"'{name}' ({repo})" for name, repo in _HF_REPO_MAP.items())
     parser = argparse.ArgumentParser(description="Download LFM2-VL-450M INT8 model files.")
@@ -170,6 +171,7 @@ if __name__ == "__main__":
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
+    warn_if_runtime_mismatch()
 
     try:
         setup_liquidvl_int8(args.models)

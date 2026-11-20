@@ -26,6 +26,7 @@ from typing import Final
 
 from utils.deps import MissingRequirementsError, check_requirements
 from utils.download import (
+    _MANIFEST_FILENAME,
     DownloadError,
     ModelStatus,
     base_dir_for,
@@ -34,12 +35,19 @@ from utils.download import (
     get_hf_file_info,
     get_hf_revision,
     read_manifest,
+    remove_damaged_files,
     resolve_repo_id,
     verify_manifest,
     write_manifest,
 )
 from utils.log import add_logging_args, configure_logging
-from utils.version import parse_model_specs, resolve_model_version
+from utils.version import (
+    follow_examples_series,
+    parse_model_specs,
+    resolve_model_version,
+    warn_if_model_incompatible,
+    warn_if_runtime_mismatch,
+)
 
 __all__ = [
     "refresh_model",
@@ -84,6 +92,7 @@ def refresh_model(
     files_present: FilesPresent,
     download: DownloadFn,
     tracked_files_present: FilesPresent | None = None,
+    pinned: bool = False,
 ) -> ModelStatus:
     """Check ``model_dir`` and refresh it so it tracks ``version``.
 
@@ -93,15 +102,20 @@ def refresh_model(
     ``version`` currently points to so an upstream tag move is detected.
     Untracked copies (``--no-update``, ``record=False``) are checked against
     ``files_present`` only and never resolve or record a version.
+    ``pinned`` is recorded in the manifest (see ``write_manifest``); pinned
+    versions outside the ``VERSION`` release series are warned about.
     """
     model_dir = Path(model_dir)
     previously_tracked: set[str] | None = None
     if record:
+        remove_damaged_files(model_dir)
         if tracked_files_present is None:
             present = verify_manifest(model_dir) and files_present(model_dir)
         else:
             present = tracked_files_present(model_dir)
         revision = None
+        if pinned:
+            warn_if_model_incompatible(repo_id, version)
         if version is not None:
             revision = get_hf_revision(repo_id, revision=version)
         manifest = read_manifest(model_dir)
@@ -118,6 +132,7 @@ def refresh_model(
         revision=revision,
         download=lambda: download(repo_id, base_dir, revision=version),
         record=record,
+        pinned=pinned,
     )
     if previously_tracked is not None:
         new_manifest = read_manifest(model_dir)
@@ -160,7 +175,9 @@ def download_models(
     (HEAD) revision rather than the built-in version tag.
 
     Existing manifest versions are preserved unless a version is requested
-    explicitly or ``preserve_version=False``. ``label`` is used in log messages.
+    explicitly or ``preserve_version=False``, except that a version that was
+    not pinned explicitly follows a ``major.minor`` bump of the torq-examples
+    ``VERSION`` file. ``label`` is used in log messages.
     """
     if base_dir is None:
         base_dir = default_models_dir()
@@ -174,13 +191,17 @@ def download_models(
         explicit_version = spec_version or model_version
         model_dir = base_dir / repo_id
         manifest = read_manifest(model_dir) if preserve_version else None
+        pinned = explicit_version is not None
         if (
             not no_update
             and explicit_version is None
             and manifest is not None
             and manifest.get("repo_id") == repo_id
         ):
+            pinned = manifest.get("pinned", False)
             version = manifest.get("version")
+            if not pinned:
+                version = follow_examples_series(repo_id, version)
         elif no_update and explicit_version is None:
             # Untracked copies are not pinned to the built-in version tag
             # (untagged repos cannot resolve it); they download the repo's
@@ -200,6 +221,7 @@ def download_models(
                 files_present=files_present,
                 download=download,
                 tracked_files_present=tracked_files_present,
+                pinned=pinned,
             )
         except Exception as exc:
             raise DownloadError(f"Unable to download {label} files from {repo_id}") from exc
@@ -223,20 +245,32 @@ def ensure_demo_models(
     """Verify/refresh the demo's models in ``model_dir`` before inference.
 
     Re-syncs the local copy to the version recorded in its manifest (never to
-    a newer one). Untracked models (``--no-update``) have no manifest and are
-    left as-is. When ``refresh`` is ``False`` the check is skipped entirely
-    (offline/airgapped runs). Refresh failures are logged, not raised, so
-    inference can still proceed on whatever is available locally.
+    a newer one), except that a version that was not pinned explicitly follows
+    a ``major.minor`` bump of the torq-examples ``VERSION`` file. Untracked
+    models (``--no-update``) have no manifest and are left as-is. When
+    ``refresh`` is ``False`` the check is skipped entirely (offline/airgapped
+    runs) apart from the local model compatibility warning. Refresh failures
+    are logged, not raised, so inference can still proceed on whatever is
+    available locally.
     """
     model_dir = Path(model_dir)
-    if not refresh:
-        return
     manifest = read_manifest(model_dir)
+    if not refresh:
+        if manifest is not None:
+            warn_if_model_incompatible(manifest.get("repo_id"), manifest.get("version"))
+        return
     if manifest is None:
-        logger.info(
-            "No manifest in %s; the model is untracked, so skipping the freshness check.",
-            model_dir,
-        )
+        if (model_dir / _MANIFEST_FILENAME).exists():
+            logger.warning(
+                "The manifest in %s is unreadable, so the model files may be "
+                "incomplete. Run `python setup_demos.py %s` to repair them.",
+                model_dir, demo_name,
+            )
+        else:
+            logger.info(
+                "No manifest in %s; the model is untracked, so skipping the freshness check.",
+                model_dir,
+            )
         return
     repo_id = manifest.get("repo_id")
     if not repo_id:
@@ -255,15 +289,20 @@ def ensure_demo_models(
             model_dir, repo_id, demo_name,
         )
         return
+    pinned = manifest.get("pinned", False)
+    version = manifest.get("version")
     try:
+        if not pinned:
+            version = follow_examples_series(repo_id, version)
         refresh_model(
             repo_id,
             model_dir,
             base_dir,
-            version=manifest.get("version"),
+            version=version,
             files_present=files_present,
             download=download,
             tracked_files_present=tracked_files_present,
+            pinned=pinned,
         )
     except Exception as e:
         logger.warning(
@@ -333,7 +372,7 @@ def sync_prefill_tracking(
             write_manifest(
                 model_dir, repo_id, files,
                 version=manifest.get("version"), revision=manifest.get("revision"),
-                file_info=file_info,
+                file_info=file_info, pinned=manifest.get("pinned", False),
             )
             logger.info(
                 "Tracking existing %s in %s; run setup without --with-batch-prefill "
@@ -346,7 +385,7 @@ def sync_prefill_tracking(
         write_manifest(
             model_dir, repo_id, files,
             version=manifest.get("version"), revision=manifest.get("revision"),
-            file_info=file_info,
+            file_info=file_info, pinned=manifest.get("pinned", False),
         )
         logger.info(
             "No longer tracking %s in %s; the local file is kept but will not "
@@ -436,6 +475,7 @@ def demo_main(
     add_logging_args(parser)
     args = parser.parse_args()
     configure_logging(args.logging)
+    warn_if_runtime_mismatch()
 
     try:
         kwargs: dict[str, object] = {

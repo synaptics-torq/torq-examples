@@ -797,7 +797,7 @@ def add_llm_inference_args(
     if with_max_gen_tokens:
         parser.add_argument(
             "--max-gen-tokens", type=int, default=None,
-            help="Maximum number of generated tokens per answer (default: no limit)",
+            help="Maximum number of generated tokens per answer (default: the model's maximum sequence length)",
         )
     if with_instruct:
         parser.add_argument(

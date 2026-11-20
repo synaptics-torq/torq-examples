@@ -28,7 +28,7 @@ The demo has three models:
 |---|---|---|
 | `instruct-int4-gptq` (default) | `Synaptics/gemma-3-270-GPTQ-int4-it-torq` | Instruct, INT4 weights (GPTQ, block size 32), separate LM head (`transformer.vmfb`, `lm_head.vmfb.trim`), no batched prefill model |
 | `instruct` | `Synaptics/gemma-3-270m-it-torq` | Instruct, with a batched prefill model |
-| `default` | `Synaptics/gemma-3-270m-torq` | Base (pre-trained), with a batched prefill model |
+| `base` | `Synaptics/gemma-3-270m-torq` | Base, with a batched prefill model |
 
 To set up another model, give its name to the demo's setup:
 
@@ -62,10 +62,10 @@ Run the demo from the `gemma3` directory:
 
 ```sh
 cd gemma3
-python src/infer.py --instruct-model
+python src/infer.py
 ```
 
-`-m`/`--model` defaults to the model downloaded during setup. Pass `-m` to use a different (e.g. a custom HF repo) model instead.
+`-m`/`--model` defaults to the model downloaded during setup, and instruct (chat template) mode is enabled automatically when that default is an instruct model. Pass `-m` to use a different (e.g. a custom HF repo) model instead, and add `--instruct-model` when that model is an instruct model.
 
 > [!NOTE]
 > The demo defaults to the DMA/dmabuf allocator with device I/O enabled. Use `--tda cpu` to run with the CPU allocator, or `--no-device-io` to pass user inputs as NumPy arrays.
@@ -86,7 +86,7 @@ Gemma 3 includes a validation script for text translation datasets. For example:
 
 ```sh
 cd gemma3
-python src/validate.py --instruct-model --max-samples 10
+python src/validate.py --max-samples 10
 ```
 
 Run `python src/validate.py -h` to see all available validation options.

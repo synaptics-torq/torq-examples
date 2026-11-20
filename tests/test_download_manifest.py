@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright © 2026 Synaptics Incorporated.
 
 import json
+import os
 from unittest import mock
 
 import pytest
@@ -564,3 +565,21 @@ def test_ensure_model_version_adopt_keeps_file_info(tmp_path):
     assert status is ModelStatus.UP_TO_DATE
     gi.assert_not_called()
     assert read_manifest(model_dir)["file_info"] == {"a.vmfb": {"size": 1, "sha256": "aaa"}}
+
+
+def test_write_manifest_syncs_files_before_atomically_replacing_it(tmp_path):
+    # A power loss right after setup must not leave a manifest that claims
+    # files whose data never reached the disk.
+    model_dir = tmp_path / "model"
+    write_manifest(model_dir, "org/repo", ["a.vmfb"], version="v1")
+    calls = mock.Mock()
+    calls.replace.side_effect = os.replace
+    with (
+        mock.patch("utils.download.os.sync", calls.sync),
+        mock.patch("utils.download.os.replace", calls.replace),
+    ):
+        write_manifest(model_dir, "org/repo", ["a.vmfb", "b.vmfb"], version="v2")
+
+    assert [c[0] for c in calls.mock_calls] == ["sync", "replace", "sync"]
+    assert json.loads((model_dir / ".manifest.json").read_text())["version"] == "v2"
+    assert [p.name for p in model_dir.iterdir()] == [".manifest.json"]
