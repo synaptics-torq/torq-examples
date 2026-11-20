@@ -78,6 +78,7 @@ def test_dut_deploy(dut_deploy: DutDeployRunner) -> None:
         ("ko swap", dut_deploy.phase_ko_swap),
         ("ARM wheel install", dut_deploy.phase_wheel_install),
     )
+    model_push_failure = ""
     for name, fn in phases:
         try:
             result = fn()
@@ -86,12 +87,22 @@ def test_dut_deploy(dut_deploy: DutDeployRunner) -> None:
         result.phase = name
         dut_deploy._write_log(result)
         if not result.passed:
+            if name == "model push":
+                model_push_failure = (
+                    f"phase '{name}' partially failed rc={result.returncode}\n"
+                    f"stdout tail:\n{result.stdout[-2000:]}\n"
+                    f"stderr tail:\n{result.stderr[-2000:]}"
+                )
+                print(model_push_failure, flush=True)
+                continue
             pytest.fail(
                 f"phase '{name}' failed rc={result.returncode}\n"
                 f"stdout tail:\n{result.stdout[-2000:]}\n"
                 f"stderr tail:\n{result.stderr[-2000:]}\n"
                 f"(DUT left in current state; inspect via adb -s {dut_deploy.serial} shell)"
             )
+    if model_push_failure:
+        pytest.fail(model_push_failure)
 
 
 @pytest.mark.parametrize("model_case", MODEL_CASES, ids=lambda c: c.case_id)

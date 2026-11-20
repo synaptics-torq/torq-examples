@@ -656,35 +656,36 @@ class DutDeployRunner:
             info += f"    MISSING on host: {missing}\n"
         print(info)
 
-        if missing:
-            return PhaseResult("push-models", 1, info,
-                               "host-side models missing (run host conversion step 1 first)")
-        proc_all = subprocess.run(["true"])
         result = PhaseResult("push-models", 0, info, "")
+        if missing:
+            result.returncode = 1
+            result.stderr = f"host-side models missing: {missing}\n"
         for md in model_dirs:
+            if md in missing:
+                continue
             local = self.examples_root / "models" / md
             remote_parent = f"{self.remote_root}/models/{Path(md).parent}"
             mkdir = self._shell(f"mkdir -p {shlex.quote(remote_parent)}")
             result.commands.extend(mkdir.commands)
+            if not mkdir.passed:
+                result.returncode = 1
+                result.stderr += f"\n[mkdir {md}] rc={mkdir.returncode}\n{mkdir.stderr}"
+                continue
             push_cmd = f"adb -s {self.serial} push {local} {remote_parent}"
             proc = self._adb("push", str(local), remote_parent, check=False, timeout=10800)
             result.commands.append(push_cmd)
             if proc.returncode != 0:
                 result.returncode = 1
                 result.stderr += f"\n[push {md}] rc={proc.returncode}\n{proc.stderr}"
-                break
+                continue
             result.stdout += proc.stdout
-        if result.passed:
             check = self._shell(
-                " && ".join(
-                    f"test -d {shlex.quote(self.remote_root + '/models/' + md)}"
-                    for md in model_dirs
-                )
+                f"test -d {shlex.quote(self.remote_root + '/models/' + md)}"
             )
             result.commands.extend(check.commands)
             if not check.passed:
                 result.returncode = 1
-                result.stderr += "\n[dut_deploy] some model dirs missing on DUT after push"
+                result.stderr += f"\n[verify {md}] model dir missing on DUT after push\n{check.stderr}"
         return result
 
     def phase_ko_swap(self) -> PhaseResult:

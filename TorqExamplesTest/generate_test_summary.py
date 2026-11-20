@@ -498,8 +498,7 @@ def build_html(
         dict[tuple[str, str], list[tuple[str, str]]],
     ] | None = None,
 ) -> None:
-    """Write the single-page report: run info + test results + per-model-file
-    inference/profiling table."""
+    """Write run info and separate host, DUT inference, and profiling tables."""
     th_style = "border:1px solid #ccc;padding:8px 10px;text-align:left;background:#f2f2f2"
     td_style = "border:1px solid #ccc;padding:8px 10px;text-align:left"
     table_style = 'border="1" cellpadding="4" cellspacing="0" style="border-collapse:collapse;margin-bottom:24px"'
@@ -552,7 +551,9 @@ def build_html(
         # so report it as "download" to avoid misleading readers.
         return name.replace("test_convert_demo[", "test_download_demo[")
 
-    test_rows: list[str] = []
+    host_rows: list[str] = []
+    dut_rows: list[str] = []
+    profile_tests: dict[str, tuple[str, str]] = {}
     for test_name, status, _duration in tests:
         color = {
             "PASS": "#28a745",
@@ -570,6 +571,9 @@ def build_html(
                     break
         version = version_record.get("version", "")
         revision = version_record.get("revision", "")
+        if test_name.startswith("test_dut_profile["):
+            profile_tests[case_id] = (test_name, status)
+            continue
         run_record = (
             run_metrics.get(_case_id(test_name), {})
             if test_name.startswith(("test_run_demo[", "test_dut_infer["))
@@ -577,34 +581,48 @@ def build_html(
         )
         if run_record.get("note"):
             run_record = {"TTFT": run_record["note"]}
-        test_rows.append(
+        cells = (
             f'<tr><td style="{td_style}">{html.escape(_display_name(test_name))}</td>'
             f'<td style="{td_style};color:{color};font-weight:bold">{status}</td>'
-            f'<td style="{td_style}">{html.escape(version)}</td>'
-            f'<td style="{td_style}">{html.escape(revision)}</td>'
-            f'<td style="{td_style}">{html.escape(run_record.get("TTFT", ""))}</td>'
-            f'<td style="{td_style}">{html.escape(run_record.get("tok/s", ""))}</td>'
-            f'<td style="{td_style}">{html.escape(run_record.get("RTF", ""))}</td></tr>'
         )
-    if not test_rows:
-        test_rows.append(
-            f'<tr><td style="{td_style}" colspan="7">No test cases found</td></tr>'
-        )
+        if test_name.startswith(("test_dut_deploy", "test_dut_infer[", "test_run_demo[")):
+            dut_rows.append(
+                cells
+                + f'<td style="{td_style}">{html.escape(run_record.get("TTFT", ""))}</td>'
+                f'<td style="{td_style}">{html.escape(run_record.get("tok/s", ""))}</td>'
+                f'<td style="{td_style}">{html.escape(run_record.get("RTF", ""))}</td></tr>'
+            )
+        else:
+            host_rows.append(
+                cells + f'<td style="{td_style}">{html.escape(version)}</td>'
+                f'<td style="{td_style}">{html.escape(revision)}</td></tr>'
+            )
+    if not host_rows:
+        host_rows.append(f'<tr><td style="{td_style}" colspan="4">No host setup cases found</td></tr>')
+    if not dut_rows:
+        dut_rows.append(f'<tr><td style="{td_style}" colspan="5">No deployment or inference cases found</td></tr>')
     if metric_gaps:
         gap_list = ", ".join(html.escape(g) for g in metric_gaps)
-        test_rows.append(
-            f'<tr><td style="{td_style}" colspan="7">'
+        dut_rows.append(
+            f'<tr><td style="{td_style}" colspan="5">'
             f'<em>Note: "n/a" in the TTFT/Throughput columns means the demo CLI does not '
             f'emit these metrics: {gap_list}. For moonshine_streaming, metric printing is '
             f'to be added on the demo side.</em></td></tr>'
         )
-    test_header = "".join(
+    host_header = "".join(
         f'<th style="{th_style}">{html.escape(h)}</th>'
         for h in (
             "TestCase Name",
             "TestCase Result",
             "VERSION",
             "Hugging Face commit (revision)",
+        )
+    )
+    dut_header = "".join(
+        f'<th style="{th_style}">{html.escape(h)}</th>'
+        for h in (
+            "TestCase Name",
+            "TestCase Result",
             "TTFT",
             "Throughput (tok/s)",
             "RTF",
@@ -616,6 +634,7 @@ def build_html(
     profile_rows: list[str] = []
     infer_counts: dict[str, int] = {}
     profile_counts: dict[str, int] = {}
+    represented_cases: set[str] = set()
     for record in profile_records:
         metrics = record.get("metrics")
         if not isinstance(metrics, dict):
@@ -628,9 +647,21 @@ def build_html(
         ).replace(":", ".")
         infer_status = _infer_status_for(record, by_drv, by_dr)
         prof_status = _profile_status(record)
+        case_parts = str(record.get("case_name") or "").split(":")
+        case_id = "_".join(case_parts[:2])
+        if case_id not in profile_tests:
+            case_id = str(record.get("demo_name") or case_parts[0])
+        test_name, test_status = profile_tests.get(
+            case_id, ("", _status_label(prof_status))
+        )
+        represented_cases.add(case_id)
         infer_counts[infer_status] = infer_counts.get(infer_status, 0) + 1
         profile_counts[prof_status] = profile_counts.get(prof_status, 0) + 1
         cells = [
+            f'<td style="{td_style}">{html.escape(test_name)}</td>',
+            f'<td style="{td_style};color:{_status_color(test_status.lower())};'
+            f'font-weight:bold">{html.escape(test_status)}</td>',
+            f'<td style="{td_style}">{html.escape(model_versions.get(case_id, {}).get("version", ""))}</td>',
             f'<td style="{td_style}">{html.escape(demo_label)}</td>',
             f'<td style="{td_style};color:{_status_color(infer_status)};'
             f'font-weight:bold">{html.escape(_status_label(infer_status))}</td>',
@@ -642,15 +673,27 @@ def build_html(
                 f'<td style="{td_style}">{html.escape(str(metrics.get(metric, "")))}</td>'
             )
         profile_rows.append(f"<tr>{''.join(cells)}</tr>")
+    total_models = len(profile_rows)
+    for case_id, (test_name, status) in profile_tests.items():
+        if case_id in represented_cases:
+            continue
+        profile_rows.append(
+            f'<tr><td style="{td_style}">{html.escape(test_name)}</td>'
+            f'<td style="{td_style};color:{_status_color(status.lower())};font-weight:bold">{status}</td>'
+            f'<td style="{td_style}">{html.escape(model_versions.get(case_id, {}).get("version", ""))}</td>'
+            f'<td style="{td_style}" colspan="{3 + len(PROFILE_METRICS)}">No per-file profiling data recorded</td></tr>'
+        )
     if not profile_rows:
         profile_rows.append(
-            f'<tr><td style="{td_style}" colspan="9">No profile data found</td></tr>'
+            f'<tr><td style="{td_style}" colspan="{6 + len(PROFILE_METRICS)}">No profile data found</td></tr>'
         )
     profile_headers = "".join(
         f'<th style="{th_style}">{html.escape(header)}</th>'
-        for header in ("demo:repo:file", "Infer", "Profile", *PROFILE_METRICS)
+        for header in (
+            "TestCase Name", "TestCase Result", "VERSION",
+            "demo:repo:file", "Infer", "Profile", *PROFILE_METRICS,
+        )
     )
-    total_models = len(profile_rows)
     infer_pass = infer_counts.get("pass", 0)
     profile_pass = profile_counts.get("pass", 0)
     model_note = (
@@ -672,11 +715,13 @@ def build_html(
         '<body style="font-family:Arial,sans-serif;margin:24px">'
         "<h2>Test + Profiling Summary</h2>"
         f'<table {table_style}><tbody>{info_rows}</tbody></table>'
-        "<h3>Test Demo Results</h3>"
-        f'<table {table_style}><tbody><tr>{test_header}</tr>{"".join(test_rows)}</tbody></table>'
-        "<h3>Inference + Profiling (per model file)</h3>"
+        "<h3>Host Setup Results</h3>"
+        f'<table id="host-setup-results" {table_style}><tbody><tr>{host_header}</tr>{"".join(host_rows)}</tbody></table>'
+        "<h3>DUT Deployment &amp; Inference Results</h3>"
+        f'<table id="dut-inference-results" {table_style}><tbody><tr>{dut_header}</tr>{"".join(dut_rows)}</tbody></table>'
+        "<h3>DUT Profiling Results</h3>"
         f"{model_note}"
-        f'<table {table_style}><tbody><tr>{profile_headers}</tr>{"".join(profile_rows)}</tbody></table>'
+        f'<table id="dut-profiling-results" {table_style}><tbody><tr>{profile_headers}</tr>{"".join(profile_rows)}</tbody></table>'
         "</body></html>\n"
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
