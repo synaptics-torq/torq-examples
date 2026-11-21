@@ -26,6 +26,11 @@ Preflight and two stages, all orchestrated from the CI host:
    models, installs the aarch64 runtime wheel, and either swaps the NPU
    kernel module or keeps the already-loaded board module when no KO artifact
    was supplied.
+   Missing models or per-model upload failures do not block other model
+   uploads. KO/runtime installation continues after a partial model-push
+   failure, and the deployment test reports the failure afterwards so the
+   remaining models can still be tested. Connectivity, workspace, KO, and
+   runtime installation failures still stop deployment immediately.
    It then runs the per-demo inference and profiling matrices (repo-root
    `profile.py --repeat 3`, seven metrics). The fixed Netbooter sequence is
    in `dut_power_cycle.py`.
@@ -34,6 +39,9 @@ The runtime wheel and optional KO under test come from a test-build run's
 artifacts (`TORQ_DUT_RUNTIME_WHEEL`, `TORQ_DUT_KO`). Their SHA-256 fingerprints
 are recorded in `prepare_metadata.json`, the HTML/JSON reports, and the
 workflow artifact metadata.
+The reported Torq Runtime Version is collected from the DUT after the test
+wheel is successfully installed, not from the previously installed runtime.
+Failure to collect or save this information fails the runtime installation stage.
 
 ## Test entries
 
@@ -59,7 +67,10 @@ workflow artifact metadata.
 - `conftest.py`: repository-local pytest plugin (artifact cleanup, console
   tee, JUnit + combined HTML generation, failure semantics)
 - `generate_test_summary.py`: merges JUnit results with structured
-  profiling records into one HTML report
+  profiling records into one HTML report. Results are grouped into Host Setup,
+  DUT Deployment & Inference, and DUT Profiling tables. Only Host Setup includes
+  the Hugging Face revision column. Profiling retains per-file metrics and
+  shows failed cases even when no profiling data was produced.
 
 ## Run and report generation
 

@@ -532,7 +532,7 @@ class DutDeployRunner:
 
     def _collect_metadata(self) -> str:
         """Collect the report header anchors the legacy prepare stage used
-        to provide (examples commit, DUT SDK revision, DUT pip list)."""
+        to provide (examples commit and DUT SDK revision)."""
         notes = ["[dut_deploy] metadata collection:"]
         # examples commit: read on the HOST checkout (the DUT copy has no .git)
         commit = ""
@@ -560,22 +560,6 @@ class DutDeployRunner:
                 sdk = full.group(1) if full else raw
                 break
         notes.append(f"    DUT SDK revision     : {sdk or '(not found in /etc/buildinfo)'}")
-        # DUT pip list (runtime version anchor for the report header)
-        pip_list = self._shell(
-            f"cd {shlex.quote(self.remote_root)} && "
-            f". .venv/bin/activate && pip list"
-        )
-        try:
-            self.log_dir.mkdir(parents=True, exist_ok=True)
-            pip_cmd = pip_list.commands[0] if pip_list.commands else "(pip list)"
-            (self.log_dir / "dut_pip_list.log").write_text(
-                f"returncode: {pip_list.returncode}\n"
-                f"$ {pip_cmd}\n\n"
-                f"{pip_list.stdout}", encoding="utf-8"
-            )
-            notes.append(f"    DUT pip list         : logs/dut_pip_list.log ({len(pip_list.stdout.splitlines())} lines)")
-        except OSError:
-            pass
         # prepare_metadata.json (consumed by the report header + JSON export)
         try:
             self.log_dir.mkdir(parents=True, exist_ok=True)
@@ -763,7 +747,36 @@ class DutDeployRunner:
         result.commands = [push_cmd, *result.commands]
         result.stdout = info + result.stdout
         if result.passed:
+            self._runtime_version_cache = None
             result.stdout += f"\n[dut_deploy] installed {wheel_name} on DUT\n"
+            pip_list = self._shell(
+                f"cd {shlex.quote(self.remote_root)} && "
+                f". {shlex.quote(self.remote_root + '/.venv/bin/activate')} && pip list"
+            )
+            result.commands.extend(pip_list.commands)
+            result.stdout += pip_list.stdout
+            result.stderr += pip_list.stderr
+            if not pip_list.passed:
+                result.returncode = pip_list.returncode
+                result.stderr += "\n[dut_deploy] failed to collect installed runtime metadata\n"
+            elif not any(
+                len(parts := line.split()) >= 2 and parts[0] == "torq-runtime"
+                for line in pip_list.stdout.splitlines()
+            ):
+                result.returncode = 1
+                result.stderr += "\n[dut_deploy] torq-runtime missing from installed DUT pip list\n"
+            try:
+                self.log_dir.mkdir(parents=True, exist_ok=True)
+                pip_cmd = pip_list.commands[0] if pip_list.commands else "(pip list)"
+                (self.log_dir / "dut_pip_list.log").write_text(
+                    f"returncode: {result.returncode}\n"
+                    f"$ {pip_cmd}\n\n"
+                    f"{pip_list.stdout if result.passed else ''}",
+                    encoding="utf-8",
+                )
+            except OSError as exc:
+                result.returncode = 1
+                result.stderr += f"\n[dut_deploy] failed to write installed runtime metadata: {exc}\n"
         return result
 
     # ------------------------------------------------- per-demo inference
