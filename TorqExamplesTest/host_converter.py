@@ -9,7 +9,7 @@ with a compatible base image (ubuntu:24.04, glibc 2.39).
 Configuration (environment variables):
     TORQ_HOST_IMAGE      container image tag
                          (default: torq-examples-host-setup:local)
-    TORQ_MODEL_MODE      "release" (default): download the configured release
+    TORQ_TEST_MODE       "release" (default): download the configured release
                          models from HF.
                          "dev": download pre-compiled models from HF using
                          TORQ_MODEL_VERSION; no compiler is installed.
@@ -61,7 +61,7 @@ class HostSetupRunner:
         self.examples_root = Path(examples_root).resolve()
         self.log_dir = Path(log_dir) if log_dir else self.examples_root / "logs"
         self.image = os.getenv("TORQ_HOST_IMAGE", "torq-examples-host-setup:local")
-        self.model_mode = os.getenv("TORQ_MODEL_MODE", "release").strip().lower()
+        self.test_mode = os.getenv("TORQ_TEST_MODE", "release").strip().lower()
         self.model_version = os.getenv("TORQ_MODEL_VERSION", "").strip()
         self.container = f"torq-host-setup-{os.getpid()}-{int(time.time())}"
         self._started = False
@@ -174,7 +174,7 @@ class HostSetupRunner:
         """
         compiler_message = (
             "compiler: not installed (dev mode: HF model download)"
-            if self.model_mode == "dev"
+            if self.test_mode == "dev"
             else "compiler: not installed (release mode)"
         )
         script = f"""
@@ -219,7 +219,7 @@ class HostSetupRunner:
         model_name: select one model via the demo's setup_demo.py CLI instead
             of preparing all default models via setup_demos.py.
         """
-        if self.model_mode == "dev" and not self.model_version:
+        if self.test_mode == "dev" and not self.model_version:
             raise HostSetupError(
                 "dev mode requires TORQ_MODEL_VERSION to pin the HF model release"
             )
@@ -312,7 +312,7 @@ def _print_result(title: str, result: SetupResult) -> None:
 
 def _standalone_main(argv: list[str]) -> int:
     """Usage:
-        TORQ_MODEL_MODE=dev TORQ_MODEL_VERSION=v2.3.0 python3 host_converter.py <examples_root> [demo ...]
+        TORQ_TEST_MODE=dev TORQ_MODEL_VERSION=v2.3.0 python3 host_converter.py <examples_root> [demo ...]
 
     Runs the container build + environment setup + demo setup directly,
     printing everything. On failure the container is kept alive for manual
@@ -332,7 +332,7 @@ def _standalone_main(argv: list[str]) -> int:
     print("== standalone host-setup debug ==")
     print(f"   examples : {examples_root}")
     print(f"   image    : {runner.image}")
-    print(f"   mode     : {runner.model_mode}")
+    print(f"   test mode: {runner.test_mode}")
     print(f"   model version: {runner.model_version or '(examples default)'}")
     print(f"   demos    : {', '.join(demos)}")
 

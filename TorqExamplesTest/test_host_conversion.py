@@ -6,7 +6,7 @@ on the CI host inside a container (see host_converter.py) instead of on the
 DUT board. Each case verifies that one demo's model artifacts exist in the
 host checkout, ready to be pushed to the board for inference.
 
-TorqExamplesTest has two model modes, selected by TORQ_MODEL_MODE:
+TorqExamplesTest has two test modes, selected by TORQ_TEST_MODE:
     release (default): download and validate models already published on
         Hugging Face using the normal release version resolution.
     dev: download pre-compiled models from Hugging Face pinned by
@@ -43,7 +43,7 @@ def host_setup(dut_ready: None) -> HostSetupRunner:
 def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
     """Host environment is ready without installing a compiler in either mode."""
     result = host_setup.setup_environment()
-    if host_setup.model_mode == "dev":
+    if host_setup.test_mode == "dev":
         assert "compiler: not installed (dev mode: HF model download)" in result.stdout, (
             "dev model downloads must not depend on a compiler installation"
         )
@@ -58,7 +58,7 @@ def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
     demo = model_case.demo_name
     print(
         f"\n[host_setup] Starting {model_case.case_id}: "
-        f"mode={host_setup.model_mode}, repo_id={model_case.repo_id}",
+        f"test_mode={host_setup.test_mode}, repo_id={model_case.repo_id}",
         flush=True,
     )
     spec = REGISTRY[demo]

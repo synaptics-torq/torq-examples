@@ -89,7 +89,7 @@ teardown do not repeat it.
 Standalone debugging without pytest (engine drivers, no DUT needed for
 host stage, no suite layout needed):
 
-	TORQ_MODEL_MODE=dev TORQ_MODEL_VERSION=v2.3.0 \
+	TORQ_TEST_MODE=dev TORQ_MODEL_VERSION=v2.3.0 \
 	  python3 TorqExamplesTest/host_converter.py <examples_root> [demo ...]
 	TORQ_DUT_RUNTIME_WHEEL=... TORQ_DUT_KO=... \
 	  python3 TorqExamplesTest/dut_deploy.py <examples_root> [demo ...]
@@ -138,7 +138,7 @@ No global Docker/cache pruning or deletion of other runs is performed.
   and dispatch runs without a release input use `v2.3.0`.
   The workflow verifies the public tag and release, downloads
   `astra-release.tar.gz` and the matching CPython 3.12 aarch64 runtime wheel,
-  and extracts `lib/syna_npu.ko`. It sets `TORQ_MODEL_MODE=release`,
+  and extracts `lib/syna_npu.ko`. It sets `TORQ_TEST_MODE=release`,
   and exports the absolute DUT artifact paths for subsequent steps. Missing
   tags, releases, or artifacts fail the workflow before pytest starts.
   Before checking out/preparing the examples, the workflow maps the release
@@ -155,13 +155,13 @@ No global Docker/cache pruning or deletion of other runs is performed.
   profile `sl2619_oobe_scarthgap`, no forced flashing, and PDU AC enabled.
   The two workflows share concurrency group `syna-uboot-burn-astra-sh` to
   serialize firmware preparation and the subsequent example tests.
-- `TORQ_MODEL_MODE=release` (default): demos consume pre-compiled models
+- `TORQ_TEST_MODE=release` (default): demos consume pre-compiled models
   published on HuggingFace, version-anchored to the checked-out torq-examples
   `VERSION` file (e.g. 2.3.0 -> v2.3.0). Setting `TORQ_MODEL_VERSION` pins an
   explicit release instead (the daily release workflow passes the `rel` tag).
   No compiler is installed; only the DUT runtime wheel and kernel module
   are under test.
-- `TORQ_MODEL_MODE=dev`: also downloads pre-compiled models from HuggingFace,
+- `TORQ_TEST_MODE=dev`: also downloads pre-compiled models from HuggingFace,
   pinned by `TORQ_MODEL_VERSION` (required; the DEV workflow takes it from the
   `models_version` input or the torq-examples `VERSION` file). No compiler
   wheel or model compilation is required. The runtime wheel and optional
