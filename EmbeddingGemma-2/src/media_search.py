@@ -33,6 +33,7 @@ from PIL import Image
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root, for `utils`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from utils.version import warn_if_runtime_mismatch  # noqa: E402
+from utils.inference import add_common_inference_args  # noqa: E402
 import preprocess as pp  # noqa: E402
 from model_dir import resolve_model_dir  # noqa: E402
 from runner import EmbeddingGemma2  # noqa: E402
@@ -75,7 +76,9 @@ def audio_window(model_dir: Path, clips: list) -> int:
 
 def open_model(args, modalities: set[str], audio_frames: int | None = None) -> EmbeddingGemma2:
     return EmbeddingGemma2(args.model_dir, backend=args.backend, ort_threads=args.ort_threads,
-                           modalities=tuple({"text"} | modalities), audio_frames=audio_frames)
+                           modalities=tuple({"text"} | modalities), audio_frames=audio_frames,
+                           tda=args.tda, device_io=args.device_io or args.tda == "dmabuf",
+                           runtime_flags=args.runtime_flags)
 
 
 def index_group(args, group: str) -> list[dict]:
@@ -141,7 +144,12 @@ def cmd_index(args):
         part = index.with_name(f"{index.stem}.{group}.npz")
         cmd = [sys.executable, __file__, "index", "-m", args.model_dir, "--media-dir", args.media_dir,
                "--index", str(part), "--backend", args.backend, "--ort-threads", str(args.ort_threads),
-               "--moment-fps", str(args.moment_fps), "--max-moments", str(args.max_moments), "--group", group]
+               "--moment-fps", str(args.moment_fps), "--max-moments", str(args.max_moments), "--group", group,
+               "--tda", args.tda]
+        if args.device_io:
+            cmd.append("--device-io")
+        if args.runtime_flags:
+            cmd.extend(["--runtime-flags", *args.runtime_flags])
         subprocess.run(cmd, check=True)
         e, m = load_entries(part)
         if len(m):
@@ -246,6 +254,11 @@ def main():
         p.add_argument("--backend", choices=["torq", "ort"], default="torq")
         p.add_argument("--ort-threads", type=int, default=0)
         p.add_argument("--index", default="media_index.npz", help="Index file (default: %(default)s)")
+        add_common_inference_args(
+            p, with_threads=False, with_no_refresh=False, tda_default="dmabuf",
+            device_io_default=False,
+            device_io_help="Use device-backed inputs (enabled automatically with --tda dmabuf)",
+        )
     ix = sub.choices["index"]
     ix.add_argument("--media-dir", help="Folder of images, videos and .wav sounds (default: the example media "
                                          "setup_demos.py downloaded, <model dir>/examples)")

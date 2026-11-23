@@ -67,8 +67,10 @@ def _release_file_cache(model_dir: Path):
 class _Component:
     """One static graph on one backend, loaded on first use."""
 
-    def __init__(self, path: Path, backend: str, ort_threads: int = 0):
+    def __init__(self, path: Path, backend: str, ort_threads: int = 0,
+                 runtime_flags: list[str] | None = None, device_io: bool = False):
         self.path, self.backend, self.ort_threads = path, backend, ort_threads
+        self.runtime_flags, self.device_io = runtime_flags, device_io
         self._impl = None
         self.last_ms = 0.0
 
@@ -76,7 +78,10 @@ class _Component:
         if self.backend == "torq":
             from torq.runtime import VMFBInferenceRunner
 
-            self._impl = VMFBInferenceRunner(str(self.path))
+            self._impl = VMFBInferenceRunner(
+                str(self.path), runtime_flags=self.runtime_flags,
+                device_outputs=self.device_io,
+            )
         else:
             import onnxruntime as ort
 
@@ -106,8 +111,14 @@ class _Component:
             self._load()
         t0 = time.perf_counter()
         if self.backend == "torq":
-            outs = self._impl.infer([np.ascontiguousarray(x.astype(ml_dtypes.bfloat16)) for x in inputs])
-            out = np.asarray(outs[0]).astype(np.float32)
+            prepared = [np.ascontiguousarray(x.astype(ml_dtypes.bfloat16)) for x in inputs]
+            if self.device_io:
+                prepared = [self._impl.allocate_device_array(x) for x in prepared]
+            outs = self._impl.infer(prepared)
+            result = outs[0]
+            if hasattr(result, "to_host"):
+                result = result.to_host()
+            out = np.asarray(result).astype(np.float32)
             if any(np.any(x) for x in inputs) and (not np.any(out) or not np.all(np.isfinite(out))):
                 # a wedged NPU can return instantly with an empty output and no error
                 raise RuntimeError(f"{self.path.name}: NPU returned an all-zero or non-finite output; "
@@ -129,11 +140,17 @@ class EmbeddingGemma2:
                  image_size: tuple[int, int] | None = None,
                  modalities: tuple[str, ...] = ("text", "image", "video"),
                  npu_budget_mb: float | None = None, warmup: bool | None = None,
-                 audio_frames: int | None = None):
+                 audio_frames: int | None = None, tda: str = "dmabuf",
+                 device_io: bool = False, runtime_flags: list[str] | None = None):
         self.model_dir = Path(model_dir)
         if backend not in ("torq", "ort"):
             raise ValueError(f"unknown backend {backend!r}")
+        if tda not in ("cpu", "dmabuf"):
+            raise ValueError(f"unknown Torq device allocator {tda!r}")
         self.backend = backend
+        self.device_io = backend == "torq" and (device_io or tda == "dmabuf")
+        self.runtime_flags = ([f"--torq_device_allocator={tda}"] + (runtime_flags or [])
+                              if backend == "torq" else None)
         manifest_path = self.model_dir / "embeddinggemma2_manifest.json"
         self.manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {}
         self.seq_lens = sorted(self.manifest.get("seq_lens", [128, 512]))
@@ -154,12 +171,15 @@ class EmbeddingGemma2:
 
         ext = ".vmfb" if backend == "torq" else ".onnx"
         h, w = self.image_size
-        self.vision = _Component(self.model_dir / f"vision_{h}x{w}{ext}", backend, ort_threads)
+        self.vision = _Component(self.model_dir / f"vision_{h}x{w}{ext}", backend, ort_threads,
+                     self.runtime_flags, self.device_io)
         if backend == "torq":
             self.seq_lens = self._fit_buckets(set(modalities), npu_budget_mb or self.NPU_BUDGET_MB)
-        self.text = {s: _Component(self.model_dir / f"text_body_s{s}{ext}", backend, ort_threads)
+        self.text = {s: _Component(self.model_dir / f"text_body_s{s}{ext}", backend, ort_threads,
+                       self.runtime_flags, self.device_io)
                      for s in self.seq_lens}
-        self.audio = _Component(self.model_dir / f"audio_{self.audio_frames}{ext}", backend, ort_threads)
+        self.audio = _Component(self.model_dir / f"audio_{self.audio_frames}{ext}", backend, ort_threads,
+                    self.runtime_flags, self.device_io)
         mel_path = self.model_dir / "mel_filters.npy"
         self.mel_filters = np.load(mel_path) if mel_path.exists() else None
         self.mel_window = np.load(self.model_dir / "mel_window.npy") if mel_path.exists() else None
