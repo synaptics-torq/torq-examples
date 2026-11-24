@@ -52,6 +52,11 @@ import wave
 from dataclasses import dataclass, field
 from pathlib import Path
 
+if __package__:
+    from .generate_test_summary import parse_run_metrics
+else:
+    from generate_test_summary import parse_run_metrics
+
 # Board control: borrow torq.utils.boards (same as the legacy demo_executor)
 # so boards are allocated/locked through the shared control file, not picked
 # ad hoc. The bundled suite `torq/` package is importable when this file
@@ -1010,6 +1015,7 @@ class DutDeployRunner:
                 "command": "",
                 "status": "skipped",
                 "note": f"known debt: {spec.get('debt', 'no builder')}",
+                "metrics": {},
             }])
             return PhaseResult(base_phase, 0, info)
 
@@ -1055,6 +1061,10 @@ class DutDeployRunner:
         combined.commands = phase_commands
         for case_name, cmd, expect, rname, vmfb in commands:
             case = self._shell(cmd, timeout=1800)
+            metrics = parse_run_metrics(
+                case.stdout + "\n" + case.stderr,
+                per_frame=spec["builder"] in {"od", "pose", "face"},
+            )
             combined.commands.extend(case.commands)
             case.stdout = f"===== case {case_name} =====\n$ {cmd}\n{case.stdout}"
             status = "pass"
@@ -1077,6 +1087,7 @@ class DutDeployRunner:
                 "command": cmd,
                 "status": status,
                 "note": "",
+                "metrics": metrics,
             })
         self._write_infer_json(demo, records)
         failed = [r["case_name"] for r in records if r["status"] != "pass"]

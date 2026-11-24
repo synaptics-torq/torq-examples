@@ -100,7 +100,20 @@ Every invocation produces:
 - `test_and_profile_summary.html`: combined test + profiling report
   (run info, per-case results with model VERSION / HF revision, TTFT /
   tok/s for LLM demos, seven profiling metrics)
-- `torq-examples/logs/`: per-phase logs and `*_profile.json` records
+- `torq-examples/logs/`: per-phase logs and `*_infer.json` / `*_profile.json` records
+
+Runtime inference measurements are stored as numeric values in each
+`logs/<demo>_infer.json` record's `metrics`: `ms`, `ttft_ms`, `tok_s`, `rtf`,
+and, for per-frame detection/pose/face inference, `inference_ms` and `fps`.
+Only values actually printed by the demo are recorded; missing measurements
+remain absent. FPS is derived as `1000 / inference_ms` (not end-to-end video
+throughput). Multiple measurements within one command are averaged; FPS uses
+the mean frame inference time. The HTML inference table includes derived FPS
+and lists FPS separately by VMFB when a test covers multiple model files;
+other metrics from multiple commands in the same row use arithmetic means.
+JSON export retains each command's measurements without display rounding.
+Reports prefer inference JSON; old runs without these fields retain log parsing.
+Per-VMFB profiling data stays separate in `*_profile.json`.
 
 To regenerate only the HTML from existing artifacts:
 

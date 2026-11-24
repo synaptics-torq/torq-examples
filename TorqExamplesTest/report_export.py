@@ -142,6 +142,11 @@ def generate_json_report(
     # Per-model-file inference records are authoritative when present (new
     # flow). Without them (older runs) fall back to the JUnit demo-level case.
     infer_records = load_infer_json(profile_dir)
+    structured_metrics = {
+        str(record.get("case_name") or ""): record["metrics"]
+        for record in infer_records if "metrics" in record
+    }
+    structured_repos = {tuple(case.split(":")[:2]) for case in structured_metrics}
     by_drv, by_dr = _build_infer_index(infer_records)
     have_infer = bool(infer_records)
 
@@ -177,9 +182,16 @@ def generate_json_report(
             "profile_status": _profile_status(record),
             "profile": metrics,
         }
-        rm = run_metrics.get(_version_key(case_name)) or run_metrics.get(
-            str(record.get("demo_name", ""))
-        )
+        raw_metrics = structured_metrics.get(case_name)
+        if raw_metrics is None:
+            raw_metrics = structured_metrics.get(":".join(parts[:2]))
+        rm = run_metrics.get(case_name)
+        if rm is None and tuple(parts[:2]) not in structured_repos:
+            rm = run_metrics.get(_version_key(case_name)) or run_metrics.get(
+                str(record.get("demo_name", ""))
+            )
+        if inference_status == "not_run":
+            rm = None
         if rm:
             run_block: dict[str, Any] = {}
             if rm.get("TTFT"):
@@ -188,8 +200,25 @@ def generate_json_report(
                 run_block["tokens_per_s"] = _parse_value(rm["tok/s"])
             if rm.get("RTF"):
                 run_block["rtf"] = _parse_value(rm["RTF"])
+            if rm.get("Inference time"):
+                run_block["inference_ms"] = _parse_value(rm["Inference time"])
+            if rm.get("FPS"):
+                run_block["fps"] = _parse_value(rm["FPS"])
             if run_block:
                 entry["run_metrics"] = run_block
+        if raw_metrics is not None:
+            metric_fields = {
+                "ms": ("ms", "ms"),
+                "ttft_ms": ("ttft", "ms"),
+                "tok_s": ("tokens_per_s", None),
+                "rtf": ("rtf", None),
+                "inference_ms": ("inference_ms", "ms"),
+                "fps": ("fps", None),
+            }
+            entry["run_metrics"] = {
+                name: {"value": raw_metrics[key], **({"unit": unit} if unit else {})}
+                for key, (name, unit) in metric_fields.items() if key in raw_metrics
+            }
         if entry["target_serial"]:
             target_serial = entry["target_serial"]
         models.append(entry)

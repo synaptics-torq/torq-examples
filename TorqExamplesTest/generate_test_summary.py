@@ -340,8 +340,53 @@ def _avg(values: list[float]) -> float:
     return sum(values) / len(values)
 
 
+def parse_run_metrics(text: str, *, per_frame: bool = False) -> dict[str, float]:
+    """Parse runtime measurements; FPS is the inverse of mean frame inference time."""
+    samples: dict[str, list[float]] = {}
+    for line in text.splitlines():
+        match = _RUN_METRIC_PATTERNS[0].search(line)
+        if match:
+            values = {
+                "ms": float(match.group(1)),
+                "ttft_ms": float(match.group(2)),
+                "tok_s": float(match.group(3)),
+            }
+            if match.group(4):
+                values["rtf"] = float(match.group(4))
+        else:
+            match = _RUN_METRIC_PATTERNS[1].search(line)
+            values = (
+                {"ttft_ms": float(match.group(1)), "tok_s": float(match.group(4))}
+                if match else {}
+            )
+        if per_frame:
+            timing = re.search(r"^\s*Time:\s*(\d+(?:\.\d+)?)\s*ms\s*$", line)
+            if timing:
+                values["inference_ms"] = float(timing.group(1))
+        for key, value in values.items():
+            samples.setdefault(key, []).append(value)
+    metrics = {key: _avg(values) for key, values in samples.items()}
+    if metrics.get("inference_ms", 0) > 0:
+        metrics["fps"] = 1000 / metrics["inference_ms"]
+    return metrics
+
+
+def _format_run_metrics(metrics: dict[str, float]) -> dict[str, str]:
+    labels = {
+        "ttft_ms": ("TTFT", ".3f", " ms"),
+        "tok_s": ("tok/s", ".1f", ""),
+        "rtf": ("RTF", ".2f", ""),
+        "inference_ms": ("Inference time", ".3f", " ms"),
+        "fps": ("FPS", ".2f", ""),
+    }
+    return {
+        label: f"{metrics[key]:{precision}}{unit}"
+        for key, (label, precision, unit) in labels.items() if key in metrics
+    }
+
+
 def load_run_metrics(profile_dir: Path) -> dict[str, dict[str, str]]:
-    """Extract TTFT / tokens-per-second / RTF from *_run.log fallback files.
+    """Load authoritative inference metrics, falling back to historical logs.
 
     Run logs are named {demo}_{org}_{repo}_run.log while report case IDs are
     {demo}_{repo}; match on both ends so the org segment is irrelevant.
@@ -418,6 +463,19 @@ def load_run_metrics(profile_dir: Path) -> dict[str, dict[str, str]]:
             text = log_path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
+        frame_metrics = parse_run_metrics(
+            text, per_frame=stem.split("__", 1)[0] in {
+                "object_detection", "pose_estimation", "face_id",
+            },
+        )
+        if "inference_ms" in frame_metrics:
+            out[key] = _format_run_metrics(frame_metrics)
+            sections = re.split(r"^===== case (.+) =====\s*$", text, flags=re.MULTILINE)
+            for case_name, output in zip(sections[1::2], sections[2::2]):
+                out[case_name] = _format_run_metrics(
+                    parse_run_metrics(output, per_frame=True)
+                )
+            continue
         ttfts: list[float] = []
         speeds: list[float] = []
         rtfs: list[float] = []
@@ -444,6 +502,35 @@ def load_run_metrics(profile_dir: Path) -> dict[str, dict[str, str]]:
         if rtfs:
             entry["RTF"] = f"{_avg(rtfs):.2f}"
         out[key] = entry
+    # Structured inference records take precedence, including empty metrics.
+    grouped: dict[str, dict[str, list[float]]] = {}
+    for record in load_infer_json(profile_dir):
+        if "metrics" not in record:
+            continue
+        case_name = str(record.get("case_name") or "")
+        key = "_".join(case_name.split(":")[:2])
+        values = record["metrics"]
+        out[case_name] = _format_run_metrics(values)
+        group = grouped.setdefault(key, {})
+        for metric, value in values.items():
+            group.setdefault(metric, []).append(value)
+    for key, group in grouped.items():
+        out[key] = _format_run_metrics({
+            metric: _avg(values) for metric, values in group.items()
+        })
+        for metric, values in group.items():
+            label = {"ttft_ms": "TTFT", "tok_s": "tok/s", "rtf": "RTF", "fps": "FPS"}.get(metric)
+            if label and len(values) > 1:
+                out[key][label] += f" (avg of {len(values)})"
+    frame_cases: dict[str, list[tuple[str, str]]] = {}
+    for case_name, metrics in out.items():
+        parts = case_name.split(":")
+        if len(parts) == 3 and metrics.get("FPS"):
+            key = "_".join(parts[:2])
+            frame_cases.setdefault(key, []).append((parts[2], metrics["FPS"]))
+    for key, cases in frame_cases.items():
+        if len(cases) > 1:
+            out[key]["FPS"] = "; ".join(f"{vmfb}: {fps}" for vmfb, fps in cases)
     return out
 
 
@@ -590,7 +677,8 @@ def build_html(
                 cells
                 + f'<td style="{td_style}">{html.escape(run_record.get("TTFT", ""))}</td>'
                 f'<td style="{td_style}">{html.escape(run_record.get("tok/s", ""))}</td>'
-                f'<td style="{td_style}">{html.escape(run_record.get("RTF", ""))}</td></tr>'
+                f'<td style="{td_style}">{html.escape(run_record.get("RTF", ""))}</td>'
+                f'<td style="{td_style}">{html.escape(run_record.get("FPS", ""))}</td></tr>'
             )
         else:
             host_rows.append(
@@ -600,11 +688,11 @@ def build_html(
     if not host_rows:
         host_rows.append(f'<tr><td style="{td_style}" colspan="4">No host setup cases found</td></tr>')
     if not dut_rows:
-        dut_rows.append(f'<tr><td style="{td_style}" colspan="5">No deployment or inference cases found</td></tr>')
+        dut_rows.append(f'<tr><td style="{td_style}" colspan="6">No deployment or inference cases found</td></tr>')
     if metric_gaps:
         gap_list = ", ".join(html.escape(g) for g in metric_gaps)
         dut_rows.append(
-            f'<tr><td style="{td_style}" colspan="5">'
+            f'<tr><td style="{td_style}" colspan="6">'
             f'<em>Note: "n/a" in the TTFT/Throughput columns means the demo CLI does not '
             f'emit these metrics: {gap_list}. For moonshine_streaming, metric printing is '
             f'to be added on the demo side.</em></td></tr>'
@@ -626,6 +714,7 @@ def build_html(
             "TTFT",
             "Throughput (tok/s)",
             "RTF",
+            "FPS (derived)",
         )
     )
 
