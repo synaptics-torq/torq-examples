@@ -296,6 +296,7 @@ _STATUS_LABELS = {
     "skipped": "SKIPPED",
     "missing-metrics": "NO-METRICS",
     "not_run": "NOT RUN",
+    "no_model": "NO model file",
 }
 _STATUS_COLORS = {
     "pass": "#28a745",
@@ -584,6 +585,7 @@ def build_html(
         dict[tuple[str, str, str], str],
         dict[tuple[str, str], list[tuple[str, str]]],
     ] | None = None,
+    missing_model_cases: set[str] | None = None,
 ) -> None:
     """Write run info and separate host, DUT inference, and profiling tables."""
     th_style = "border:1px solid #ccc;padding:8px 10px;text-align:left;background:#f2f2f2"
@@ -740,16 +742,12 @@ def build_html(
         case_id = "_".join(case_parts[:2])
         if case_id not in profile_tests:
             case_id = str(record.get("demo_name") or case_parts[0])
-        test_name, test_status = profile_tests.get(
-            case_id, ("", _status_label(prof_status))
-        )
+        test_name = profile_tests.get(case_id, ("", ""))[0]
         represented_cases.add(case_id)
         infer_counts[infer_status] = infer_counts.get(infer_status, 0) + 1
         profile_counts[prof_status] = profile_counts.get(prof_status, 0) + 1
         cells = [
             f'<td style="{td_style}">{html.escape(test_name)}</td>',
-            f'<td style="{td_style};color:{_status_color(test_status.lower())};'
-            f'font-weight:bold">{html.escape(test_status)}</td>',
             f'<td style="{td_style}">{html.escape(model_versions.get(case_id, {}).get("version", ""))}</td>',
             f'<td style="{td_style}">{html.escape(demo_label)}</td>',
             f'<td style="{td_style};color:{_status_color(infer_status)};'
@@ -763,23 +761,35 @@ def build_html(
             )
         profile_rows.append(f"<tr>{''.join(cells)}</tr>")
     total_models = len(profile_rows)
+    infer_tests = {
+        _case_id(name): status.lower()
+        for name, status, _duration in tests if name.startswith("test_dut_infer[")
+    }
     for case_id, (test_name, status) in profile_tests.items():
         if case_id in represented_cases:
             continue
+        infer_status = infer_tests.get(case_id, "not_run")
+        prof_status = status.lower()
+        if case_id in (missing_model_cases or set()):
+            infer_status = prof_status = "no_model"
         profile_rows.append(
             f'<tr><td style="{td_style}">{html.escape(test_name)}</td>'
-            f'<td style="{td_style};color:{_status_color(status.lower())};font-weight:bold">{status}</td>'
             f'<td style="{td_style}">{html.escape(model_versions.get(case_id, {}).get("version", ""))}</td>'
-            f'<td style="{td_style}" colspan="{3 + len(PROFILE_METRICS)}">No per-file profiling data recorded</td></tr>'
+            f'<td style="{td_style}"></td>'
+            f'<td style="{td_style};color:{_status_color(infer_status)};font-weight:bold">'
+            f'{html.escape(_status_label(infer_status))}</td>'
+            f'<td style="{td_style};color:{_status_color(prof_status)};font-weight:bold">'
+            f'{html.escape(_status_label(prof_status))}</td>'
+            f'<td style="{td_style}" colspan="{len(PROFILE_METRICS)}">No per-file profiling data recorded</td></tr>'
         )
     if not profile_rows:
         profile_rows.append(
-            f'<tr><td style="{td_style}" colspan="{6 + len(PROFILE_METRICS)}">No profile data found</td></tr>'
+            f'<tr><td style="{td_style}" colspan="{5 + len(PROFILE_METRICS)}">No profile data found</td></tr>'
         )
     profile_headers = "".join(
         f'<th style="{th_style}">{html.escape(header)}</th>'
         for header in (
-            "TestCase Name", "TestCase Result", "VERSION",
+            "TestCase Name", "VERSION",
             "demo:repo:file", "Infer", "Profile", *PROFILE_METRICS,
         )
     )
@@ -796,6 +806,8 @@ def build_html(
         f" NOT RUN = no standalone inference for that model file (e.g. a helper "
         f"module such as <code>lm_head.vmfb.trim</code>). SKIPPED = known-debt "
         f"demo with no command builder yet.</p>"
+        f"<p>NO model file = no model file available for inference or profiling; "
+        f"this is not a runtime test failure.</p>"
     )
 
     html_text = (
@@ -833,9 +845,19 @@ def generate_summary(junit_path: Path, profile_dir: Path, out_path: Path) -> Non
     run_metrics = load_run_metrics(profile_dir)
     runtime_version = load_runtime_version(profile_dir)
     metric_gaps = load_run_metric_gaps(profile_dir)
+    missing_model_cases: set[str] = set()
+    for testcase in ET.parse(junit_path).getroot().findall(".//testcase"):
+        name = testcase.get("name") or ""
+        failure = testcase.find("failure")
+        if (
+            name.startswith("test_dut_profile[")
+            and failure is not None
+            and "no profileable VMFB" in (failure.get("message") or "")
+        ):
+            missing_model_cases.add(_case_id(name))
     build_html(
         tests, profile_records, metadata, model_versions, run_metrics,
-        runtime_version, metric_gaps, out_path, infer_index,
+        runtime_version, metric_gaps, out_path, infer_index, missing_model_cases,
     )
 
 
