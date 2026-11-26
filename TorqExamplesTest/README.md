@@ -74,6 +74,45 @@ Failure to collect or save this information fails the runtime installation stage
 
 ## Run and report generation
 
+### Structured ADB command results
+
+The bundled `torq.lab.pipeline.remote.ADBCommandRunner` provides
+`run_cmd_result(command, timeout=...)`, returning a
+`subprocess.CompletedProcess[str]` with `returncode`, `stdout`, and `stderr`.
+Unlike `run_cmd()`, it captures stdout/stderr separately and returns non-zero
+ADB/shell exit codes instead of raising for them. Timeouts and process-launch
+failures raise `RemoteCommandError`.
+
+Omitting `timeout` or passing `None` uses the runner's instance timeout;
+a numeric value overrides only that invocation. String scripts preserve
+quoting. For both ADB and SSH, `run_cmd()` accepts either a complete shell
+script string (unchanged) or an argv list of raw, unquoted arguments (serialized
+with `shlex.join()`). Use strings for shell syntax such as pipes, redirections,
+variable assignments, loops, and `time` blocks; do not wrap a whole script in
+a list or pre-quote individual argv elements. `run_cmd_result()` uses the same
+contract on ADB. Return values, exit-code handling, stream capture, and timeout
+behavior remain unchanged.
+
+```python
+runner.run_cmd(["printf", "%s", "Hello world"])
+runner.run_cmd("printf '%s\\n' 'Hello world' | cat")
+```
+
+The deployment driver's `_shell()` uses this API and maps the exit code and
+separate streams into `PhaseResult`, retaining its per-call timeouts and
+command logs. Non-zero exits remain phase results; runner initialization or
+execution exceptions are reported as `DutDeployError`. The ADB runner is reused
+for the acquired board and closed when it is released.
+
+Model directories, kernel modules, runtime wheels, and generated WAV files are
+uploaded through the same ADB runner's `copy_files(..., board_dst=True)`.
+On ADB, `copy_files()` also accepts a per-call `timeout` and `check=False` to
+return a `CompletedProcess[str]` with separate streams and a non-raising exit
+code, which `_push()` maps into `PhaseResult`. Without `check=False`, its
+existing return value (`None`) and raise-on-nonzero behavior are unchanged.
+Model uploads retain their 10800-second timeout; other uploads use 3600 seconds.
+The source archive still uses its existing TAR/stdin transfer path.
+
 ### Manual setup on a host computer
 
 The full suite requires a Linux/POSIX host with access to the lab DUT and its
@@ -266,10 +305,24 @@ regardless of collection order):
 	python3.12 -m pytest TorqExamplesTest
 
 The default test collection includes only the host preparation and DUT
-deployment/inference/profiling modules, not helper unit tests such as
-`test_dut_power_cycle.py`. The shared session preflight performs one DUT
+deployment/inference/profiling modules, not helper unit tests in `unit_tests/`.
+The shared session preflight performs one DUT
 power-off/power-on sequence before the pipeline starts; later stages and
 teardown do not repeat it.
+
+All helper unit tests live in `unit_tests/` and mock hardware interactions.
+Test files use `test_*.py` without an additional `_unit` suffix; production
+and utility modules use descriptive snake_case names without the `test_` prefix.
+Run them explicitly from the examples root, with separate artifact paths to
+avoid cleaning previous pipeline results:
+
+```bash
+unit_results="$(mktemp -d)"
+python -m pytest TorqExamplesTest/unit_tests \
+  --junitxml="$unit_results/results.xml" \
+  --torq-profile-dir="$unit_results/logs" \
+  --torq-summary-html="$unit_results/summary.html"
+```
 
 Standalone debugging without pytest (engine drivers, no DUT needed for
 host stage, no suite layout needed):

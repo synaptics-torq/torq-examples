@@ -1,6 +1,5 @@
 """Programmatic API for flashing configured SYNA boards."""
 import argparse
-from enum import IntEnum
 import os
 import subprocess
 import time
@@ -9,19 +8,17 @@ import sys
 
 from .device_flash import (
     BOARD_BUILD_VERSION_FILENAME,
-    parse_image_url,
+    _parse_image_url,
     generate_platform_info,
     prepare_tftp_image,
-    resolve_section_values,
-    resolve_sections,
     resolve_tftp_path,
     resolve_values,
 )
-
-
-class RunnerStatus(IntEnum):
-    CONFIG_ERROR = 11
-    NO_BOARD_RESPONSE = 12
+from .runner_common import (
+    RunnerStatus,
+    resolve_section_values,
+    resolve_sections,
+)
 
 
 def netbooter_ac_cycle(netbooter_ip, outlet, delay=0):
@@ -105,20 +102,21 @@ class BurnTool:
 
     def run(self) -> int:
         """Run the flash flow and return its process exit code."""
-        if not self.config.is_file():
-            print(f'Board configuration file not found: {self.config}', file=sys.stderr)
-            return int(RunnerStatus.CONFIG_ERROR)
-        if not self.image_url and not self.image_base_url:
-            if self.build_version and self.profile:
-                print('Repository variable "ASTRA_SDK_BASE_URL" is not set', file=sys.stderr)
-            else:
-                print('--image-url was not given', file=sys.stderr)
-            return int(RunnerStatus.CONFIG_ERROR)
         try:
             from .device_session import BurnSession
 
             requested_board = None if self.section else self.board
             sections = resolve_sections(self.config, self.section, requested_board)
+            if not self.build_version:
+                version_file = (
+                    Path(__file__).resolve().parents[4]
+                    / 'scripts'
+                    / 'astra_build_version.txt'
+                )
+                if version_file.is_file():
+                    self.build_version = version_file.read_text(
+                        encoding='utf-8'
+                    ).strip()
             if not self.build_version or not self.profile:
                 config_args = argparse.Namespace(
                     config=self.config,
@@ -133,7 +131,7 @@ class BurnTool:
                 self.build_version = values.get('BUILD_VERSION')
                 self.profile = values.get('PROFILE')
 
-            image_build_version, image_profile = parse_image_url(self.image_url)
+            image_build_version, image_profile = _parse_image_url(self.image_url)
             build_version = image_build_version or self.build_version
             profile = image_profile or self.profile
             tftppath = resolve_tftp_path(

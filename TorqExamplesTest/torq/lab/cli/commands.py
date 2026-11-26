@@ -360,22 +360,19 @@ def _cmd_burn(args) -> int:
 
     logger.info("Starting board flashing workflow")
 
-    # With --image-url, build version and profile come from the URL, so the CLI values are ignored
+    # If image_url is provided, build_version and profile are optional
     image_url = _opt(args, "image_url")
-    build_version = _opt(args, "astra_version") if not image_url else None
+    build_version = _opt(args, "build_version") if not image_url else None
     profile = _opt(args, "profile") if not image_url else None
-    image_base_url = _opt(args, "image_base_url") if not image_url else None
-    force_flash = _opt(args, "force_flash", False)
 
     tool = BurnTool(
         config=None,  # Only from environment variable CONFIG_PATH
         build_version=build_version,
         profile=profile,
         image_url=image_url,
-        image_base_url=image_base_url,
         board=None,  # Only from environment variable BOARD
         section=None,  # Only from environment variable SECTION
-        force_flash=force_flash,
+        force_flash=_opt(args, "force_flash", False),
         output_dir=None,  # Only from environment variable OUTPUT_DIR
         tftp_root=None,  # Only from environment variable TFTP_ROOT
     )

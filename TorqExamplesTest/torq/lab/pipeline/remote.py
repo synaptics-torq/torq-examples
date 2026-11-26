@@ -22,7 +22,7 @@ from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import List, Optional
+from typing import List, Literal, Optional, overload
 from uuid import uuid4
 
 from torq.lab import LabError
@@ -106,7 +106,13 @@ class RemoteCommandRunner(ABC):
         self._logger = logger or logging.getLogger(__class__.__name__)
 
     @abstractmethod
-    def run_cmd(self, cmd: str | list[str]) -> str | None: ...
+    def run_cmd(self, cmd: str | list[str]) -> str | None:
+        """Run a shell script string or an argv list of unquoted arguments."""
+        ...
+
+    @staticmethod
+    def _command_script(cmd: str | list[str]) -> str:
+        return cmd if isinstance(cmd, str) else shlex.join(cmd)
 
     @abstractmethod
     def copy_files(self, src: str, dst: str, recursive: bool = False, board_dst: bool = False, verbose: bool = False) -> None: ...
@@ -119,7 +125,7 @@ class RemoteCommandRunner(ABC):
             return " ".join(cmd)
         return str(cmd)
 
-    def _format_output(self, output: str | bytes | None, timeout: int | None = None) -> str:
+    def _format_output(self, output: str | bytes | None, timeout: float | None = None) -> str:
         if output is None:
             return f"Command timed out after {timeout}s" if timeout is not None else ""
         if isinstance(output, bytes):
@@ -236,8 +242,7 @@ class SSHCommandRunner(RemoteCommandRunner):
             self._logger.warning("Multiplex connection is not enabled.")
 
     def run_cmd(self, cmd: str | list[str]) -> str | None:
-        if isinstance(cmd, str):
-            cmd = shlex.split(cmd)
+        script = self._command_script(cmd)
         try:
             if self.multiplex:
                 full_cmd = [
@@ -245,14 +250,14 @@ class SSHCommandRunner(RemoteCommandRunner):
                     "-o", "ControlMaster=no",
                     "-o", f"ControlPath={self.ssh_socket}",
                     "-p", str(self.port),
-                ] + self.ssh_options + [self.board_addr] + cmd
+                ] + self.ssh_options + [self.board_addr, script]
             else:
                 full_cmd = [
                     "ssh", "-T",
                     "-p", str(self.port),
                 ] + self.ssh_options + [
-                    self.board_addr,
-                ] + cmd
+                    self.board_addr, script,
+                ]
             result = subprocess.check_output(
                 full_cmd,
                 text=True,
@@ -262,7 +267,7 @@ class SSHCommandRunner(RemoteCommandRunner):
             if not self.multiplex:
                 self._logger.info(
                     "Successfully executed command \"%s\" on %s",
-                    " ".join(cmd), self.board_addr
+                    script, self.board_addr
                 )
             return result
         except subprocess.TimeoutExpired as e:
@@ -390,19 +395,57 @@ class ADBCommandRunner(RemoteCommandRunner):
     def _cleanup(self) -> None:
         pass
 
+    def _shell_cmd(self, cmd: str | list[str]) -> list[str]:
+        return [*self._adb_cmd_prefix(), "shell", self._command_script(cmd)]
+
+    def run_cmd_result(
+        self,
+        cmd: str | list[str],
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Return ADB/shell exit status and separate stdout/stderr.
+
+        Strings are shell scripts passed unchanged; lists are argv serialized
+        with shlex.join(), with no pre-quoting required.
+        None uses the instance timeout; a number overrides only this call.
+        Non-zero exit codes are returned, not raised. Timeouts and process
+        launch failures raise RemoteCommandError.
+        """
+        full_cmd = self._shell_cmd(cmd)
+        effective_timeout = self.timeout if timeout is None else timeout
+        try:
+            result = subprocess.run(
+                full_cmd,
+                capture_output=True,
+                text=True,
+                timeout=effective_timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as e:
+            raise RemoteCommandError(
+                self._format_cmd(full_cmd),
+                f"Command timed out after {effective_timeout}s\n"
+                f"stdout:\n{self._format_output(e.output)}\n"
+                f"stderr:\n{self._format_output(e.stderr)}",
+            ) from e
+        except OSError as e:
+            raise RemoteCommandError(self._format_cmd(full_cmd), str(e)) from e
+        self._logger.info(
+            'Executed command "%s" on ADB device %s (return code %s)',
+            full_cmd[-1], self._target, result.returncode,
+        )
+        return result
+
     def run_cmd(self, cmd: str | list[str]) -> str | None:
         """
         Execute a shell command on the device via `adb shell`.
-        Returns stdout as a string
+        String scripts are passed unchanged. Lists are argv serialized with
+        shlex.join(); use strings for pipelines, loops, and redirections.
+        Returns stdout as a string.
         """
-        # Normalize input
-        if isinstance(cmd, str):
-            cmd = shlex.split(cmd)
-
-        # For adb shell we pass a single string for the remote shell to interpret.
-        # If strict quoting is required, pass a single string in the original call.
-        cmd = " ".join(cmd)
-        full_cmd = [*self._adb_cmd_prefix(), "shell", cmd]
+        full_cmd = self._shell_cmd(cmd)
+        cmd = full_cmd[-1]
         print("[ADB]", cmd)
 
         try:
@@ -432,11 +475,25 @@ class ADBCommandRunner(RemoteCommandRunner):
                 self._format_output(e.stdout),
             ) from e
 
-    def copy_files(self, src: str, dst: str, recursive: bool = False, board_dst: bool = False, verbose: bool = False) -> None:
+    @overload
+    def copy_files(self, src: str, dst: str, recursive: bool = False, board_dst: bool = False, verbose: bool = False, *, timeout: float | None = None, check: Literal[True] = True) -> None: ...
+
+    @overload
+    def copy_files(self, src: str, dst: str, recursive: bool = False, board_dst: bool = False, verbose: bool = False, *, timeout: float | None = None, check: Literal[False]) -> subprocess.CompletedProcess[str]: ...
+
+    def copy_files(
+        self, src: str, dst: str, recursive: bool = False,
+        board_dst: bool = False, verbose: bool = False, *,
+        timeout: float | None = None, check: bool = True,
+    ) -> subprocess.CompletedProcess[str] | None:
         """
         Copy files using ADB:
           - board_dst=True  -> push  (local src -> device dst)
           - board_dst=False -> pull  (device src -> local dst)
+
+        By default, return None and raise RemoteCommandError on non-zero exits.
+        With check=False, return exit status and separate stdout/stderr instead.
+        None uses the instance timeout; a number overrides only this call.
         """
         if board_dst:
             # local -> device
@@ -445,19 +502,39 @@ class ADBCommandRunner(RemoteCommandRunner):
             # device -> local
             cmd = [*self._adb_cmd_prefix(), "pull", src, dst]
 
+        effective_timeout = self.timeout if timeout is None else timeout
         try:
-            subprocess.check_output(
-                cmd,
-                text=True,
-                stderr=subprocess.STDOUT,
-                timeout=self.timeout,
-            )
+            if check:
+                subprocess.check_output(
+                    cmd,
+                    text=True,
+                    stderr=subprocess.STDOUT,
+                    timeout=effective_timeout,
+                )
+                result = None
+            else:
+                result = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=effective_timeout,
+                    check=False,
+                )
             direction = "to device" if board_dst else "from device"
-            self._logger.info('Copied "%s" %s "%s"', src, direction, dst)
+            if result is None or result.returncode == 0:
+                self._logger.info('Copied "%s" %s "%s"', src, direction, dst)
+            else:
+                self._logger.error(
+                    'Failed copying "%s" %s "%s" (return code %s): %s',
+                    src, direction, dst, result.returncode, result.stderr,
+                )
+            return result
         except subprocess.TimeoutExpired as e:
             raise RemoteCommandError(
                 self._format_cmd(e.cmd),
-                self._format_output(e.output, self.timeout),
+                f"Command timed out after {effective_timeout}s\n"
+                f"stdout:\n{self._format_output(e.output)}\n"
+                f"stderr:\n{self._format_output(e.stderr)}",
             ) from e
         except subprocess.CalledProcessError as e:
             raise RemoteCommandError(
@@ -655,7 +732,7 @@ class RemoteExecutor:
         return [
             "IREE_RUN_MODULE=torq-run-module ; "
             "if [ -f /usr/local/bin/setup-test-environment ] ; "
-            "then source /usr/local/bin/setup-test-environment ; fi ; $IREE_RUN_MODULE"
+            'then source /usr/local/bin/setup-test-environment ; fi ; "$IREE_RUN_MODULE"'
         ], None
 
     def run(self) -> RemoteRunOutcome:
@@ -688,7 +765,7 @@ class RemoteExecutor:
                 r.run_cmd(["mkdir", "-p", remote_root])
 
             with self._stage("stage-runner"):
-                invoke, _ = self._build_invoke(r)
+                invoke, runner_path = self._build_invoke(r)
 
             with self._stage("stage-model"):
                 self._logger.info("Staging model to board: %s -> %s", self.vmfb_path, remote_root)
@@ -721,8 +798,12 @@ class RemoteExecutor:
                     *remote_input_args,
                 ]
                 # Measure wall time on the board itself, excluding SSH transport.
-                timed_cmd = [f"time {{ {' '.join(cmd)} ; }}"]
-                self._logger.info("Running remote: %s", " ".join(cmd))
+                script = (
+                    shlex.join(cmd) if runner_path
+                    else f"{invoke[0]} {shlex.join(cmd[1:])}"
+                )
+                timed_cmd = f"time {{ {script} ; }}"
+                self._logger.info("Running remote: %s", script)
                 output = r.run_cmd(timed_cmd)
                 wall_time = parse_board_wall_time(output)
 

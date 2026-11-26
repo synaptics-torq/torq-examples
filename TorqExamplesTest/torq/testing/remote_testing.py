@@ -4,6 +4,7 @@ import hashlib
 import logging
 import os
 import re
+import shlex
 import socket
 import subprocess
 import tarfile
@@ -209,13 +210,13 @@ def acquire_board_lock(
         # If the write fails, remove the lock directory so we don't leave
         # a stale lock with no info file.
         write_cmd = (
-            f"echo 'user={username}' > {BOARD_LOCK_INFO} && "
-            f"echo 'host={hostname}' >> {BOARD_LOCK_INFO} && "
-            f"echo 'pid={pid}' >> {BOARD_LOCK_INFO} && "
-            f"echo 'time={timestamp}' >> {BOARD_LOCK_INFO}"
+            f"echo {shlex.quote(f'user={username}')} > {shlex.quote(BOARD_LOCK_INFO)} && "
+            f"echo {shlex.quote(f'host={hostname}')} >> {shlex.quote(BOARD_LOCK_INFO)} && "
+            f"echo {shlex.quote(f'pid={pid}')} >> {shlex.quote(BOARD_LOCK_INFO)} && "
+            f"echo {shlex.quote(f'time={timestamp}')} >> {shlex.quote(BOARD_LOCK_INFO)}"
         )
         try:
-            r.run_cmd([write_cmd])
+            r.run_cmd(write_cmd)
         except RemoteCommandError:
             # Clean up the orphaned lock directory.
             try:
@@ -274,7 +275,7 @@ def kill_remote_runner(
     )
     with runner as r:
         try:
-            r.run_cmd([f"pkill -KILL -f '{pattern}' || true"])
+            r.run_cmd(shlex.join(["pkill", "-KILL", "-f", pattern]) + " || true")
         except RemoteCommandError:
             log.warning("Failed to kill %s on %s (board may be unreachable).", remote_runner_path, board_addr)
 
@@ -582,40 +583,32 @@ class RemoteTestRunner:
                     output_files[str(remote_path)] = local_path
                 remote_output_args.append(remote_arg)
 
+            module_args = [
+                f"--module={remote_model_path}",
+                f"--function={self.function_name}",
+                *remote_runtime_opts,
+                *remote_output_args,
+                *remote_input_args,
+            ]
+            setup_env = (
+                "if [ -f /usr/local/bin/setup-test-environment ] ; "
+                "then source /usr/local/bin/setup-test-environment ; fi ; "
+            )
             if self._update_runtime:
                 # Board lock is held at session level (acquired in
                 # pytest_sessionstart, released in pytest_sessionfinish).
                 # Invoke the runner by its absolute path.
-                cmd = [
-                    f"if [ -f /usr/local/bin/setup-test-environment ] ; then source /usr/local/bin/setup-test-environment ; fi ;",
-                    f"{effective_remote_runner_path}",
-                    f"--module={remote_model_path}",
-                    f"--function={self.function_name}",
-                    *remote_runtime_opts,
-                    *remote_output_args,
-                    *remote_input_args,
-                ]
+                cmd = setup_env + shlex.join([effective_remote_runner_path, *module_args])
             elif self.remote_runner_path:
                 # No locking but a specific remote runner path was provided — invoke by absolute path.
-                cmd = [
-                    self.remote_runner_path,
-                    f"--module={remote_model_path}",
-                    f"--function={self.function_name}",
-                    *remote_runtime_opts,
-                    *remote_output_args,
-                    *remote_input_args,
-                ]
+                cmd = shlex.join([self.remote_runner_path, *module_args])
             else:
                 # FPGA / legacy path: no locking, discover runner via PATH.
-                cmd = [
-                    "IREE_RUN_MODULE=torq-run-module ;  if [ -f /usr/local/bin/setup-test-environment ] ; then source /usr/local/bin/setup-test-environment ; fi ; $IREE_RUN_MODULE",
-                    f"--module={remote_model_path}",
-                    f"--function={self.function_name}",
-                    *remote_runtime_opts,
-                    *remote_output_args,
-                    *remote_input_args,
-                ]
-            self._logger.info("Running remote test: %s", " ".join(cmd))
+                cmd = (
+                    "IREE_RUN_MODULE=torq-run-module ; " + setup_env
+                    + '"$IREE_RUN_MODULE" ' + shlex.join(module_args)
+                )
+            self._logger.info("Running remote test: %s", cmd)
             if runs > 1:
                 return self._run_repeated(runner, cmd, runs, output_files, run_output_files, output_dirs, after_run)
 
@@ -625,8 +618,7 @@ class RemoteTestRunner:
                 # excluding any SSH transport overhead.  The entire command
                 # must be inside a compound block so that 'time' covers the
                 # full invocation, not just the first statement.
-                cmd_str = " ".join(cmd)
-                timed_cmd = [f"time {{ {cmd_str} ; }}"]
+                timed_cmd = f"time {{ {cmd} ; }}"
                 output = runner.run_cmd(timed_cmd)
                 wall_time = _parse_board_wall_time(output)
                 if wall_time is not None:
@@ -637,7 +629,7 @@ class RemoteTestRunner:
                         "'time' output not found in command output"
                     )
             else:
-                print("Running TORQ remotely with command: " + " ".join(cmd))
+                print("Running TORQ remotely with command: " + cmd)
                 result = runner.run_cmd(cmd)
                 print("Command output:")
                 print(result)
@@ -651,19 +643,22 @@ class RemoteTestRunner:
 
         return wall_time
 
-    def _run_repeated(self, runner, cmd, runs, output_files, run_output_files, output_dirs, after_run):
+    def _run_repeated(self, runner, cmd: str, runs, output_files, run_output_files, output_dirs, after_run):
         """Runs *cmd* *runs* times in one shell loop on the board, see run()."""
 
         # Each run's profiles are renamed with a .run<i> suffix (POSIX shell: the board shell may be
         # busybox)
-        renames = " ".join(f'mv {path} {path}.run$i ;' for path in run_output_files)
+        renames = " ".join(
+            f'mv {shlex.quote(path)} {shlex.quote(path)}.run"$i" ;'
+            for path in run_output_files
+        )
         loop = (
             f"i=0 ; while [ $i -lt {runs} ] ; do "
-            f"{{ {' '.join(cmd)} ; }} || {{ echo \"TORQ_RUN_FAILED $i\" ; exit 1 ; }} ; "
+            f"{{ {cmd} ; }} || {{ echo \"TORQ_RUN_FAILED $i\" ; exit 1 ; }} ; "
             f"{renames} i=$((i + 1)) ; done"
         )
-        print(f"Running TORQ remotely {runs} times with command: " + " ".join(cmd))
-        output = runner.run_cmd([loop])
+        print(f"Running TORQ remotely {runs} times with command: " + cmd)
+        output = runner.run_cmd(loop)
         print("Command output:")
         print(output)
 

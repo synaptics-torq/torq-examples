@@ -75,6 +75,8 @@ except ImportError:
     except ImportError:
         create_boards_control = None
 
+from torq.lab.pipeline.remote import ADBCommandRunner, RemoteCommandError
+
 # ---------------------------------------------------------------------------
 # Per-demo specification table.
 #
@@ -306,6 +308,7 @@ class DutDeployRunner:
         self._wav_cache: dict[str, Path] = {}
         self._registry_cache: dict | None = None
         self._runtime_version_cache: str | None = None
+        self._command_runner: ADBCommandRunner | None = None
 
     # ------------------------------------------------- spec resolution
     def _registry(self) -> dict:
@@ -337,25 +340,33 @@ class DutDeployRunner:
         return spec
 
     # ------------------------------------------------------------------ adb
-    def _adb(self, *args: str, check: bool = True, timeout: int = 3600) -> subprocess.CompletedProcess:
-        cmd = ["adb", "-s", self.serial, *[str(a) for a in args]]
-        try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
-        except FileNotFoundError as exc:
-            raise DutDeployError("adb CLI not found on host") from exc
-        if check and proc.returncode != 0:
-            raise DutDeployError(
-                f"adb command failed (rc={proc.returncode}): {' '.join(map(shlex.quote, map(str, cmd)))}\n"
-                f"stderr:\n{proc.stderr}"
-            )
-        return proc
+    def _get_command_runner(self) -> ADBCommandRunner:
+        if not self.serial:
+            raise DutDeployError("Acquire a DUT board before using ADB")
+        if self._command_runner is None:
+            self._command_runner = ADBCommandRunner(target_device=self.serial)
+        return self._command_runner
 
     def _shell(self, script: str, check: bool = True, timeout: int = 3600) -> PhaseResult:
-        proc = self._adb("shell", script, check=False, timeout=timeout)
+        try:
+            proc = self._get_command_runner().run_cmd_result(script, timeout=timeout)
+        except (RemoteCommandError, OSError) as exc:
+            raise DutDeployError(f"ADB shell execution failed: {exc}") from exc
         result = PhaseResult("shell", proc.returncode, proc.stdout, proc.stderr)
         # Record the exact host-side command so the phase log is reproducible
         # by someone who has never seen this repo.
-        result.commands = [f"adb -s {self.serial} shell {script}"]
+        result.commands = [shlex.join(proc.args)]
+        return result
+
+    def _push(self, src: str, dst: str, *, timeout: int = 3600) -> PhaseResult:
+        try:
+            proc = self._get_command_runner().copy_files(
+                src, dst, board_dst=True, timeout=timeout, check=False,
+            )
+        except (RemoteCommandError, OSError) as exc:
+            raise DutDeployError(f"ADB file upload failed: {exc}") from exc
+        result = PhaseResult("push", proc.returncode, proc.stdout, proc.stderr)
+        result.commands = [shlex.join(proc.args)]
         return result
 
     def _runtime_version(self) -> str:
@@ -427,6 +438,9 @@ class DutDeployRunner:
                 print(f"[dut_deploy] WARNING: board release failed: {exc}")
             finally:
                 self._board_context = None
+        if self._command_runner is not None:
+            self._command_runner.close()
+            self._command_runner = None
 
     # --------------------------------------------------------------- phases
     def phase_connectivity(self) -> PhaseResult:
@@ -660,14 +674,13 @@ class DutDeployRunner:
                 result.returncode = 1
                 result.stderr += f"\n[mkdir {md}] rc={mkdir.returncode}\n{mkdir.stderr}"
                 continue
-            push_cmd = f"adb -s {self.serial} push {local} {remote_parent}"
-            proc = self._adb("push", str(local), remote_parent, check=False, timeout=10800)
-            result.commands.append(push_cmd)
-            if proc.returncode != 0:
+            upload = self._push(str(local), remote_parent, timeout=10800)
+            result.commands.extend(upload.commands)
+            if not upload.passed:
                 result.returncode = 1
-                result.stderr += f"\n[push {md}] rc={proc.returncode}\n{proc.stderr}"
+                result.stderr += f"\n[push {md}] rc={upload.returncode}\n{upload.stderr}"
                 continue
-            result.stdout += proc.stdout
+            result.stdout += upload.stdout
             check = self._shell(
                 f"test -d {shlex.quote(self.remote_root + '/models/' + md)}"
             )
@@ -704,10 +717,9 @@ class DutDeployRunner:
         print(info)
         steps = []
         steps.append(self._shell("rmmod syna_npu 2>/dev/null || true"))
-        push_cmd = f"adb -s {self.serial} push {self.ko} {remote_ko}"
-        proc = self._adb("push", self.ko, remote_ko, check=False)
-        push_ko = PhaseResult("push-ko", proc.returncode, info + proc.stdout, proc.stderr)
-        push_ko.commands = [push_cmd]
+        push_ko = self._push(self.ko, remote_ko)
+        push_ko.phase = "push-ko"
+        push_ko.stdout = info + push_ko.stdout
         steps.append(push_ko)
         steps.append(self._shell(f"insmod {shlex.quote(remote_ko)}"))
         steps.append(self._shell("lsmod | grep syna_npu || echo 'syna_npu NOT LOADED'"))
@@ -736,12 +748,11 @@ class DutDeployRunner:
             f"    install into: {self.remote_root}/.venv  (pip --force-reinstall --no-deps)\n"
         )
         print(info)
-        push_cmd = f"adb -s {self.serial} push {self.wheel} {remote_wheel}"
-        proc = self._adb("push", self.wheel, remote_wheel, check=False)
-        if proc.returncode != 0:
-            result = PhaseResult("push-wheel", proc.returncode, info + proc.stdout, proc.stderr)
-            result.commands = [push_cmd]
-            return result
+        upload = self._push(self.wheel, remote_wheel)
+        if not upload.passed:
+            upload.phase = "push-wheel"
+            upload.stdout = info + upload.stdout
+            return upload
         script = (
             f"cd {shlex.quote(self.remote_root)} && . {shlex.quote(self.remote_root + '/.venv/bin/activate')} && "
             f"pip install --force-reinstall --no-deps {shlex.quote(remote_wheel)} && "
@@ -749,7 +760,7 @@ class DutDeployRunner:
             f"python -c 'import torq.runtime; print(\"torq.runtime import OK\")'"
         )
         result = self._shell(script)
-        result.commands = [push_cmd, *result.commands]
+        result.commands = [*upload.commands, *result.commands]
         result.stdout = info + result.stdout
         if result.passed:
             self._runtime_version_cache = None
@@ -1047,12 +1058,12 @@ class DutDeployRunner:
         if spec.get("need_wav"):
             wav = self._generate_wav(demo)
             wav_remote = f"{self.remote_root}/refactor_inputs/{demo}.wav"
-            proc = self._adb("push", str(wav), wav_remote, check=False)
-            phase_commands.append(f"adb -s {self.serial} push {wav} {wav_remote}")
-            if proc.returncode != 0:
+            upload = self._push(str(wav), wav_remote)
+            phase_commands.extend(upload.commands)
+            if not upload.passed:
                 prep.returncode = 1
                 prep.commands = phase_commands
-                prep.stderr += f"\n[wav push {demo}] rc={proc.returncode}\n{proc.stderr}"
+                prep.stderr += f"\n[wav push {demo}] rc={upload.returncode}\n{upload.stderr}"
                 prep.phase = base_phase
                 return prep
 
