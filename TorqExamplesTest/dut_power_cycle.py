@@ -6,6 +6,15 @@ import shlex
 import subprocess
 import sys
 import time
+from pathlib import Path
+
+try:
+    from torq.lab.pipeline.remote import ADBCommandRunner, RemoteCommandError
+except ImportError:
+    _bundled_parent = str(Path(__file__).resolve().parent)
+    if _bundled_parent not in sys.path:
+        sys.path.insert(0, _bundled_parent)
+    from torq.lab.pipeline.remote import ADBCommandRunner, RemoteCommandError
 
 
 ENV_CONFIG = "/home/jenkins/cases/env_config.sh"
@@ -110,6 +119,42 @@ def adb_device_is_online(output: str, serial: str = ADB_SERIAL) -> bool:
     return False
 
 
+def _list_adb_devices_step(step: str) -> str | None:
+    """Run one host ADB discovery attempt and log it like other power steps."""
+    print(f"[dut_power_cycle] Starting: {step}", flush=True)
+    try:
+        result = ADBCommandRunner.list_devices(
+            timeout=ADB_CHECK_TIMEOUT_SECONDS,
+            env_script=ENV_CONFIG,
+        )
+    except RemoteCommandError as exc:
+        print(exc.output, file=sys.stderr, flush=True)
+        retry_reason = (
+            "timed out"
+            if "Command timed out after" in exc.output
+            else "failed"
+        )
+        print(
+            f"[dut_power_cycle] {step} {retry_reason}; will retry.",
+            flush=True,
+        )
+        return None
+
+    if result.stdout:
+        print(result.stdout, end="", flush=True)
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="", flush=True)
+    if result.returncode != 0:
+        print(
+            f"[dut_power_cycle] {step} exited with code "
+            f"{result.returncode}; will retry.",
+            flush=True,
+        )
+        return None
+    print(f"[dut_power_cycle] Completed: {step}", flush=True)
+    return result.stdout
+
+
 def power_cycle_dut() -> None:
     """Power the configured DUT off/on once and require it to reappear on ADB."""
     env_config = shlex.quote(ENV_CONFIG)
@@ -136,7 +181,6 @@ def power_cycle_dut() -> None:
         POWER_ON_INITIAL_WAIT_SECONDS,
         ADB_POLL_INTERVAL_SECONDS,
     )
-    adb_command = f"set -e; source {env_config}; adb devices"
     for attempt in range(ADB_POLL_ATTEMPTS):
         _wait_with_progress(
             "ADB discovery wait",
@@ -144,12 +188,9 @@ def power_cycle_dut() -> None:
             ADB_POLL_INTERVAL_SECONDS,
         )
         elapsed = POWER_ON_INITIAL_WAIT_SECONDS + (attempt + 1) * ADB_POLL_INTERVAL_SECONDS
-        adb_output = _run_shell_step(
+        adb_output = _list_adb_devices_step(
             f"checking ADB devices at {elapsed}s "
-            f"(attempt {attempt + 1}/{ADB_POLL_ATTEMPTS})",
-            adb_command,
-            timeout_seconds=ADB_CHECK_TIMEOUT_SECONDS,
-            allow_failure=True,
+            f"(attempt {attempt + 1}/{ADB_POLL_ATTEMPTS})"
         )
         if adb_output is not None and adb_device_is_online(adb_output):
             print(

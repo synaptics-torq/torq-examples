@@ -111,7 +111,10 @@ return a `CompletedProcess[str]` with separate streams and a non-raising exit
 code, which `_push()` maps into `PhaseResult`. Without `check=False`, its
 existing return value (`None`) and raise-on-nonzero behavior are unchanged.
 Model uploads retain their 10800-second timeout; other uploads use 3600 seconds.
-The source archive still uses its existing TAR/stdin transfer path.
+For binary payloads that must be streamed to a remote shell command's stdin,
+use `run_cmd_result_with_input(command, input_data, timeout=...)`; for example,
+the source archive is sent to `tar -xf -` this way without creating a temporary
+archive file.
 
 ### Manual setup on a host computer
 

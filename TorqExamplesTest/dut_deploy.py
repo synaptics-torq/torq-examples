@@ -474,20 +474,21 @@ class DutDeployRunner:
             )
             result.commands = [tar_cmd]
             return result
-        stream_cmd = f"adb -s {self.serial} shell tar -xf - -C {shlex.quote(self.remote_root)}"
-        stream = subprocess.run(
-            [
-                "adb", "-s", self.serial, "shell",
-                f"tar -xf - -C {shlex.quote(self.remote_root)}",
-            ],
-            input=tar.stdout,
-            capture_output=True,
-            timeout=3600,
-        )
+        try:
+            stream = self._get_command_runner().run_cmd_result_with_input(
+                ["tar", "-xf", "-", "-C", self.remote_root],
+                tar.stdout,
+                timeout=3600,
+            )
+        except (RemoteCommandError, OSError) as exc:
+            raise DutDeployError(
+                f"ADB source stream upload failed: {exc}"
+            ) from exc
+        stream_cmd = shlex.join(stream.args)
         if stream.returncode != 0:
             result = PhaseResult(
                 "prepare-workspace", stream.returncode, info,
-                stream.stderr.decode(errors="replace"),
+                stream.stderr,
             )
             result.commands = [tar_cmd, stream_cmd]
             return result

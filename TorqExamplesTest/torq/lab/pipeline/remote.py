@@ -358,6 +358,56 @@ class ADBCommandRunner(RemoteCommandRunner):
             prefix += ["-s", self._target]
         return prefix
 
+    @staticmethod
+    def list_devices(
+        *,
+        timeout: float = 10,
+        env_script: str | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """List host-visible ADB devices without waiting for any device.
+
+        ``env_script`` may name a shell script that configures the host ADB
+        environment before listing devices. Non-zero exits are returned;
+        timeouts and process-launch failures raise ``RemoteCommandError``.
+        """
+        if env_script is not None:
+            command = (
+                f"set -e; source {shlex.quote(env_script)}; adb devices"
+            )
+            full_cmd = ["bash", "-lc", command]
+        else:
+            adb_cmd = ["adb"]
+            host = os.environ.get("ADB_SERVER_HOST")
+            port = os.environ.get("ADB_SERVER_PORT")
+            if host:
+                adb_cmd += ["-H", host]
+            if port:
+                adb_cmd += ["-P", port]
+            full_cmd = [*adb_cmd, "devices"]
+
+        try:
+            return subprocess.run(
+                full_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
+        except subprocess.TimeoutExpired as exc:
+            stdout = exc.stdout or ""
+            stderr = exc.stderr or ""
+            if isinstance(stdout, bytes):
+                stdout = stdout.decode(errors="replace")
+            if isinstance(stderr, bytes):
+                stderr = stderr.decode(errors="replace")
+            raise RemoteCommandError(
+                shlex.join(full_cmd),
+                f"Command timed out after {timeout}s\n"
+                f"stdout:\n{stdout}\nstderr:\n{stderr}",
+            ) from exc
+        except OSError as exc:
+            raise RemoteCommandError(shlex.join(full_cmd), str(exc)) from exc
+
     def _ensure_server(self) -> None:
         """Start the ADB server if not running."""
         try:
@@ -398,6 +448,52 @@ class ADBCommandRunner(RemoteCommandRunner):
     def _shell_cmd(self, cmd: str | list[str]) -> list[str]:
         return [*self._adb_cmd_prefix(), "shell", self._command_script(cmd)]
 
+    def _run_cmd_result(
+        self,
+        cmd: str | list[str],
+        *,
+        input_data: bytes | None,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        full_cmd = self._shell_cmd(cmd)
+        effective_timeout = self.timeout if timeout is None else timeout
+        try:
+            if input_data is None:
+                result = subprocess.run(
+                    full_cmd,
+                    capture_output=True,
+                    text=True,
+                    timeout=effective_timeout,
+                    check=False,
+                )
+                stdout, stderr = result.stdout, result.stderr
+            else:
+                result = subprocess.run(
+                    full_cmd,
+                    input=input_data,
+                    capture_output=True,
+                    timeout=effective_timeout,
+                    check=False,
+                )
+                stdout = self._format_output(result.stdout)
+                stderr = self._format_output(result.stderr)
+        except subprocess.TimeoutExpired as e:
+            raise RemoteCommandError(
+                self._format_cmd(full_cmd),
+                f"Command timed out after {effective_timeout}s\n"
+                f"stdout:\n{self._format_output(e.output)}\n"
+                f"stderr:\n{self._format_output(e.stderr)}",
+            ) from e
+        except OSError as e:
+            raise RemoteCommandError(self._format_cmd(full_cmd), str(e)) from e
+        self._logger.info(
+            'Executed command "%s" on ADB device %s (return code %s)',
+            full_cmd[-1], self._target, result.returncode,
+        )
+        return subprocess.CompletedProcess(
+            result.args, result.returncode, stdout, stderr,
+        )
+
     def run_cmd_result(
         self,
         cmd: str | list[str],
@@ -412,30 +508,30 @@ class ADBCommandRunner(RemoteCommandRunner):
         Non-zero exit codes are returned, not raised. Timeouts and process
         launch failures raise RemoteCommandError.
         """
-        full_cmd = self._shell_cmd(cmd)
-        effective_timeout = self.timeout if timeout is None else timeout
-        try:
-            result = subprocess.run(
-                full_cmd,
-                capture_output=True,
-                text=True,
-                timeout=effective_timeout,
-                check=False,
-            )
-        except subprocess.TimeoutExpired as e:
-            raise RemoteCommandError(
-                self._format_cmd(full_cmd),
-                f"Command timed out after {effective_timeout}s\n"
-                f"stdout:\n{self._format_output(e.output)}\n"
-                f"stderr:\n{self._format_output(e.stderr)}",
-            ) from e
-        except OSError as e:
-            raise RemoteCommandError(self._format_cmd(full_cmd), str(e)) from e
-        self._logger.info(
-            'Executed command "%s" on ADB device %s (return code %s)',
-            full_cmd[-1], self._target, result.returncode,
-        )
-        return result
+        return self._run_cmd_result(cmd, input_data=None, timeout=timeout)
+
+    def run_cmd_result_with_input(
+        self,
+        cmd: str | list[str],
+        input_data: bytes,
+        *,
+        timeout: float | None = None,
+    ) -> subprocess.CompletedProcess[str]:
+        """Run an ADB shell command with raw bytes sent to its stdin.
+
+        Use this for streaming payloads to commands such as ``tar -xf -``;
+        unlike ``copy_files()``, it does not require the payload to be stored
+        as a file. The command, result, timeout, and error contracts match
+        ``run_cmd_result()``: input bytes are passed unchanged, output streams
+        are decoded as text, non-zero exits are returned, and timeouts or
+        process-launch failures raise ``RemoteCommandError``. For example:
+
+        ``runner.run_cmd_result_with_input(
+            ["tar", "-xf", "-", "-C", remote_dir], archive_bytes,
+            timeout=3600,
+        )``
+        """
+        return self._run_cmd_result(cmd, input_data=input_data, timeout=timeout)
 
     def run_cmd(self, cmd: str | list[str]) -> str | None:
         """

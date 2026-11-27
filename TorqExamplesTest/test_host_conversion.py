@@ -19,6 +19,9 @@ and inference. Docker is required on the host.
 
 from __future__ import annotations
 
+from datetime import datetime, timezone
+import time
+
 import pytest
 
 from TorqExamplesTest.demo_registry import REPO_ROOT, demo_model_cases, demo_registry
@@ -30,11 +33,24 @@ MODEL_CASES = demo_model_cases()
 @pytest.fixture(scope="session")
 def host_setup(dut_ready: None) -> HostSetupRunner:
     runner = HostSetupRunner(examples_root=REPO_ROOT, log_dir=REPO_ROOT / "logs")
+    setup_started_at = datetime.now(timezone.utc)
+    setup_started = time.perf_counter()
+    print(
+        f"[host_setup] setup started at {setup_started_at.isoformat(timespec='seconds')}",
+        flush=True,
+    )
     if not runner.docker_available():
         pytest.fail("docker is not available on the host; host-side setup cannot run")
     try:
         runner.ensure_image()
         runner.start()
+        setup_completed_at = datetime.now(timezone.utc)
+        print(
+            "[host_setup] image build and container startup completed at "
+            f"{setup_completed_at.isoformat(timespec='seconds')} "
+            f"(elapsed: {time.perf_counter() - setup_started:.1f}s)",
+            flush=True,
+        )
         yield runner
     finally:
         runner.stop()
@@ -42,6 +58,8 @@ def host_setup(dut_ready: None) -> HostSetupRunner:
 
 def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
     """Host environment is ready without installing a compiler in either mode."""
+    setup_started_at = datetime.now(timezone.utc)
+    setup_started = time.perf_counter()
     result = host_setup.setup_environment()
     if host_setup.test_mode == "dev":
         assert "compiler: not installed (dev mode: HF model download)" in result.stdout, (
@@ -50,12 +68,21 @@ def test_host_setup_environment(host_setup: HostSetupRunner) -> None:
     else:
         assert "compiler: not installed (release mode)" in result.stdout
     assert "host environment ready" in result.stdout
+    print(
+        "[host_setup] environment setup completed at "
+        f"{datetime.now(timezone.utc).isoformat(timespec='seconds')} "
+        f"(started: {setup_started_at.isoformat(timespec='seconds')}, "
+        f"elapsed: {time.perf_counter() - setup_started:.1f}s)",
+        flush=True,
+    )
 
 
 @pytest.mark.parametrize("model_case", MODEL_CASES, ids=lambda case: case.case_id)
 def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
     """Prepare models, pinning downloads to TORQ_MODEL_VERSION when set."""
     demo = model_case.demo_name
+    model_started_at = datetime.now(timezone.utc)
+    model_started = time.perf_counter()
     print(
         f"\n[host_setup] Starting {model_case.case_id}: "
         f"test_mode={host_setup.test_mode}, repo_id={model_case.repo_id}",
@@ -88,5 +115,12 @@ def test_demo_setup_on_host(host_setup: HostSetupRunner, model_case) -> None:
     print(
         f"[host_setup] Completed {model_case.case_id}: "
         f"model directory check passed for {model_dir}",
+        flush=True,
+    )
+    print(
+        f"[host_setup] model setup timing for {model_case.case_id}: "
+        f"started={model_started_at.isoformat(timespec='seconds')}, "
+        f"completed={datetime.now(timezone.utc).isoformat(timespec='seconds')}, "
+        f"elapsed={time.perf_counter() - model_started:.1f}s",
         flush=True,
     )
